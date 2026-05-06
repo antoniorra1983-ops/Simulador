@@ -5,6 +5,7 @@ import numpy as np
 import time
 import json
 import plotly.graph_objects as go
+
 from config import *
 from etl_parser import mins_to_time_str, get_pax_at_km, get_vacios_dia
 from red_electrica import calcular_flujo_ac_nodo, distribuir_potencia_sers_kw, distribuir_energia_sers
@@ -95,10 +96,7 @@ def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, tit
             y_ln = Y_V2 if via == 2 else Y_V1
             
             is_parked = row.get('is_parked', False)
-            if is_parked:
-                color = '#4CAF50' 
-            else:
-                color = '#c62828' if via == 2 else '#1565c0'
+            color = '#4CAF50' if is_parked else ('#c62828' if via == 2 else '#1565c0')
             
             doble_tramo = row.get('doble', False)
             man = row.get('maniobra')
@@ -155,7 +153,7 @@ def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, tit
 # =============================================================================
 def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titulo_extra, active_sers_list, gap_vias, use_rm):
     """
-    Empaqueta el perfil matemático y genera el Iframe HTML.
+    Empaqueta el perfil matemático y genera el Iframe HTML para la animación SCADA a 60FPS.
     """
     trips_data = []
     
@@ -298,7 +296,7 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
             if(p_chunk.length > 0) pax_prof += p_chunk.join(" | ") + "&#10;";
             if(p_chunk.length === 0 || pax_prof === "Perfil Estaciones:&#10;") pax_prof = "";
 
-            let state_str = is_parked ? "🏁 Estacionado en Terminal (Turnaround)" : "🚄 En Tránsito";
+            let state_str = is_parked ? "🏁 Estacionado en Terminal" : "🚄 En Tránsito";
             let safe_tooltip = `Tren: ${lbl} (Serv. ${tr.svc})&#10;Vía ${tr.Via} | km ${km.toFixed(2)}&#10;Estado: ${state_str}&#10;Pasajeros Actuales: ${current_pax} pax&#10;${pax_prof}Energía Neta (KWh): ${Math.round(current_kwh)}`;
             
             html += `<circle cx="${xp}" cy="${y_ln}" r="${r_c}" fill="${color}" stroke="black" stroke-width="2"><title>${safe_tooltip}</title></circle>`;
@@ -401,7 +399,32 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
     return html_template, H
 
 # =============================================================================
-# ORQUESTADOR CENTRAL: GEMELO DIGITAL
+# 3. DASHBOARD DE ENERGÍA Y BALANCE INTEGRAL
+# =============================================================================
+def render_dashboard_energia_v112(df_dia_e, active_sers, fecha_sel, hora_m1):
+    if df_dia_e is None or df_dia_e.empty: 
+        st.info("Sin datos para mostrar el balance energético.")
+        return
+        
+    t_trac = df_dia_e['kwh_viaje_trac'].sum() if 'kwh_viaje_trac' in df_dia_e.columns else 0.0
+    t_aux = df_dia_e['kwh_viaje_aux'].sum() if 'kwh_viaje_aux' in df_dia_e.columns else 0.0
+    t_regen = df_dia_e['kwh_viaje_regen'].sum() if 'kwh_viaje_regen' in df_dia_e.columns else 0.0
+    t_reostat = df_dia_e['kwh_reostato'].sum() if 'kwh_reostato' in df_dia_e.columns else 0.0
+    t_neto = df_dia_e['kwh_viaje_neto'].sum() if 'kwh_viaje_neto' in df_dia_e.columns else 0.0
+    tren_km = df_dia_e['tren_km'].sum() if 'tren_km' in df_dia_e.columns else 0.1
+    hora_str = f"{int(hora_m1)//60:02d}:{int(hora_m1)%60:02d}"
+    
+    st.markdown(f"### ⚡ Balance Energético Integral — {fecha_sel} (Acumulado {hora_str})")
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("🔋 Tracción", f"{t_trac:,.0f} kWh")
+    k2.metric("❄️ Auxiliar", f"{t_aux:,.0f} kWh")
+    k3.metric("✅ Regen Útil", f"{t_regen:,.0f} kWh")
+    k4.metric("🔥 Reóstato", f"{t_reostat:,.0f} kWh")
+    k5.metric("💡 IDE Neto", f"{t_neto/max(0.1, tren_km):.3f} kWh/km")
+    st.divider()
+
+# =============================================================================
+# ORQUESTADOR CENTRAL: GEMELO DIGITAL Y DASHBOARDS SECUNDARIOS
 # =============================================================================
 def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, use_rm, use_pend, estacion_anio, prefix_key, gap_vias, pax_dia_total=0, df_vacios_real=None, km_limache_manual=0.0):
     if df_vacios_real is None:
@@ -695,7 +718,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     if "SCADA" in modo:
         html_scada, H_scada = draw_scada_js(df_dia_e, {k: max(0.0, v) for k, v in ser_accum_visual.items()}, seat_accum_1, hora_m1, "", active_sers, gap_vias, use_rm)
         components.html(html_scada, height=H_scada + 100)
-        st.info("💡 **Modo SCADA Activado:** La animación gráfica se procesa a 60 FPS. Pasa el cursor sobre los trenes para ver la termodinámica.")
+        st.info("💡 **Modo SCADA Activado:** La animación gráfica se procesa a 60 FPS en el cliente.")
     else:
         if st.session_state.get(f'vs1_{prefix_key}', 1.0) > 1.0:
             st.select_slider("Velocidad", options=[0.5, 1, 2, 5, 10], value=st.session_state.get(f'vs1_{prefix_key}', 1.0), format_func=lambda x: f"×{x}", key=f"vs1_{prefix_key}")
@@ -741,7 +764,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
 
     st.divider()
     st.markdown("#### 🔌 Cargabilidad Instantánea de Subestaciones (Squeeze Control)")
-    st.caption("Muestra la demanda real en kW que los trenes exigen a la red en este mismo segundo. Los rectificadores son unidireccionales (Diodos).")
+    st.caption("Muestra la demanda real en kW que los trenes exigen a la red en este mismo segundo.")
     
     if not active_sers:
         st.info("No hay SERs activas para monitorear.")
