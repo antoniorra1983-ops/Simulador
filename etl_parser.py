@@ -89,17 +89,21 @@ def extraer_fecha_segura(df_raw, fname):
     s_fname = re.sub(r'\D', '', str(fname))
     for i in range(len(s_fname) - 7):
         match = s_fname[i:i+8]
-        d, mon, y = int(match[:2]), int(match[2:4]), int(match[4:])
-        if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{mon:02d}-{d:02d}"
-        y2, mon2, d2 = int(match[:4]), int(match[4:6]), int(match[6:])
-        if 1 <= d2 <= 31 and 1 <= mon2 <= 12 and 2000 <= y2 <= 2100: return f"{y2:04d}-{mon2:02d}-{d2:02d}"
+        try:
+            d, mon, y = int(match[:2]), int(match[2:4]), int(match[4:])
+            if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{mon:02d}-{d:02d}"
+            y2, mon2, d2 = int(match[:4]), int(match[4:6]), int(match[6:])
+            if 1 <= d2 <= 31 and 1 <= mon2 <= 12 and 2000 <= y2 <= 2100: return f"{y2:04d}-{mon2:02d}-{d2:02d}"
+        except: pass
         
     for i in range(len(s_fname) - 5):
         match = s_fname[i:i+6]
-        d, mon, y = int(match[:2]), int(match[2:4]), int(match[4:])
-        if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99: return f"{2000+y:04d}-{mon:02d}-{d:02d}"
-        y2, mon2, d2 = int(match[:2]), int(match[2:4]), int(match[4:])
-        if 20 <= y2 <= 99 and 1 <= mon2 <= 12 and 1 <= d2 <= 31: return f"{2000+y2:04d}-{mon2:02d}-{d2:02d}"
+        try:
+            d, mon, y = int(match[:2]), int(match[2:4]), int(match[4:])
+            if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99: return f"{2000+y:04d}-{mon:02d}-{d:02d}"
+            y2, mon2, d2 = int(match[:2]), int(match[2:4]), int(match[4:])
+            if 20 <= y2 <= 99 and 1 <= mon2 <= 12 and 1 <= d2 <= 31: return f"{2000+y2:04d}-{mon2:02d}-{d2:02d}"
+        except: pass
             
     for i in range(min(50, len(df_raw))):
         row_vals = [str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)]
@@ -249,7 +253,6 @@ def procesar_thdr(data, fname, via_param=1):
             row_vals = [str(x).upper() for x in raw.iloc[i].values if pd.notna(x)]
             row_str = ' '.join(row_vals)
             if ('VIAJE' in row_str or 'N°' in row_str or 'NRO' in row_str) and \
-               ('TREN' in row_str or 'MOTRIZ' in row_str or 'SFE' in row_str or 'SERVICIO' in row_str) and \
                ('LLEGADA' in row_str or 'SALIDA' in row_str or 'HORA' in row_str or 'PARTIDA' in row_str):
                 header_idx = i
                 break
@@ -523,7 +526,6 @@ def match_pax(row, df_pax):
         sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
         match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
         if not match_exacto.empty:
-            # 💡 FIX BUG: Uso correcto de best_match para evitar UnboundLocalError
             best_match = match_exacto.iloc[0]
             return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
 
@@ -728,7 +730,6 @@ def get_vacios_dia(df_dia):
         viajes = group.to_dict('records')
         if not viajes: continue
         
-        # 💡 FIX APLICADO: Lógica de Inyección Matutina
         p = viajes[0]
         if p.get('km_orig', 0) <= 2.0:
             start_locations['PU'].append({'tren': tren, 't_ini': p['t_ini'], 'tipo': p.get('tipo_tren', 'XT-100'), 'doble': p.get('doble', False), 'num_servicio': str(p.get('num_servicio', ''))})
@@ -754,7 +755,6 @@ def get_vacios_dia(df_dia):
             'tren': tren, 't_fin': u['t_fin'], 'km_dest': km_d, 'tipo': u.get('tipo_tren', 'XT-100'), 'doble': u.get('doble', False), 'num_servicio': str(u.get('num_servicio', ''))
         })
 
-    # 💡 FIX APLICADO: Inyección Matutina desde Talleres si superan límite de andén
     pu_starts = sorted(start_locations['PU'], key=lambda x: x['t_ini'])
     for i, t in enumerate(pu_starts):
         if i >= CAP_PUERTO:
