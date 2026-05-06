@@ -66,8 +66,9 @@ def km_at_t(t_ini, t_fin, t, via, use_rm=False, km_orig=None, km_dest=None, nodo
     if km_dest is None: km_dest = KM_TOTAL if via == 1 else 0.0
     
     km_sorted, t_sorted = _PROF_SORTED[(via, use_rm)]
-    t_at_orig = float(np.interp(km_orig * 1000.0, km_sorted, t_sorted))
-    t_at_dest = float(np.interp(km_dest * 1000.0, km_sorted, t_sorted))
+    ko_m, kd_m = km_orig * 1000.0, km_dest * 1000.0
+    t_at_orig = float(np.interp(ko_m, km_sorted, t_sorted))
+    t_at_dest = float(np.interp(kd_m, km_sorted, t_sorted))
     t_prof = t_at_orig + frac * (t_at_dest - t_at_orig)
     
     km_arr, t_arr_prof = _PROF[(via, use_rm)]
@@ -118,7 +119,7 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
         try: frac_hvac = _FRAC_HVAC
         except: frac_hvac = 0.45
 
-    # LÓGICA BOTTOM-UP ESTRICTA: Sumatoria de cargas discretas (Cero Doble Conteo)
+    # 💡 LÓGICA BOTTOM-UP ESTRICTA: Sumatoria de cargas discretas (Cero Doble Conteo)
     p_base = aux_kw_nominal * frac_base
     p_clima = (aux_kw_nominal * frac_hvac) * f_hvac * f_ocup
     
@@ -126,7 +127,7 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
     if estado_marcha in ["BRAKE", "BRAKE_STATION", "BRAKE_OVERSPEED"]:
         p_vent = p_vent_max         # 100% ventilación para enfriar freno regenerativo
     elif estado_marcha == "ACCEL":
-        p_vent = p_vent_max * 0.52  # Load Shedding / Estrangulamiento en aceleración
+        p_vent = p_vent_max * 0.52  # Load Shedding / Estrangulamiento en aceleración (~4 kW)
     elif estado_marcha in ["COAST", "DWELL"]:
         p_vent = 0.0                # Tren relajado térmicamente o estacionado
     else:
@@ -140,7 +141,7 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False):
     f = FLOTA.get(tipo_tren, FLOTA["XT-100"])
     
-    # LECTURA ESTACIONAL DE PLENA CARGA Y TECHO NOMINAL
+    # LECTURA ESTACIONAL DE PLENA CARGA Y TECHO NOMINAL (SIN HARDCODES)
     if estacion_anio == "invierno":
         aux_nominal_unidad = f.get('aux_kw_heat', f.get('aux_kw', 65.16))
     else:
@@ -148,10 +149,12 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
         
     trc, aux, reg, t_horas = 0.0, 0.0, 0.0, 0.0
     
-    # INYECCIÓN FÍSICA: Acumulador Neumático Virtual con Modulación (Soft-Load)
+    # 💡 INYECCIÓN FÍSICA: Acumulador Neumático Virtual con Modulación (Soft-Load)
     mrp_bar = 10.0
     compresor_on = False
     p_comp = f.get('p_compresor_kw', 3.68)
+    
+    # Tasa de llenado referencial: 15kW llenaba a 0.05 bar/s. Ajustado por la potencia real.
     tasa_rec = 0.05 * (p_comp / 15.0) 
     
     k_s, k_e = km_ini, km_fin
@@ -199,6 +202,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             
             v_cons_kmh = max(5.0, vel_at_km(km_actual, via_op, use_rm))
             if v_consigna_override is not None: v_cons_kmh = min(v_cons_kmh, v_consigna_override)
+            
+            # 💡 FIX APLICADO: Límite estricto de Shunting a 30 km/h para maniobras declaradas
+            if maniobra is not None:
+                v_cons_kmh = min(v_cons_kmh, 30.0)
             
             if es_vacio:
                 min_dist_est_m = min([abs(km_actual - k) for k in KM_ACUM]) * 1000.0
@@ -287,7 +294,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if f_regen_tramo > 0 and v_kmh >= f['v_freno_min']: 
                 reg += ((f_regen_tramo * step_m) / 3_600_000.0) * ETA_REGEN_NETA
                 
-            # RECUPERACIÓN NEUMÁTICA SILENCIOSA EN TRÁNSITO (SOFT-LOAD)
+            # 💡 RECUPERACIÓN NEUMÁTICA SILENCIOSA EN TRÁNSITO (SOFT-LOAD)
             if compresor_on:
                 mrp_bar += tasa_rec * dt_actual
                 aux += (p_comp * n_uni * (dt_actual / 3600.0))
@@ -311,6 +318,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if mrp_bar <= 8.0:
                 compresor_on = True
                 
+            # PULSO ELÉCTRICO DE PUERTAS UNILATERALES (3 SEGUNDOS)
             aux += (f.get('p_puertas_kw', 0.9) * n_uni * (3.0 / 3600.0))
             
             hora_media_dwell = (t_ini_mins + (t_horas + (dwell_s / 2.0) / 3600.0) * 60.0) / 60.0
