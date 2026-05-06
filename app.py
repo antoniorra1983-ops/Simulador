@@ -36,24 +36,6 @@ def leer_github(url):
             return nm, r.read()
     except Exception as e: return None, str(e)
 
-# 💡 FUNCIÓN NUEVA: Interpolación Cinemática Exacta para Tiempos Intermedios
-def _fraction_time_thdr(km_point, km_orig, km_dest, use_rm):
-    segs = SPEED_PROFILE
-    km_pts = [segs[0][0]] + [s[1] for s in segs]
-    t_pts = [0.0]
-    cum_t = 0.0
-    for ki, kf, dm, vn, vr in segs:
-        v = max(5.0, vr if use_rm else vn)
-        cum_t += (dm / 1000.0) / v * 3600.0
-        t_pts.append(cum_t)
-    km_arr = np.array(km_pts) / 1000.0
-    t_arr = np.array(t_pts)
-    t_o = float(np.interp(km_orig, km_arr, t_arr))
-    t_d = float(np.interp(km_dest, km_arr, t_arr))
-    t_p = float(np.interp(km_point, km_arr, t_arr))
-    if abs(t_d - t_o) < 0.001: return 0.0
-    return abs(t_p - t_o) / abs(t_d - t_o)
-
 @st.cache_data(show_spinner="Procesando THDR Estándar…")
 def build_thdr_v71(blobs_v1, blobs_v2):
     all_parts, err = [], []
@@ -476,7 +458,6 @@ def main():
             
             st.markdown(f"<div style='text-align:center; padding:10px; background-color:#E8F5E9; color:#2E7D32; border-radius:8px; border:1px solid #C8E6C9; margin-bottom:10px;'><b>Estrategia de Flota Activa:</b> {st.session_state.get('estrategia_flota', 'A: Por Trayecto (Macro)')}</div>", unsafe_allow_html=True)
 
-            # 💡 MEJORA WTT CON EXPANDERS (Boton minimizar): TABLAS THDR SEPARADAS POR VÍA
             st.markdown("### 📋 THDR Sintético Detallado (Malla Operativa WTT)")
             st.caption("Estas tablas son el equivalente matemático al Working Timetable de EFE. Los tiempos de Llegada y Salida por estación son calculados considerando fricción, masa y límites eléctricos. **Las tablas están separadas direccionalmente para uso en CTC.**")
             
@@ -486,73 +467,53 @@ def main():
             df_sint_show['TDV (min)'] = (df_sint_show['t_fin'] - df_sint_show['t_ini']).round(1)
             df_sint_show['Configuración'] = df_sint_show['doble'].apply(lambda x: 'Doble' if x else 'Simple')
             
-            # --- CÁLCULO DE LLEGADA/SALIDA EXACTA POR ESTACIÓN ---
             for idx, row in df_sint_show.iterrows():
-                k_o, k_d = row['km_orig'], row['km_dest']
-                t_i, t_f = row['t_ini'], row['t_fin']
-                via_tren = row['Via']
+                nodos_reales = row.get('nodos', [])
+                km_times = {}
+                for t_m, km_n in nodos_reales:
+                    idx_est = int(np.argmin([abs(km_n - k) for k in KM_ACUM]))
+                    km_est_r = round(KM_ACUM[idx_est], 3)
+                    if km_est_r not in km_times: km_times[km_est_r] = []
+                    km_times[km_est_r].append(t_m)
+                    
                 for i_est in range(N_EST):
-                    km_est = KM_ACUM[i_est]
+                    km_est_round = round(KM_ACUM[i_est], 3)
                     nombre_est = PAX_COLS[i_est]
-                    if min(k_o, k_d) - 0.1 <= km_est <= max(k_o, k_d) + 0.1:
-                        frac = _fraction_time_thdr(km_est, k_o, k_d, use_rm)
-                        t_pass = t_i + frac * (t_f - t_i)
-                        
-                        if abs(km_est - k_o) < 0.1: 
-                            t_lleg, t_sal = t_i, t_i
-                        elif abs(km_est - k_d) < 0.1: 
-                            t_lleg, t_sal = t_f, t_f
-                        else: 
-                            t_lleg = t_pass - (12.5 / 60.0)
-                            t_sal = t_pass + (12.5 / 60.0)
-                            
-                        df_sint_show.at[idx, f"{nombre_est}_Lleg"] = mins_to_time_str(t_lleg)
-                        df_sint_show.at[idx, f"{nombre_est}_Sal"] = mins_to_time_str(t_sal)
+                    if km_est_round in km_times:
+                        times = km_times[km_est_round]
+                        df_sint_show.at[idx, f"{nombre_est}_Lleg"] = mins_to_time_str(times[0])
+                        df_sint_show.at[idx, f"{nombre_est}_Sal"] = mins_to_time_str(times[-1])
                     else:
                         df_sint_show.at[idx, f"{nombre_est}_Lleg"] = "—"
                         df_sint_show.at[idx, f"{nombre_est}_Sal"] = "—"
             
             cols_base_export = ['_id', 'num_servicio', 'svc_type', 'tipo_tren', 'Configuración', 'Hora_Salida', 'Hora_Llegada', 'TDV (min)', 'pax_abordo']
             
-            # 🔵 SEPARACIÓN VÍA 1 (Puerto -> Limache) EN EXPANDER
             df_v1 = df_sint_show[df_sint_show['Via'] == 1].copy()
             st.markdown("#### 🔵 Vía 1 (Puerto → Limache)")
             if not df_v1.empty:
                 cols_v1 = cols_base_export.copy()
-                for est in PAX_COLS: # Orden Normal (Puerto a Limache)
-                    cols_v1.extend([f"{est}_Lleg", f"{est}_Sal"])
+                for est in PAX_COLS: cols_v1.extend([f"{est}_Lleg", f"{est}_Sal"])
                 cols_v1_exist = [c for c in cols_v1 if c in df_v1.columns]
                 
                 with st.expander("👀 Ver / Ocultar Malla Operativa Vía 1", expanded=False):
                     st.dataframe(df_v1[cols_v1_exist], use_container_width=True)
                     csv_v1 = df_v1[cols_v1_exist].to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Descargar Vía 1 (CSV)",
-                        data=csv_v1,
-                        file_name="THDR_Sintetico_V118_V1.csv",
-                        mime='text/csv'
-                    )
+                    st.download_button("📥 Descargar Vía 1 (CSV)", data=csv_v1, file_name="THDR_Sintetico_V118_V1.csv", mime='text/csv')
             else:
                 st.info("No hay servicios planificados en sentido Vía 1.")
 
-            # 🔴 SEPARACIÓN VÍA 2 (Limache -> Puerto) EN EXPANDER
             df_v2 = df_sint_show[df_sint_show['Via'] == 2].copy()
             st.markdown("#### 🔴 Vía 2 (Limache → Puerto)")
             if not df_v2.empty:
                 cols_v2 = cols_base_export.copy()
-                for est in reversed(PAX_COLS): # Orden Inverso (Limache a Puerto)
-                    cols_v2.extend([f"{est}_Lleg", f"{est}_Sal"])
+                for est in reversed(PAX_COLS): cols_v2.extend([f"{est}_Lleg", f"{est}_Sal"])
                 cols_v2_exist = [c for c in cols_v2 if c in df_v2.columns]
                 
                 with st.expander("👀 Ver / Ocultar Malla Operativa Vía 2", expanded=False):
                     st.dataframe(df_v2[cols_v2_exist], use_container_width=True)
                     csv_v2 = df_v2[cols_v2_exist].to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Descargar Vía 2 (CSV)",
-                        data=csv_v2,
-                        file_name="THDR_Sintetico_V118_V2.csv",
-                        mime='text/csv'
-                    )
+                    st.download_button("📥 Descargar Vía 2 (CSV)", data=csv_v2, file_name="THDR_Sintetico_V118_V2.csv", mime='text/csv')
             else:
                 st.info("No hay servicios planificados en sentido Vía 2.")
             
@@ -568,12 +529,9 @@ def main():
             df_dia = df_all[df_all['Fecha_str']==fecha_sel].copy()
             
             if use_regen:
-                if "Probabilístico" in tipo_regen:
-                    dict_regen = calcular_receptividad_por_headway(df_dia)
-                else:
-                    dict_regen = precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio)
-            else:
-                dict_regen = {}
+                if "Probabilístico" in tipo_regen: dict_regen = calcular_receptividad_por_headway(df_dia)
+                else: dict_regen = precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio)
+            else: dict_regen = {}
                 
             df_dia_e = calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio)
             
@@ -613,10 +571,8 @@ def main():
                     renames = {'Fecha_s': 'Fecha', 'Nro_THDR': 'N° THDR Pax', 'Tren': 'Servicio', 'Hora Origen Formateada': 'Hora Origen', 'CargaMax': 'Total a Bordo'}
                     
                     for c in PAX_COLS:
-                        if c not in df_dia_pax.columns: 
-                            df_dia_pax[c] = 0
-                        else: 
-                            df_dia_pax[c] = pd.to_numeric(df_dia_pax[c], errors='coerce').fillna(0).astype(int)
+                        if c not in df_dia_pax.columns: df_dia_pax[c] = 0
+                        else: df_dia_pax[c] = pd.to_numeric(df_dia_pax[c], errors='coerce').fillna(0).astype(int)
 
                     total_v1 = df_dia_pax[df_dia_pax['Via'] == 1]['CargaMax'].sum() if 'CargaMax' in df_dia_pax.columns else 0
                     total_v2 = df_dia_pax[df_dia_pax['Via'] == 2]['CargaMax'].sum() if 'CargaMax' in df_dia_pax.columns else 0
@@ -661,7 +617,6 @@ def main():
             
             cols_hist = ['Fecha_str', 'num_servicio', 'motriz_num', 'tipo_tren', 'Configuración', 'Via', 'svc_type', 'Hora_Salida', 'Hora_Llegada', 'pax_abordo']
             cols_hist_exist = [c for c in cols_hist if c in df_hist_show.columns]
-            
             st.dataframe(df_hist_show[cols_hist_exist], use_container_width=True)
 
     with tab_vacios:
@@ -779,7 +734,6 @@ def main():
                     cc1.metric("Total Movimientos en Vacío", total_mov_v_teo)
                     cc2.metric("Kilometraje Total en Vacío (Tren-km)", f"{total_km_v_teo:.3f} km")
                     st.divider()
-                    
                     st.dataframe(df_vacios_out_teo, use_container_width=True)
 
 if __name__ == "__main__": 
