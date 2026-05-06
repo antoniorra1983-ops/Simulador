@@ -5,7 +5,6 @@ import numpy as np
 import time
 import json
 import plotly.graph_objects as go
-
 from config import *
 from etl_parser import mins_to_time_str, get_pax_at_km, get_vacios_dia
 from red_electrica import calcular_flujo_ac_nodo, distribuir_potencia_sers_kw, distribuir_energia_sers
@@ -537,18 +536,18 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             pax_v = int(row.get('pax_inst', 0))
             masa_total = tara_base + ((pax_v * PAX_KG) / 1000.0)
             
-            # 💡 FIX: Inyectamos el Termostato Inteligente (Target de Auxiliares) en el Tooltip del Mapa
+            # 💡 FIX: Inyectamos el Termostato Estacional Inteligente (Bottom-Up)
             if estacion_anio == "invierno":
                 aux_nominal_unidad = f_flota.get('aux_kw_heat', f_flota.get('aux_kw', 65.16))
             else:
                 aux_nominal_unidad = f_flota.get('aux_kw_cool', f_flota.get('aux_kw', 58.76))
                 
-            f_compresor_especifico = f_flota.get('f_compresor_dwell', 1.08)
+            p_vent_max = f_flota.get('p_vent_trac_kw', 7.6) * n_unidades
             
             if is_parked:
                 state = "DWELL"
                 state_icon = "🏁 Estacionado en Terminal"
-                p_aux_kw = calcular_aux_dinamico(aux_nominal_unidad * n_unidades, hora_m1 / 60.0, 0, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state, f_compresor_especifico)
+                p_aux_kw = calcular_aux_dinamico(aux_nominal_unidad * n_unidades, hora_m1 / 60.0, 0, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state, p_vent_max)
                 p_elec_kw = p_aux_kw
             else:
                 state, v_kmh = get_train_state_and_speed(hora_m1, row['Via'], use_rm, row['km_orig'], row['km_dest'], row.get('nodos'))
@@ -558,7 +557,8 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                 if n_unidades == 2: f_davis = (f_flota['davis_A'] * 2) + (f_flota['davis_B'] * 2 * v_kmh) + (f_flota['davis_C'] * 1.35 * (v_kmh**2))
                 else: f_davis = f_flota['davis_A'] + f_flota['davis_B'] * v_kmh + f_flota['davis_C'] * (v_kmh**2)
                 
-                p_aux_kw = calcular_aux_dinamico(aux_nominal_unidad * n_unidades, hora_m1 / 60.0, pax_v, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state, f_compresor_especifico)
+                # 💡 LLAMADA BOTTOM-UP: Cero "hardcodes" antiguos.
+                p_aux_kw = calcular_aux_dinamico(aux_nominal_unidad * n_unidades, hora_m1 / 60.0, pax_v, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state, p_vent_max)
                 eta_m = f_flota.get('eta_motor', 0.92)
                 
                 if state == "ACCEL": p_mech = f_flota['p_max_kw'] * n_unidades * (pct_trac / 100.0)
@@ -764,7 +764,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
 
     st.divider()
     st.markdown("#### 🔌 Cargabilidad Instantánea de Subestaciones (Squeeze Control)")
-    st.caption("Muestra la demanda real en kW que los trenes exigen a la red en este mismo segundo.")
+    st.caption("Muestra la demanda real en kW que los trenes exigen a la red en este mismo segundo. Los rectificadores son unidireccionales (Diodos).")
     
     if not active_sers:
         st.info("No hay SERs activas para monitorear.")
