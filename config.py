@@ -1,5 +1,5 @@
 # config.py - Variables Globales e Infraestructura MERVAL
-# Calibración Definitiva v124: XT-M 95% + Física Neumática Proporcional (Soft-Load)
+# Calibración Definitiva v126: XT-M 95% + Bottom-Up Auxiliares + Neumática Soft-Load
 
 # =============================================================================
 # 1. INFRAESTRUCTURA Y RED
@@ -85,8 +85,8 @@ AUX_HVAC_HORA = _AUX_HVAC_HORA
 AUX_HVAC_DEF  = _AUX_HVAC_HORA
 
 # 💡 FÍSICA PURA: Proporciones térmicas ajustadas por Auditoría (Bottom-Up)
-_FRAC_BASE = 0.12  # Carga Vital y TCMS
-_FRAC_HVAC = 0.45  # Climatización Máxima
+_FRAC_BASE = 0.12  # Carga Vital y TCMS (Fija)
+_FRAC_HVAC = 0.45  # Climatización Máxima Instalada
 
 FRAC_HVAC = _FRAC_HVAC
 FRAC_HVAC_DEF = _FRAC_HVAC
@@ -137,7 +137,7 @@ SPEED_PROFILE = [
 ]
 
 # =============================================================================
-# 5. DICCIONARIO DE FLOTA CERTIFICADA (Con Lógica de Cargas Discretas)
+# 5. DICCIONARIO DE FLOTA CERTIFICADA (Con Lógica de Cargas Discretas Bottom-Up)
 # =============================================================================
 FLOTA = {
     "XT-100": {
@@ -176,7 +176,7 @@ FLOTA = {
         "a_freno_ms2"  : 1.2,
         "jerk_ms3"     : 0.8,
         "v_freno_min"  : 3.81,  
-        "eta_motor"    : 0.95,   
+        "eta_motor"    : 0.95,   # 💡 Eficiencia certificada SEPSA/Alstom
         "davis_A"      : 1440.60,  
         "davis_B"      : 0.00,
         "davis_C"      : 0.35,      
@@ -187,7 +187,7 @@ FLOTA = {
         "aux_kw_cool"  : 68.0,         
         "aux_kw_heat"  : 78.0,         
         "p_compresor_kw": 4.60,  
-        "p_puertas_kw" : 0.9,    # 💡 6 puertas x 150W (Apertura Unilateral)
+        "p_puertas_kw" : 0.9,    
         "p_vent_trac_kw": 8.5
     },
     "SFE": {
