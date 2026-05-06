@@ -88,9 +88,9 @@ def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos, t_arr=N
     else: return "CRUISE", vel_max
 
 # =============================================================================
-# 2. CÁLCULO DE AUXILIARES DINÁMICOS (ALSTOM COMPLIANT)
+# 2. CÁLCULO DE AUXILIARES DINÁMICOS (CON DESLASTRE TÉRMICO Y VENTILACIÓN)
 # =============================================================================
-def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", f_compresor_dwell=1.03):
+def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", f_compresor_dwell=1.0):
     hora_int = int(hora_decimal) % 24
     
     try: perfil = AUX_HVAC_HORA.get(estacion_anio, AUX_HVAC_HORA.get("primavera", [0.5]*24))
@@ -111,22 +111,23 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
     try: frac_base = FRAC_BASE
     except NameError: 
         try: frac_base = _FRAC_BASE
-        except: frac_base = 0.45
+        except: frac_base = 0.30
     
     try: frac_hvac = FRAC_HVAC
     except NameError: 
         try: frac_hvac = _FRAC_HVAC
-        except: frac_hvac = 0.55
+        except: frac_hvac = 0.70
 
-    # 💡 IMPLEMENTACIÓN FÍSICA: Deslastre de Cargas (Load Shedding) y Ventilación Forzada
+    # 💡 LÓGICA CERTIFICADA: Deslastre de Cargas (Load Shedding) y Ventilación Forzada
+    # NOTA: El consumo neumático (Compresor/Puertas) ya NO se suma aquí, se hace en el Acumulador del integrador físico.
     if estado_marcha == "DWELL":
         f_marcha_base = 1.0
-        f_marcha_hvac = f_compresor_dwell
+        f_marcha_hvac = 1.0
     elif estado_marcha in ["BRAKE", "BRAKE_STATION", "BRAKE_OVERSPEED"]:
         f_marcha_base = 1.05  # +5% Ventilación forzada al frenar (Enfriamiento IGBT)
         f_marcha_hvac = 1.0
     elif estado_marcha == "ACCEL":
-        f_marcha_base = 0.95  # -5% Load Shedding protegiendo catenaria
+        f_marcha_base = 0.95  # -5% Estrangulamiento protegiendo catenaria
         f_marcha_hvac = 1.0
     elif estado_marcha == "COAST":
         f_marcha_base = 0.90  # -10% Inercia, relajo térmico
@@ -141,20 +142,23 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
     return aux_base + aux_hvac
 
 # =============================================================================
-# 3. FÍSICA TERMODINÁMICA Y LOAD FLOW 
+# 3. FÍSICA TERMODINÁMICA Y LOAD FLOW (INCLUYE ACUMULADOR NEUMÁTICO)
 # =============================================================================
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False):
     f = FLOTA.get(tipo_tren, FLOTA["XT-100"])
     
-    # 💡 LÓGICA CERTIFICADA: Selección de Plena Carga Estacional (Reporte ALSTOM TRA-305)
+    # 💡 LECTURA ESTACIONAL DE PLENA CARGA
     if estacion_anio == "invierno":
         aux_nominal_unidad = f.get('aux_kw_heat', f.get('aux_kw', 65.16))
     else:
         aux_nominal_unidad = f.get('aux_kw_cool', f.get('aux_kw', 58.76))
         
-    f_compresor_especifico = f.get('f_compresor_dwell', 1.03)
-    
     trc, aux, reg, t_horas = 0.0, 0.0, 0.0, 0.0
+    
+    # 💡 INYECCIÓN FÍSICA: Acumulador Neumático Virtual
+    mrp_bar = 10.0
+    compresor_on = False
+    
     k_s, k_e = km_ini, km_fin
     dst = abs(k_e - k_s)
     if dst <= 0: return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
@@ -256,7 +260,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             elif estado_marcha == "COAST":
                 a_net_target = (-f_davis - f_pend) / masa_kg
                 
-            # 💡 IMPLEMENTACIÓN FÍSICA: Lectura del Jerk Dinámico según la flota
             jerk_limit = f.get('jerk_ms3', 0.8) * dt
             if a_net_target > a_prev + jerk_limit: a_net = a_prev + jerk_limit
             elif a_net_target < a_prev - jerk_limit: a_net = a_prev - jerk_limit
@@ -283,27 +286,68 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if step_m < 0.1: step_m = 0.5 
                 
             if f_motor > 0: 
+                # 💡 LECTURA DE EFICIENCIA CERTIFICADA (Ej: 95% para XT-M)
                 eta_din = f.get('eta_motor', 0.92) * (1.0 - 0.2 * (1.0 - max(0.1, f_motor / max(1.0, f_disp_trac)))**3)
                 trc += ((f_motor * step_m) / 3_600_000.0) / eta_din
             if f_regen_tramo > 0 and v_kmh >= f['v_freno_min']: 
                 reg += ((f_regen_tramo * step_m) / 3_600_000.0) * ETA_REGEN_NETA
                 
-            # 💡 INYECCIÓN AUXILIAR: Techo estacional, deslastre de cargas y factor de compresor
-            aux += (calcular_aux_dinamico(aux_nominal_unidad * n_uni, (t_ini_mins + t_horas * 60.0) / 60.0, pax_mid, f.get('cap_max', 398) * n_uni, estacion_anio, estado_marcha, f_compresor_especifico) * (dt_actual / 3600.0))
+            # 💡 RECUPERACIÓN NEUMÁTICA EN TRÁNSITO
+            if compresor_on:
+                mrp_bar += 0.05 * dt_actual
+                aux += (f.get('p_compresor_kw', 15.0) * n_uni * (dt_actual / 3600.0))
+                if mrp_bar >= 10.0:
+                    mrp_bar = 10.0
+                    compresor_on = False
+
+            aux += (calcular_aux_dinamico(aux_nominal_unidad * n_uni, (t_ini_mins + t_horas * 60.0) / 60.0, pax_mid, f.get('cap_max', 398) * n_uni, estacion_anio, estado_marcha) * (dt_actual / 3600.0))
             t_horas += dt_actual / 3600.0
             dist_recorrida += step_m
             v_ms = v_new
 
+        # 💡 DETENCIÓN EN ANDÉN: Consumo Eléctrico de Puertas y Gasto Neumático
+        if i < len(paradas_km) - 2:
+            dwell_s = 25.0
+            
+            # Gasto de aire en cilindros de freno
+            mrp_bar -= 0.3
+            if mrp_bar <= 8.0:
+                compresor_on = True
+                
+            # 💡 PULSO ELÉCTRICO DE PUERTAS UNILATERALES (3 SEGUNDOS)
+            aux += (f.get('p_puertas_kw', 1.8) * n_uni * (3.0 / 3600.0))
+            
+            # Auxiliares HVAC en DWELL
+            hora_media_dwell = (t_ini_mins + (t_horas + (dwell_s / 2.0) / 3600.0) * 60.0) / 60.0
+            aux_kw_dwell = calcular_aux_dinamico(aux_nominal_unidad * n_uni, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni, estacion_anio, "DWELL")
+            aux += aux_kw_dwell * (dwell_s / 3600.0)
+            
+            # Recuperación Neumática en Andén
+            if compresor_on:
+                rec_bar = 0.05 * dwell_s
+                if mrp_bar + rec_bar >= 10.0:
+                    time_to_10 = (10.0 - mrp_bar) / 0.05
+                    aux += (f.get('p_compresor_kw', 15.0) * n_uni * (time_to_10 / 3600.0))
+                    mrp_bar = 10.0
+                    compresor_on = False
+                else:
+                    mrp_bar += rec_bar
+                    aux += (f.get('p_compresor_kw', 15.0) * n_uni * (dwell_s / 3600.0))
+                    
+            t_horas += (dwell_s / 3600.0)
+
+    # Dwell final en estación de término
     dwell_h = (max(0, len(paradas_km) - 2) * 25.0) / 3600.0
     hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
-    
-    aux_kw_dwell = calcular_aux_dinamico(aux_nominal_unidad * (2 if doble else 1), hora_media_dwell, pax_abordo, f.get('cap_max', 398) * (2 if doble else 1), estacion_anio, "DWELL", f_compresor_especifico)
+    aux_kw_dwell = calcular_aux_dinamico(aux_nominal_unidad * (2 if doble else 1), hora_media_dwell, pax_abordo, f.get('cap_max', 398) * (2 if doble else 1), estacion_anio, "DWELL")
     aux += aux_kw_dwell * dwell_h
     t_horas += dwell_h
     
     return trc, aux, reg, 0.0, max(0.0, trc + aux - reg), t_horas
 
-
+# =============================================================================
+# 4. MÉTODOS ELÉCTRICOS DE RED
+# =============================================================================
 def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
     if df_dia.empty: return {}
     result = {}
@@ -358,7 +402,6 @@ def precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio="prim
             masa_kg = ((f['tara_t'] + f['m_iner_t']) * 1000 * n_uni) + (tr['pax_abordo'] * PAX_KG)
             eta_m = f.get('eta_motor', 0.92)
             
-            # 💡 INTEGRACIÓN ELÉCTRICA: Load flow respetando techo estacional
             if estacion_anio == "invierno":
                 aux_nominal_unidad = f.get('aux_kw_heat', f.get('aux_kw', 65.16))
             else:
@@ -370,7 +413,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio="prim
                 pos = km_at_t(tr['t_ini'], tr['t_fin'], m, tr['Via'], use_rm, tr['km_orig'], tr['km_dest'], tr['nodos'], tr['t_arr'])
                 v_ms = v_kmh / 3.6
                 
-                p_aux_kw = calcular_aux_dinamico(aux_nominal_unidad * n_uni, m / 60.0, tr['pax_abordo'], f.get('cap_max', 398) * n_uni, estacion_anio, state, f.get('f_compresor_dwell', 1.03))
+                p_aux_kw = calcular_aux_dinamico(aux_nominal_unidad * n_uni, m / 60.0, tr['pax_abordo'], f.get('cap_max', 398) * n_uni, estacion_anio, state)
                 
                 f_davis = ((f['davis_A'] * 2) + (f['davis_B'] * 2 * v_kmh) + (f['davis_C'] * 1.35 * (v_kmh**2))) if n_uni == 2 else (f['davis_A'] + f['davis_B']*v_kmh + f['davis_C']*(v_kmh**2))
                 if state in ("BRAKE", "BRAKE_STATION", "BRAKE_OVERSPEED"):
@@ -419,7 +462,7 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_re
     return df_e
 
 # =============================================================================
-# 4. PLANIFICADOR
+# 5. PLANIFICADOR
 # =============================================================================
 @st.cache_data(show_spinner="Integrando física y demanda de pasajeros...")
 def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje=150):
