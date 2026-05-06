@@ -504,7 +504,8 @@ def match_pax(row, df_pax):
     if pd.notna(t_i):
         best_match = sub.loc[sub['diff'].idxmin()]
         if best_match['diff'] <= 15: 
-            return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best.get('Nro_THDR', '')), best_match.name
+            # 💡 FIX APLICADO AQUÍ: Se reemplaza "best" por "best_match"
+            return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
 
     return EMPTY
 
