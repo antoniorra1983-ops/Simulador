@@ -81,24 +81,48 @@ def extraer_fecha_segura(df_raw, fname):
     for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
         m = re.search(pat, str(fname))
         if m:
-            if len(m.group(1)) == 4:
-                y, m_val, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            else:
-                d, m_val, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            if m_val > 12 and d <= 12: d, m_val = m_val, d
-            if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
+            if len(m.group(1)) == 4: y, mon, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            else: d, mon, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if mon > 12 and d <= 12: d, mon = mon, d
+            if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
 
+    s_fname = re.sub(r'\D', '', str(fname))
+    for i in range(len(s_fname) - 7):
+        match = s_fname[i:i+8]
+        d, mon, y = int(match[:2]), int(match[2:4]), int(match[4:])
+        if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{mon:02d}-{d:02d}"
+        y2, mon2, d2 = int(match[:4]), int(match[4:6]), int(match[6:])
+        if 1 <= d2 <= 31 and 1 <= mon2 <= 12 and 2000 <= y2 <= 2100: return f"{y2:04d}-{mon2:02d}-{d2:02d}"
+        
+    for i in range(len(s_fname) - 5):
+        match = s_fname[i:i+6]
+        d, mon, y = int(match[:2]), int(match[2:4]), int(match[4:])
+        if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99: return f"{2000+y:04d}-{mon:02d}-{d:02d}"
+        y2, mon2, d2 = int(match[:2]), int(match[2:4]), int(match[4:])
+        if 20 <= y2 <= 99 and 1 <= mon2 <= 12 and 1 <= d2 <= 31: return f"{2000+y2:04d}-{mon2:02d}-{d2:02d}"
+            
     for i in range(min(50, len(df_raw))):
-        row_str = ' '.join([str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)])
-        for pat in [r'\b(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})\b', r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{4})\b']:
-            m_dt = re.search(pat, row_str)
-            if m_dt:
-                if len(m_dt.group(1)) == 4:
-                    y, m_val, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
-                else:
-                    d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
-                if m_val > 12 and d <= 12: d, m_val = m_val, d
-                if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
+        row_vals = [str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)]
+        row_str = ' '.join(row_vals)
+        m_dt = re.search(r'\b(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})\b', row_str)
+        if m_dt:
+            y, mon, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+            if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
+        m_d = re.search(r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{4})\b', row_str)
+        if m_d:
+            d, mon, y = int(m_d.group(1)), int(m_d.group(2)), int(m_d.group(3))
+            if mon > 12 and d <= 12: d, mon = mon, d
+            if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
+        m_d2 = re.search(r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{2})\b', row_str)
+        if m_d2 and not row_str.replace(".", "").isdigit():
+            d, mon, y = int(m_d2.group(1)), int(m_d2.group(2)), int(m_d2.group(3))
+            if mon > 12 and d <= 12: d, mon = mon, d
+            if 1 <= d <= 31 and 1 <= mon <= 12: return f"{2000+y:04d}-{mon:02d}-{d:02d}"
+        for val in row_vals:
+            val_clean = val.split('.')[0]
+            if val_clean.isdigit() and 40000 <= int(val_clean) <= 60000:
+                try: return (date(1899, 12, 30) + timedelta(days=int(val_clean))).strftime('%Y-%m-%d')
+                except: pass
     return "2026-01-01"
 
 def clean_primary_key(x):
@@ -225,7 +249,8 @@ def procesar_thdr(data, fname, via_param=1):
             row_vals = [str(x).upper() for x in raw.iloc[i].values if pd.notna(x)]
             row_str = ' '.join(row_vals)
             if ('VIAJE' in row_str or 'N°' in row_str or 'NRO' in row_str) and \
-               ('TREN' in row_str or 'MOTRIZ' in row_str or 'SFE' in row_str or 'SERVICIO' in row_str):
+               ('TREN' in row_str or 'MOTRIZ' in row_str or 'SFE' in row_str or 'SERVICIO' in row_str) and \
+               ('LLEGADA' in row_str or 'SALIDA' in row_str or 'HORA' in row_str or 'PARTIDA' in row_str):
                 header_idx = i
                 break
                 
@@ -498,13 +523,13 @@ def match_pax(row, df_pax):
         sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
         match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
         if not match_exacto.empty:
-            best = match_exacto.iloc[0]
-            return {c: _to_int(best.get(c, 0)) for c in PAX_COLS}, _to_int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR', '')), best.name
+            # 💡 FIX BUG: Uso correcto de best_match para evitar UnboundLocalError
+            best_match = match_exacto.iloc[0]
+            return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
 
     if pd.notna(t_i):
         best_match = sub.loc[sub['diff'].idxmin()]
         if best_match['diff'] <= 15: 
-            # 💡 FIX APLICADO AQUÍ: Se reemplaza "best" por "best_match"
             return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
 
     return EMPTY
@@ -696,13 +721,20 @@ def get_vacios_dia(df_dia):
     def _get_est_name(km): return ESTACIONES[int(np.argmin([abs(km - k) for k in KM_ACUM]))] if min([abs(km - k) for k in KM_ACUM]) <= 1.5 else f"km {km:.1f}"
 
     end_locations = {'PU': [], 'LI': [], 'BTO': [], 'SA': [], 'OTHER': []}
+    start_locations = {'PU': [], 'LI': []}
 
     for tren, group in df_dia.sort_values('t_ini').groupby(agrupador):
         if str(tren).strip() == '' or str(tren).strip() == 'nan': continue
         viajes = group.to_dict('records')
         if not viajes: continue
         
+        # 💡 FIX APLICADO: Lógica de Inyección Matutina
         p = viajes[0]
+        if p.get('km_orig', 0) <= 2.0:
+            start_locations['PU'].append({'tren': tren, 't_ini': p['t_ini'], 'tipo': p.get('tipo_tren', 'XT-100'), 'doble': p.get('doble', False), 'num_servicio': str(p.get('num_servicio', ''))})
+        elif p.get('km_orig', 0) >= 41.0:
+            start_locations['LI'].append({'tren': tren, 't_ini': p['t_ini'], 'tipo': p.get('tipo_tren', 'XT-100'), 'doble': p.get('doble', False), 'num_servicio': str(p.get('num_servicio', ''))})
+
         if abs(p.get('km_orig', 0) - KM_ACUM[14]) < 0.1: vacios.append({'t_asigned': p['t_ini'] - 10, 'tipo': p.get('tipo_tren', 'XT-100'), 'doble': p.get('doble', False), 'cochera': True, 'km_orig': KM_ACUM[14], 'km_dest': KM_ACUM[14], 'dist': 2.0, 'motriz_num': tren, 'origen_txt': 'Taller / Cochera', 'destino_txt': 'El Belloto', 'servicio_previo': '—', 'servicio_siguiente': str(p.get('num_servicio', ''))})
         elif abs(p.get('km_orig', 0) - KM_ACUM[18]) < 0.1: vacios.append({'t_asigned': p['t_ini'] - 20, 'tipo': p.get('tipo_tren', 'XT-100'), 'doble': p.get('doble', False), 'cochera': True, 'km_orig': KM_ACUM[14], 'km_dest': KM_ACUM[18], 'dist': 2.0 + abs(KM_ACUM[18]-KM_ACUM[14]), 'motriz_num': tren, 'origen_txt': 'Taller / Cochera', 'destino_txt': 'Sargento Aldea', 'servicio_previo': '—', 'servicio_siguiente': str(p.get('num_servicio', ''))})
             
@@ -721,6 +753,17 @@ def get_vacios_dia(df_dia):
         end_locations[loc].append({
             'tren': tren, 't_fin': u['t_fin'], 'km_dest': km_d, 'tipo': u.get('tipo_tren', 'XT-100'), 'doble': u.get('doble', False), 'num_servicio': str(u.get('num_servicio', ''))
         })
+
+    # 💡 FIX APLICADO: Inyección Matutina desde Talleres si superan límite de andén
+    pu_starts = sorted(start_locations['PU'], key=lambda x: x['t_ini'])
+    for i, t in enumerate(pu_starts):
+        if i >= CAP_PUERTO:
+            vacios.append({'t_asigned': t['t_ini'] - 40.0, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': KM_ACUM[14], 'km_dest': KM_ACUM[0], 'dist': abs(KM_ACUM[14] - 0), 'motriz_num': t['tren'], 'origen_txt': 'Taller EB', 'destino_txt': 'Puerto (Inyección Matutina)', 'servicio_previo': '—', 'servicio_siguiente': t['num_servicio']})
+
+    li_starts = sorted(start_locations['LI'], key=lambda x: x['t_ini'])
+    for i, t in enumerate(li_starts):
+        if i >= CAP_LIMACHE:
+            vacios.append({'t_asigned': t['t_ini'] - 40.0, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': KM_ACUM[14], 'km_dest': KM_ACUM[20], 'dist': abs(KM_ACUM[14] - KM_ACUM[20]), 'motriz_num': t['tren'], 'origen_txt': 'Taller EB', 'destino_txt': 'Limache (Inyección Matutina)', 'servicio_previo': '—', 'servicio_siguiente': t['num_servicio']})
 
     pu_trains = sorted(end_locations['PU'], key=lambda x: x['t_fin'], reverse=True)
     for i, t in enumerate(pu_trains):
