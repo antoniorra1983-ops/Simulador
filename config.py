@@ -1,5 +1,5 @@
 # config.py - Variables Globales e Infraestructura MERVAL
-# Calibración XT-100 basada en Reporte ALSTOM TRA-305 (Plena Carga Segregada)
+# Calibración XT-100 basada en Reporte ALSTOM TRA-305 (Plena Carga + Dinámica Jerk AW4)
 
 # =============================================================================
 # 1. INFRAESTRUCTURA Y RED
@@ -84,7 +84,7 @@ _AUX_HVAC_HORA = {
 AUX_HVAC_HORA = _AUX_HVAC_HORA
 AUX_HVAC_DEF  = _AUX_HVAC_HORA
 
-# Proporciones de consumo térmico (Base+Ventilacion es ~40-45% de la carga total)
+# Proporciones según auditoría de cargas térmicas
 _FRAC_BASE = 0.45
 _FRAC_HVAC = 0.55
 
@@ -141,76 +141,77 @@ SPEED_PROFILE = [
 ]
 
 # =============================================================================
-# 5. DICCIONARIO DE FLOTA CERTIFICADA 
+# 5. DICCIONARIO DE FLOTA CERTIFICADA (Fuente: ALSTOM TRA-305)
 # =============================================================================
 FLOTA = {
     "XT-100": {
         "tara_t"       : 86.1,  
         "m_iner_t"     : 7.20,  
-        "coches"       : 2,  
-        "cap_sent"     : 94,  
-        "cap_max"      : 398,
-        "n_motores"    : 4,  
+        "coches"       : 2,
+        "cap_sent"     : 94,
+        "cap_max"      : 473,           # 💡 MODIFICADO: 35.48t / 75kg AW4 Aplastamiento (TRA-305)
+        "n_motores"    : 4,
         "a_max_ms2"    : 1.0,  
         "a_freno_ms2"  : 1.2,
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.92,  
-        "davis_A"      : 1615.00,  
+        "davis_A"      : 1615.0,
         "davis_B"      : 0.00,
         "davis_C"      : 0.5458,     
-        "f_trac_max_kn": 110.0,   
-        "f_freno_max_kn": 105.0,  
+        "f_trac_max_kn": 110.0,
+        "f_freno_max_kn": 105.0,
         "p_max_kw"     : 720.0,
         "p_freno_max_kw": 600.0,
         "aux_kw_cool"  : 58.76,         
         "aux_kw_heat"  : 65.16,         
-        "aux_kw"       : 65.16,
-        "f_compresor_dwell": 1.03
+        "f_compresor_dwell": 1.03,      
+        "jerk_ms3"     : 1.3            # 💡 MODIFICADO: Agresividad Mecánica (TRA-305)
     },
     "XT-M": {
         "tara_t"       : 95.0,  
         "m_iner_t"     : 8.0,  
         "coches"       : 2,  
-        "cap_sent"     : 94,  
+        "cap_sent"     : 94,
         "cap_max"      : 376,
-        "n_motores"    : 4,  
-        "a_max_ms2"    : 1.0,  
+        "n_motores"    : 4,
+        "a_max_ms2"    : 1.0,
         "a_freno_ms2"  : 1.2,
-        "v_freno_min"  : 3.81,  
-        "eta_motor"    : 0.92,  
-        "davis_A"      : 1440.60,  
+        "v_freno_min"  : 3.81,
+        "eta_motor"    : 0.92,
+        "davis_A"      : 1440.60,
         "davis_B"      : 0.00,
-        "davis_C"      : 0.35,      
-        "f_trac_max_kn": 115.0,   
-        "f_freno_max_kn": 110.0,  
+        "davis_C"      : 0.35,
+        "f_trac_max_kn": 115.0,
+        "f_freno_max_kn": 110.0,
         "p_max_kw"     : 1040.0,
         "p_freno_max_kw": 800.0,
         "aux_kw_cool"  : 68.0,         
         "aux_kw_heat"  : 78.0,         
-        "aux_kw"       : 78.0,
-        "f_compresor_dwell": 1.06
+        "f_compresor_dwell": 1.06,
+        "jerk_ms3"     : 0.8            # Fallback confort
     },
     "SFE": {
         "tara_t"       : 141.0,  
         "m_iner_t"     : 11.2,  
-        "coches"       : 3,  
+        "coches"       : 3,
+        "cap_sent"     : 0,     
         "cap_max"      : 780,
-        "n_motores"    : 8,       
+        "n_motores"    : 8,
         "a_max_ms2"    : 1.02,
-        "a_freno_ms2"  : 1.30,  
+        "a_freno_ms2"  : 1.30,
         "v_freno_min"  : 3.81,
-        "eta_motor"    : 0.94,      
-        "davis_A"      : 2480.00,  
+        "eta_motor"    : 0.94,
+        "davis_A"      : 2480.00,
         "davis_B"      : 0.00,
-        "davis_C"      : 0.4714,     
-        "f_trac_max_kn": 220.0,   
-        "f_freno_max_kn": 190.0,  
+        "davis_C"      : 0.4714,
+        "f_trac_max_kn": 220.0,
+        "f_freno_max_kn": 190.0,
         "p_max_kw"     : 2400.0,
         "p_freno_max_kw": 2800.0,
         "aux_kw_cool"  : 180.0,        
         "aux_kw_heat"  : 210.0,        
-        "aux_kw"       : 210.0,
-        "f_compresor_dwell": 1.08
+        "f_compresor_dwell": 1.08,
+        "jerk_ms3"     : 0.8            # Fallback confort
     },
 }
 
@@ -220,7 +221,6 @@ feriados_2026 = [
     '2026-10-12', '2026-10-31', '2026-12-08', '2026-12-25'
 ]
 
-# 💡 CORRECCIÓN TÉCNICA APLICADA AQUÍ ABAJO (Evita el NameError en motor_fisico y app)
 __all__ = [
     'ESTACIONES', 'EC', 'PAX_COLS', 'PAX_IDX', 'KM_TRAMO', 'KM_ACUM', 'KM_TOTAL', 'N_EST',
     '_ELEV_KM', '_ELEV_M', 'ELEV_KM', 'ELEV_M', 'EST_LATS', 'EST_LONS',
