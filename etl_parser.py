@@ -5,6 +5,7 @@ import unicodedata
 from io import BytesIO
 from datetime import datetime, date, timedelta
 from config import *
+import config
 
 # =============================================================================
 # 1. UTILIDADES Y GEOMETRÍA
@@ -288,8 +289,10 @@ def procesar_thdr(data, fname, via_param=1):
                         is_time_col = True
                         break
             if is_time_col:
-                df[f"{col}_min"] = df[col].apply(parse_time_to_mins)
-                time_cols.append(f"{col}_min")
+                try:
+                    df[f"{col}_min"] = df[col].apply(parse_time_to_mins)
+                    time_cols.append(f"{col}_min")
+                except: pass
 
         est_cols = {c: _col_to_est_idx(c) for c in time_cols if _col_to_est_idx(c) is not None}
         if not est_cols: return pd.DataFrame(), "No se detectaron columnas de estaciones con tiempo."
@@ -717,6 +720,10 @@ def cargar_vacios_efe(data, fname):
     except Exception as e: return pd.DataFrame()
 
 def get_vacios_dia(df_dia):
+    # 💡 ESCUDO DEFENSIVO: Bypass de encapsulamiento para evitar NameError en Cloud
+    cap_puerto = getattr(config, 'CAP_PUERTO', 4)
+    cap_limache = getattr(config, 'CAP_LIMACHE', 16)
+    
     vacios = []
     if df_dia.empty: return vacios
     agrupador = 'motriz_num' if 'motriz_num' in df_dia.columns else 'num_servicio'
@@ -757,22 +764,22 @@ def get_vacios_dia(df_dia):
 
     pu_starts = sorted(start_locations['PU'], key=lambda x: x['t_ini'])
     for i, t in enumerate(pu_starts):
-        if i >= CAP_PUERTO:
+        if i >= cap_puerto:
             vacios.append({'t_asigned': t['t_ini'] - 40.0, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': KM_ACUM[14], 'km_dest': KM_ACUM[0], 'dist': abs(KM_ACUM[14] - 0), 'motriz_num': t['tren'], 'origen_txt': 'Taller EB', 'destino_txt': 'Puerto (Inyección Matutina)', 'servicio_previo': '—', 'servicio_siguiente': t['num_servicio']})
 
     li_starts = sorted(start_locations['LI'], key=lambda x: x['t_ini'])
     for i, t in enumerate(li_starts):
-        if i >= CAP_LIMACHE:
+        if i >= cap_limache:
             vacios.append({'t_asigned': t['t_ini'] - 40.0, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': KM_ACUM[14], 'km_dest': KM_ACUM[20], 'dist': abs(KM_ACUM[14] - KM_ACUM[20]), 'motriz_num': t['tren'], 'origen_txt': 'Taller EB', 'destino_txt': 'Limache (Inyección Matutina)', 'servicio_previo': '—', 'servicio_siguiente': t['num_servicio']})
 
     pu_trains = sorted(end_locations['PU'], key=lambda x: x['t_fin'], reverse=True)
     for i, t in enumerate(pu_trains):
-        if i >= CAP_PUERTO:
+        if i >= cap_puerto:
             vacios.append({'t_asigned': t['t_fin'] + 10.0, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': t['km_dest'], 'km_dest': KM_ACUM[14], 'dist': abs(KM_ACUM[14] - t['km_dest']), 'motriz_num': t['tren'], 'origen_txt': 'Puerto (Exceso Cap)', 'destino_txt': 'Taller EB', 'servicio_previo': t['num_servicio'], 'servicio_siguiente': '—'})
 
     li_trains = sorted(end_locations['LI'], key=lambda x: x['t_fin'], reverse=True)
     for i, t in enumerate(li_trains):
-        if i >= CAP_LIMACHE:
+        if i >= cap_limache:
             vacios.append({'t_asigned': t['t_fin'] + 10.0, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': t['km_dest'], 'km_dest': KM_ACUM[14], 'dist': abs(KM_ACUM[14] - t['km_dest']), 'motriz_num': t['tren'], 'origen_txt': 'Limache (Exceso Cap)', 'destino_txt': 'Taller EB', 'servicio_previo': t['num_servicio'], 'servicio_siguiente': '—'})
 
     for t in end_locations['BTO']: vacios.append({'t_asigned': t['t_fin'] + 5, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': t['km_dest'], 'km_dest': KM_ACUM[14], 'dist': 2.0, 'motriz_num': t['tren'], 'origen_txt': 'El Belloto', 'destino_txt': 'Taller / Cochera', 'servicio_previo': t['num_servicio'], 'servicio_siguiente': '—'})
