@@ -1,5 +1,5 @@
 # config.py - Variables Globales e Infraestructura MERVAL
-# Calibración Definitiva v123: Eficiencia XT-M al 95% + Física Neumática Activa
+# Calibración Definitiva v124: XT-M 95% + Física Neumática Proporcional (Soft-Load)
 
 # =============================================================================
 # 1. INFRAESTRUCTURA Y RED
@@ -84,9 +84,9 @@ _AUX_HVAC_HORA = {
 AUX_HVAC_HORA = _AUX_HVAC_HORA
 AUX_HVAC_DEF  = _AUX_HVAC_HORA
 
-# Proporciones según auditoría de cargas térmicas
-_FRAC_BASE = 0.30
-_FRAC_HVAC = 0.70
+# 💡 FÍSICA PURA: Proporciones térmicas ajustadas por Auditoría (Bottom-Up)
+_FRAC_BASE = 0.12  # Carga Vital y TCMS
+_FRAC_HVAC = 0.45  # Climatización Máxima
 
 FRAC_HVAC = _FRAC_HVAC
 FRAC_HVAC_DEF = _FRAC_HVAC
@@ -137,7 +137,7 @@ SPEED_PROFILE = [
 ]
 
 # =============================================================================
-# 5. DICCIONARIO DE FLOTA CERTIFICADA (Con Física Neumática Activa)
+# 5. DICCIONARIO DE FLOTA CERTIFICADA (Con Lógica de Cargas Discretas)
 # =============================================================================
 FLOTA = {
     "XT-100": {
@@ -161,8 +161,9 @@ FLOTA = {
         "p_freno_max_kw": 600.0,
         "aux_kw_cool"  : 58.76,         
         "aux_kw_heat"  : 65.16,         
-        "p_compresor_kw": 15.0,  # 💡 NUEVO: Potencia Real Compresor
-        "p_puertas_kw" : 1.8     # 💡 NUEVO: Consumo eléctrico unilateral (3s)
+        "p_compresor_kw": 3.68,  
+        "p_puertas_kw" : 0.9,    # 💡 6 puertas x 150W (Apertura Unilateral)
+        "p_vent_trac_kw": 7.6    # 💡 Ventilación forzada reactiva (ALSTOM TRA-305)
     },
     "XT-M": {
         "tara_t"       : 95.0,  
@@ -175,7 +176,7 @@ FLOTA = {
         "a_freno_ms2"  : 1.2,
         "jerk_ms3"     : 0.8,
         "v_freno_min"  : 3.81,  
-        "eta_motor"    : 0.95,   # 💡 ACTUALIZADO: Eficiencia certificada SEPSA/Alstom
+        "eta_motor"    : 0.95,   
         "davis_A"      : 1440.60,  
         "davis_B"      : 0.00,
         "davis_C"      : 0.35,      
@@ -185,8 +186,9 @@ FLOTA = {
         "p_freno_max_kw": 800.0,
         "aux_kw_cool"  : 68.0,         
         "aux_kw_heat"  : 78.0,         
-        "p_compresor_kw": 15.0,
-        "p_puertas_kw" : 1.8
+        "p_compresor_kw": 4.60,  
+        "p_puertas_kw" : 0.9,    # 💡 6 puertas x 150W (Apertura Unilateral)
+        "p_vent_trac_kw": 8.5
     },
     "SFE": {
         "tara_t"       : 141.0,  
@@ -208,8 +210,9 @@ FLOTA = {
         "p_freno_max_kw": 2800.0,
         "aux_kw_cool"  : 180.0,        
         "aux_kw_heat"  : 210.0,        
-        "p_compresor_kw": 25.0,
-        "p_puertas_kw" : 2.5
+        "p_compresor_kw": 8.50,  
+        "p_puertas_kw" : 1.35,   # 💡 9 puertas x 150W (Apertura Unilateral 3 coches)
+        "p_vent_trac_kw": 11.4
     },
 }
 
