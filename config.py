@@ -1,5 +1,5 @@
 # config.py - Variables Globales e Infraestructura MERVAL
-# Calibración Definitiva v126: XT-M 95% + Bottom-Up Auxiliares + Neumática Soft-Load
+# Versión Certificada v128: Perfiles de Potencia Segregados y Geometría de Vía
 
 # =============================================================================
 # 1. INFRAESTRUCTURA Y RED
@@ -68,33 +68,25 @@ V_NOMINAL_DC = 3000.0
 V_SQUEEZE_WARN = 2850.0
 
 # =============================================================================
-# 3. MODELO TÉRMICO Y AUXILIARES
+# 3. MODELO TÉRMICO Y AUXILIARES (Bottom-Up)
 # =============================================================================
 PAX_KG    = 75.0
 DWELL_DEF = 8.0  
 DAVIS_E_N_PERMIL = 9.81
 
-# Factores de utilización horaria (Duty Cycle HVAC)
-_AUX_HVAC_HORA = {
+AUX_HVAC_HORA = {
     "verano": [0.45,0.40,0.40,0.40,0.45,0.55, 0.65,0.75,0.85,0.90,0.95,0.98, 1.00,1.00,1.00,0.98,0.95,0.85, 0.75,0.65,0.55,0.50,0.48,0.45],
     "otoño": [0.30,0.28,0.25,0.25,0.28,0.35, 0.45,0.50,0.55,0.60,0.63,0.65, 0.66,0.66,0.65,0.63,0.60,0.55, 0.50,0.45,0.40,0.35,0.33,0.31],
-    "invierno": [0.65,0.65,0.68,0.68,0.70,0.75, 0.82,0.85,0.88,0.85,0.80,0.75, 0.70,0.68,0.68,0.70,0.75,0.80, 0.82,0.78,0.75,0.72,0.70,0.68],
+    "invierno": [0.65,0.65,0.68,0.68,0.70,0.74, 0.80,0.84,0.86,0.85,0.82,0.78, 0.75,0.73,0.72,0.73,0.76,0.80, 0.82,0.80,0.78,0.76,0.74,0.73],
     "primavera": [0.35,0.32,0.30,0.30,0.32,0.40, 0.50,0.58,0.65,0.70,0.72,0.75, 0.78,0.80,0.78,0.74,0.70,0.60, 0.55,0.50,0.45,0.40,0.38,0.36],
 }
-AUX_HVAC_HORA = _AUX_HVAC_HORA
-AUX_HVAC_DEF  = _AUX_HVAC_HORA
 
-# 💡 FÍSICA PURA: Proporciones térmicas ajustadas por Auditoría (Bottom-Up)
-_FRAC_BASE = 0.12  # Carga Vital y TCMS (Fija)
-_FRAC_HVAC = 0.45  # Climatización Máxima Instalada
-
-FRAC_HVAC = _FRAC_HVAC
-FRAC_HVAC_DEF = _FRAC_HVAC
-FRAC_BASE = _FRAC_BASE
-FRAC_BASE_DEF = _FRAC_BASE
+# Fracciones de carga según auditoría de potencia
+FRAC_BASE = 0.12  # Carga Vital y TCMS
+FRAC_HVAC = 0.45  # Climatización Máxima Instalada
 
 # =============================================================================
-# 4. PERFIL DE VELOCIDADES DE VÍA
+# 4. PERFIL DE VELOCIDADES DE VÍA (Circuitos de Vía en metros)
 # =============================================================================
 SPEED_PROFILE = [
     (90.6,122.3,31.7,0,0),(122.3,215.3,93.0,52,43),(215.3,372.6,157.3,52,43),
@@ -137,7 +129,7 @@ SPEED_PROFILE = [
 ]
 
 # =============================================================================
-# 5. DICCIONARIO DE FLOTA CERTIFICADA (Con Lógica de Cargas Discretas Bottom-Up)
+# 5. DICCIONARIO DE FLOTA CERTIFICADA 
 # =============================================================================
 FLOTA = {
     "XT-100": {
@@ -162,8 +154,8 @@ FLOTA = {
         "aux_kw_cool"  : 58.76,         
         "aux_kw_heat"  : 65.16,         
         "p_compresor_kw": 3.68,  
-        "p_puertas_kw" : 0.9,    # 💡 6 puertas x 150W (Apertura Unilateral)
-        "p_vent_trac_kw": 7.6    # 💡 Ventilación forzada reactiva (ALSTOM TRA-305)
+        "p_puertas_kw" : 0.9,    # 6 puertas x 150W (Apertura Unilateral)
+        "p_vent_trac_kw": 7.6    
     },
     "XT-M": {
         "tara_t"       : 95.0,  
@@ -176,7 +168,7 @@ FLOTA = {
         "a_freno_ms2"  : 1.2,
         "jerk_ms3"     : 0.8,
         "v_freno_min"  : 3.81,  
-        "eta_motor"    : 0.95,   # 💡 Eficiencia certificada SEPSA/Alstom
+        "eta_motor"    : 0.95,   # Eficiencia SEPSA certificada
         "davis_A"      : 1440.60,  
         "davis_B"      : 0.00,
         "davis_C"      : 0.35,      
@@ -211,7 +203,7 @@ FLOTA = {
         "aux_kw_cool"  : 180.0,        
         "aux_kw_heat"  : 210.0,        
         "p_compresor_kw": 8.50,  
-        "p_puertas_kw" : 1.35,   # 💡 9 puertas x 150W (Apertura Unilateral 3 coches)
+        "p_puertas_kw" : 1.35,   # 9 puertas (unilateral 3 coches)
         "p_vent_trac_kw": 11.4
     },
 }
@@ -224,15 +216,10 @@ feriados_2026 = [
 
 __all__ = [
     'ESTACIONES', 'EC', 'PAX_COLS', 'PAX_IDX', 'KM_TRAMO', 'KM_ACUM', 'KM_TOTAL', 'N_EST',
-    '_ELEV_KM', '_ELEV_M', 'ELEV_KM', 'ELEV_M', 'EST_LATS', 'EST_LONS',
-    'CAP_PUERTO', 'CAP_BELLOTO', 'CAP_LIMACHE',
     'SER_DATA', 'SEAT_KM', 'SER_CAPACITY_KW', 'SEAT_CAPACITY_KW',
     'Z_EFF_44KV', 'R_AC_44KV', 'V_NOMINAL_AC',
     'ETA_TRAC_SISTEMA', 'ETA_REGEN_NETA', 'LAMBDA_REGEN_KM', 'ETA_SER_RECTIFICADOR', 'ETA_MAX',
     'V_NOMINAL_DC', 'V_SQUEEZE_WARN',
-    'PAX_KG', 'DWELL_DEF', 'DAVIS_E_N_PERMIL',
-    '_AUX_HVAC_HORA', 'AUX_HVAC_HORA', 'AUX_HVAC_DEF',
-    '_FRAC_HVAC', 'FRAC_HVAC', 'FRAC_HVAC_DEF',
-    '_FRAC_BASE', 'FRAC_BASE', 'FRAC_BASE_DEF',
-    'SPEED_PROFILE', 'FLOTA', 'feriados_2026'
+    'PAX_KG', 'DWELL_DEF', 'DAVIS_E_N_PERMIL', 'AUX_HVAC_HORA',
+    'FRAC_HVAC', 'FRAC_BASE', 'SPEED_PROFILE', 'FLOTA', 'feriados_2026'
 ]
