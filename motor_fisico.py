@@ -118,7 +118,7 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
         try: frac_hvac = _FRAC_HVAC
         except: frac_hvac = 0.55
 
-    # 💡 NUEVA LÓGICA: Deslastre de Cargas y Compensación Neumática/Térmica
+    # 💡 IMPLEMENTACIÓN FÍSICA: Deslastre de Cargas (Load Shedding) y Ventilación Forzada
     if estado_marcha == "DWELL":
         f_marcha_base = 1.0
         f_marcha_hvac = f_compresor_dwell
@@ -146,6 +146,7 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False):
     f = FLOTA.get(tipo_tren, FLOTA["XT-100"])
     
+    # 💡 LÓGICA CERTIFICADA: Selección de Plena Carga Estacional (Reporte ALSTOM TRA-305)
     if estacion_anio == "invierno":
         aux_nominal_unidad = f.get('aux_kw_heat', f.get('aux_kw', 65.16))
     else:
@@ -255,7 +256,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             elif estado_marcha == "COAST":
                 a_net_target = (-f_davis - f_pend) / masa_kg
                 
-            jerk_limit = 0.8 * dt
+            # 💡 IMPLEMENTACIÓN FÍSICA: Lectura del Jerk Dinámico según la flota
+            jerk_limit = f.get('jerk_ms3', 0.8) * dt
             if a_net_target > a_prev + jerk_limit: a_net = a_prev + jerk_limit
             elif a_net_target < a_prev - jerk_limit: a_net = a_prev - jerk_limit
             else: a_net = a_net_target
@@ -286,6 +288,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if f_regen_tramo > 0 and v_kmh >= f['v_freno_min']: 
                 reg += ((f_regen_tramo * step_m) / 3_600_000.0) * ETA_REGEN_NETA
                 
+            # 💡 INYECCIÓN AUXILIAR: Techo estacional, deslastre de cargas y factor de compresor
             aux += (calcular_aux_dinamico(aux_nominal_unidad * n_uni, (t_ini_mins + t_horas * 60.0) / 60.0, pax_mid, f.get('cap_max', 398) * n_uni, estacion_anio, estado_marcha, f_compresor_especifico) * (dt_actual / 3600.0))
             t_horas += dt_actual / 3600.0
             dist_recorrida += step_m
@@ -355,6 +358,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio="prim
             masa_kg = ((f['tara_t'] + f['m_iner_t']) * 1000 * n_uni) + (tr['pax_abordo'] * PAX_KG)
             eta_m = f.get('eta_motor', 0.92)
             
+            # 💡 INTEGRACIÓN ELÉCTRICA: Load flow respetando techo estacional
             if estacion_anio == "invierno":
                 aux_nominal_unidad = f.get('aux_kw_heat', f.get('aux_kw', 65.16))
             else:
