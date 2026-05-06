@@ -5,6 +5,7 @@ import time
 from io import BytesIO
 from datetime import datetime, date, timedelta
 
+# Importaciones de la Arquitectura Modular MERVAL
 from config import *
 from etl_parser import (
     procesar_thdr, calcular_dwell, cargar_pax, match_pax, 
@@ -14,13 +15,17 @@ from etl_parser import (
 )
 from motor_fisico import (
     calcular_termodinamica_flota_v111, calcular_receptividad_por_headway, 
-    precalcular_red_electrica_v111, procesar_planificador_reactivo
+    precalcular_red_electrica_v111, procesar_planificador_reactivo,
+    km_at_t, vel_at_km, get_train_state_and_speed
 )
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
 
 st.set_page_config(page_title="Simulador MERVAL V129", layout="wide", page_icon="🗺️")
 
+# =============================================================================
+# FUNCIONES DE SOPORTE PARA CARGA DE ARCHIVOS
+# =============================================================================
 def leer(files): 
     return [(f.name, f.read()) for f in (files or []) if f]
 
@@ -63,11 +68,14 @@ def build_pax_v71(blobs_v1, blobs_v2):
     if len(parts) > 0: return pd.concat(parts, ignore_index=True), err
     return pd.DataFrame(), err
 
+# =============================================================================
+# APLICACIÓN PRINCIPAL (MAIN ORCHESTRATOR)
+# =============================================================================
 def main():
     def reset_plan_state():
         keys_to_clear = [
             'plan_ready', 'plan_sint_final', 'plan_sint_e',
-            'simulacion_plan_lista', 'raw_plan_df'
+            'simulacion_plan_lista', 'raw_plan_df', 'plan_res', 'plan_res_e'
         ]
         for key in keys_to_clear:
             if key in st.session_state:
@@ -247,10 +255,9 @@ def main():
             df_all['tren_km'] = df_all.apply(calc_tren_km_real_general, axis=1)
             st.success(f"✅ {len(df_all)} despachos operativos históricos cargados.")
 
-    # 💡 FIX APLICADO: Mostrar SIEMPRE los datos, incluso si falló la fecha y se bautizó 2026-01-01
     if not df_all.empty:
         fechas_validas = [str(d) for d in df_all['Fecha_str'].unique() if str(d) != '2026-01-01' and pd.notna(d)]
-        fechas = sorted(list(set(fechas_validas))) if fechas_validas else sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)])))
+        fechas = sorted(list(set(fechas_validas))) if fechas_validas else sorted([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)])
     else:
         fechas = []
 
@@ -538,7 +545,7 @@ def main():
                 
             df_dia_e = calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio)
             
-            df_dia_px_total = df_px_all[df_px_all['Fecha_s'] == f_sel] if not df_px_all.empty and 'Fecha_s' in df_px_all.columns else pd.DataFrame()
+            df_dia_px_total = df_px[df_px['Fecha_s'] == f_sel] if not df_px.empty and 'Fecha_s' in df_px.columns else pd.DataFrame()
             pax_dia_tot = int(pd.to_numeric(df_dia_px_total['CargaMax'], errors='coerce').fillna(0).sum()) if not df_dia_px_total.empty else 0
             
             render_gemelo_digital(df_dia, df_dia_e, active_sers, f_sel, pct_trac, use_rm, use_pend, estacion_anio, prefix_key="mapa", gap_vias=gap_vias, pax_dia_total=pax_dia_tot)
@@ -546,17 +553,17 @@ def main():
     with tab_datos:
         st.subheader("📋 Auditoría de Datos: Carga de Pasajeros y Base THDR")
         
-        if df_px_all.empty:
+        if df_px.empty:
             st.warning("⚠️ No hay datos de pasajeros cargados. Sube la **Carga de Pasajeros** en la barra lateral para generar la auditoría.")
         else:
-            st.success(f"✅ Se leyeron {len(df_px_all)} registros de pasajeros con éxito.")
-            fechas_disponibles = sorted([str(x) for x in df_px_all['Fecha_s'].dropna().unique() if str(x).strip() and str(x).lower() not in ["none", "nan", "fecha no detectada"]])
+            st.success(f"✅ Se leyeron {len(df_px)} registros de pasajeros con éxito.")
+            fechas_disponibles = sorted([str(x) for x in df_px['Fecha_s'].dropna().unique() if str(x).strip() and str(x).lower() not in ["none", "nan", "fecha no detectada"]])
             
             if fechas_disponibles:
                 opciones_filtro = ["Todas las fechas"] + fechas_disponibles
                 fecha_sel_pax = st.selectbox("📅 Filtrar por Fecha del Archivo de Pasajeros", opciones_filtro, key="fs_datos_pax_v41")
                 
-                df_dia_pax = df_px_all.copy()
+                df_dia_pax = df_px.copy()
                 if fecha_sel_pax != "Todas las fechas":
                     df_dia_pax = df_dia_pax[df_dia_pax['Fecha_s'] == fecha_sel_pax]
 
