@@ -1,5 +1,5 @@
 # config.py - Variables Globales e Infraestructura MERVAL
-# Calibración XT-100 basada en Reporte ALSTOM TRA-305 (Plena Carga + Dinámica Jerk AW4)
+# Calibración Definitiva v123: Eficiencia XT-M al 95% + Física Neumática Activa
 
 # =============================================================================
 # 1. INFRAESTRUCTURA Y RED
@@ -60,7 +60,7 @@ R_AC_44KV = 0.17
 V_NOMINAL_AC = 44000.0
 
 ETA_TRAC_SISTEMA = 0.92  
-ETA_REGEN_NETA = 0.85  # Calibrado por eficiencia IGBT 
+ETA_REGEN_NETA = 0.85  
 LAMBDA_REGEN_KM  = 5.0     
 ETA_SER_RECTIFICADOR = 0.96 
 ETA_MAX   = 0.70
@@ -85,17 +85,13 @@ AUX_HVAC_HORA = _AUX_HVAC_HORA
 AUX_HVAC_DEF  = _AUX_HVAC_HORA
 
 # Proporciones según auditoría de cargas térmicas
-_FRAC_BASE = 0.45
-_FRAC_HVAC = 0.55
+_FRAC_BASE = 0.30
+_FRAC_HVAC = 0.70
 
 FRAC_HVAC = _FRAC_HVAC
 FRAC_HVAC_DEF = _FRAC_HVAC
 FRAC_BASE = _FRAC_BASE
 FRAC_BASE_DEF = _FRAC_BASE
-
-_FACTOR_DWELL_COMPRESOR = 1.03
-FACTOR_DWELL_COMPRESOR = 1.03
-FACTOR_DWELL_DEF = 1.03
 
 # =============================================================================
 # 4. PERFIL DE VELOCIDADES DE VÍA
@@ -141,77 +137,79 @@ SPEED_PROFILE = [
 ]
 
 # =============================================================================
-# 5. DICCIONARIO DE FLOTA CERTIFICADA (Fuente: ALSTOM TRA-305)
+# 5. DICCIONARIO DE FLOTA CERTIFICADA (Con Física Neumática Activa)
 # =============================================================================
 FLOTA = {
     "XT-100": {
         "tara_t"       : 86.1,  
         "m_iner_t"     : 7.20,  
-        "coches"       : 2,
-        "cap_sent"     : 94,
-        "cap_max"      : 473,           # 💡 MODIFICADO: 35.48t / 75kg AW4 Aplastamiento (TRA-305)
-        "n_motores"    : 4,
+        "coches"       : 2,  
+        "cap_sent"     : 94,  
+        "cap_max"      : 473,
+        "n_motores"    : 4,  
         "a_max_ms2"    : 1.0,  
         "a_freno_ms2"  : 1.2,
+        "jerk_ms3"     : 1.3,
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.92,  
-        "davis_A"      : 1615.0,
+        "davis_A"      : 1615.00,  
         "davis_B"      : 0.00,
         "davis_C"      : 0.5458,     
-        "f_trac_max_kn": 110.0,
-        "f_freno_max_kn": 105.0,
+        "f_trac_max_kn": 110.0,   
+        "f_freno_max_kn": 105.0,  
         "p_max_kw"     : 720.0,
         "p_freno_max_kw": 600.0,
         "aux_kw_cool"  : 58.76,         
         "aux_kw_heat"  : 65.16,         
-        "f_compresor_dwell": 1.03,      
-        "jerk_ms3"     : 1.3            # 💡 MODIFICADO: Agresividad Mecánica (TRA-305)
+        "p_compresor_kw": 15.0,  # 💡 NUEVO: Potencia Real Compresor
+        "p_puertas_kw" : 1.8     # 💡 NUEVO: Consumo eléctrico unilateral (3s)
     },
     "XT-M": {
         "tara_t"       : 95.0,  
         "m_iner_t"     : 8.0,  
         "coches"       : 2,  
-        "cap_sent"     : 94,
+        "cap_sent"     : 94,  
         "cap_max"      : 376,
-        "n_motores"    : 4,
-        "a_max_ms2"    : 1.0,
+        "n_motores"    : 4,  
+        "a_max_ms2"    : 1.0,  
         "a_freno_ms2"  : 1.2,
-        "v_freno_min"  : 3.81,
-        "eta_motor"    : 0.92,
-        "davis_A"      : 1440.60,
+        "jerk_ms3"     : 0.8,
+        "v_freno_min"  : 3.81,  
+        "eta_motor"    : 0.95,   # 💡 ACTUALIZADO: Eficiencia certificada SEPSA/Alstom
+        "davis_A"      : 1440.60,  
         "davis_B"      : 0.00,
-        "davis_C"      : 0.35,
-        "f_trac_max_kn": 115.0,
-        "f_freno_max_kn": 110.0,
+        "davis_C"      : 0.35,      
+        "f_trac_max_kn": 115.0,   
+        "f_freno_max_kn": 110.0,  
         "p_max_kw"     : 1040.0,
         "p_freno_max_kw": 800.0,
         "aux_kw_cool"  : 68.0,         
         "aux_kw_heat"  : 78.0,         
-        "f_compresor_dwell": 1.06,
-        "jerk_ms3"     : 0.8            # Fallback confort
+        "p_compresor_kw": 15.0,
+        "p_puertas_kw" : 1.8
     },
     "SFE": {
         "tara_t"       : 141.0,  
         "m_iner_t"     : 11.2,  
-        "coches"       : 3,
-        "cap_sent"     : 0,     
+        "coches"       : 3,  
         "cap_max"      : 780,
-        "n_motores"    : 8,
+        "n_motores"    : 8,       
         "a_max_ms2"    : 1.02,
-        "a_freno_ms2"  : 1.30,
+        "a_freno_ms2"  : 1.30,  
+        "jerk_ms3"     : 0.8,
         "v_freno_min"  : 3.81,
-        "eta_motor"    : 0.94,
-        "davis_A"      : 2480.00,
+        "eta_motor"    : 0.94,      
+        "davis_A"      : 2480.00,  
         "davis_B"      : 0.00,
-        "davis_C"      : 0.4714,
-        "f_trac_max_kn": 220.0,
-        "f_freno_max_kn": 190.0,
+        "davis_C"      : 0.4714,     
+        "f_trac_max_kn": 220.0,   
+        "f_freno_max_kn": 190.0,  
         "p_max_kw"     : 2400.0,
         "p_freno_max_kw": 2800.0,
         "aux_kw_cool"  : 180.0,        
         "aux_kw_heat"  : 210.0,        
-        "f_compresor_dwell": 1.08,
-        "jerk_ms3"     : 0.8            # Fallback confort
+        "p_compresor_kw": 25.0,
+        "p_puertas_kw" : 2.5
     },
 }
 
@@ -233,6 +231,5 @@ __all__ = [
     '_AUX_HVAC_HORA', 'AUX_HVAC_HORA', 'AUX_HVAC_DEF',
     '_FRAC_HVAC', 'FRAC_HVAC', 'FRAC_HVAC_DEF',
     '_FRAC_BASE', 'FRAC_BASE', 'FRAC_BASE_DEF',
-    '_FACTOR_DWELL_COMPRESOR', 'FACTOR_DWELL_COMPRESOR', 'FACTOR_DWELL_DEF',
     'SPEED_PROFILE', 'FLOTA', 'feriados_2026'
 ]
