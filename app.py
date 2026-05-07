@@ -19,7 +19,7 @@ from etl_parser import (
 from motor_fisico import (
     calcular_termodinamica_flota_v111, calcular_receptividad_por_headway, 
     precalcular_red_electrica_v111, procesar_planificador_reactivo,
-    km_at_t, vel_at_km, get_train_state_and_speed
+    km_at_t, vel_at_km, get_train_state_and_speed, simular_tramo_termodinamico
 )
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
