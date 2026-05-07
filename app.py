@@ -5,12 +5,14 @@ import time
 from io import BytesIO
 from datetime import datetime, date, timedelta
 
+# Importación segura de configuración
 try:
     from config import *
 except ImportError:
     pass
 import config
 
+# Importación de módulos locales con arquitectura SOLID
 from etl_parser import (
     procesar_thdr, calcular_dwell, cargar_pax, match_pax, 
     get_perfiles_pax, parsear_planilla_maestra, 
@@ -279,15 +281,15 @@ def main():
     bx1, bx2 = _all_blobs_internal(f_px1, "gh_blobs_px1"), _all_blobs_internal(f_px2, "gh_blobs_px2")
     b_prev = _all_blobs_internal(f_prev, "gh_blobs_prev")
     
+    df1, df2, err_t = build_thdr_v71(b1, b2)
+    df_px, err_p = build_pax_v71(bx1, bx2)
+    
     prevenciones_list = []
     for nm, data in b_prev:
         try:
             prevs = cargar_prevenciones(data, nm)
             if prevs: prevenciones_list.extend(prevs)
         except: pass
-    
-    df1, df2, err_t = build_thdr_v71(b1, b2)
-    df_px, err_p = build_pax_v71(bx1, bx2)
     
     dfs_to_concat = [d for d in [df1, df2] if not d.empty]
     df_all = pd.concat(dfs_to_concat, ignore_index=True).drop_duplicates(subset=['_id']) if dfs_to_concat else pd.DataFrame()
