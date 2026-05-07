@@ -14,7 +14,8 @@ import config
 from etl_parser import (
     procesar_thdr, calcular_dwell, cargar_pax, match_pax, 
     get_perfiles_pax, parsear_planilla_maestra, 
-    calc_tren_km_real_general, clean_id, mins_to_time_str, clasificar_dia
+    calc_tren_km_real_general, clean_id, mins_to_time_str, clasificar_dia,
+    cargar_prevenciones
 )
 from motor_fisico import (
     calcular_termodinamica_flota_v111, calcular_receptividad_por_headway, 
@@ -24,7 +25,7 @@ from motor_fisico import (
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
 
-st.set_page_config(page_title="Simulador MERVAL V130", layout="wide", page_icon="🗺️")
+st.set_page_config(page_title="Simulador MERVAL V131", layout="wide", page_icon="🗺️")
 
 # =============================================================================
 # FUNCIONES DE SOPORTE PARA CARGA DE ARCHIVOS
@@ -72,7 +73,7 @@ def build_pax_v71(blobs_v1, blobs_v2):
     return pd.DataFrame(), err
 
 @st.cache_data(show_spinner="Integrando física y demanda de pasajeros...")
-def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje=150):
+def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje=150, prevenciones=None):
     viajes_completos = []
     perfiles_por_servicio = {}
     perfiles_por_via = {}
@@ -150,7 +151,7 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
         trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico(
             r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
             pct_trac, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
-            None, None, estacion_anio_plan, r['t_ini']
+            None, estacion_anio_plan, r['t_ini'], prevenciones=prevenciones
         )
         
         viaje_final = r.to_dict()
@@ -171,7 +172,7 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
     else:
         dict_regen_sint = {}
         
-    df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan)
+    df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=prevenciones)
     return df_sint_final, df_sint_e
 
 # =============================================================================
@@ -191,7 +192,7 @@ def main():
         st.header("📂 Archivos Base")
         with st.expander("🔗 Cargar desde GitHub (Batch)", expanded=False):
             urls_txt = st.text_area("Lista de URLs", placeholder="https://github.com/...", height=100)
-            gh_via = st.radio("Tipo manual", ["Detección Automática", "THDR V1", "THDR V2", "Pasajeros V1", "Pasajeros V2"], horizontal=False, index=0)
+            gh_via = st.radio("Tipo manual", ["Detección Automática", "THDR V1", "THDR V2", "Pasajeros V1", "Pasajeros V2", "Prevenciones"], horizontal=False, index=0)
             if st.button("⬇️ Descargar Todo", use_container_width=True): 
                 urls = [u.strip() for u in urls_txt.split('\n') if u.strip()]
                 if urls:
@@ -205,8 +206,10 @@ def main():
                             elif gh_via == "THDR V2": k = "gh_blobs_v2"
                             elif gh_via == "Pasajeros V1": k = "gh_blobs_px1"
                             elif gh_via == "Pasajeros V2": k = "gh_blobs_px2"
+                            elif gh_via == "Prevenciones": k = "gh_blobs_prev"
                             else:
-                                if "v1" in lnm or "via1" in lnm: 
+                                if "prevencion" in lnm or "tsr" in lnm: k = "gh_blobs_prev"
+                                elif "v1" in lnm or "via1" in lnm: 
                                     if "pax" in lnm or "pasajero" in lnm or "export" in lnm: k = "gh_blobs_px1"
                                     else: k = "gh_blobs_v1"
                                 elif "v2" in lnm or "via2" in lnm:
@@ -222,7 +225,7 @@ def main():
                         st.rerun()
 
             st.divider()
-            for lbl, key in [("V1","gh_blobs_v1"),("V2","gh_blobs_v2"),("Pax V1","gh_blobs_px1"),("Pax V2","gh_blobs_px2")]:
+            for lbl, key in [("V1","gh_blobs_v1"),("V2","gh_blobs_v2"),("Pax V1","gh_blobs_px1"),("Pax V2","gh_blobs_px2"),("Prevenciones","gh_blobs_prev")]:
                 blobs_gh = st.session_state.get(key, [])
                 if blobs_gh:
                     st.caption(f"GitHub {lbl}: {len(blobs_gh)} archivo(s)")
@@ -234,6 +237,7 @@ def main():
         f_v2 = st.file_uploader("THDR Vía 2 (Limache→Puerto)", accept_multiple_files=True, key="t2")
         f_px1 = st.file_uploader("Pasajeros Vía 1", accept_multiple_files=True, key="px1")
         f_px2 = st.file_uploader("Pasajeros Vía 2", accept_multiple_files=True, key="px2")
+        f_prev = st.file_uploader("🚧 Prevenciones de Vía (.csv, .xlsx)", accept_multiple_files=True, key="prev")
         
         st.divider()
         st.subheader("⚙️ Parámetros Físicos del Escenario")
@@ -273,6 +277,14 @@ def main():
 
     b1, b2 = _all_blobs_internal(f_v1, "gh_blobs_v1"), _all_blobs_internal(f_v2, "gh_blobs_v2")
     bx1, bx2 = _all_blobs_internal(f_px1, "gh_blobs_px1"), _all_blobs_internal(f_px2, "gh_blobs_px2")
+    b_prev = _all_blobs_internal(f_prev, "gh_blobs_prev")
+    
+    prevenciones_list = []
+    for nm, data in b_prev:
+        try:
+            prevs = cargar_prevenciones(data, nm)
+            if prevs: prevenciones_list.extend(prevs)
+        except: pass
     
     df1, df2, err_t = build_thdr_v71(b1, b2)
     df_px, err_p = build_pax_v71(bx1, bx2)
@@ -318,7 +330,7 @@ def main():
             df_dia = df_all[df_all['Fecha_str']==fecha_sel].copy()
             
             dict_regen = calcular_receptividad_por_headway(df_dia) if use_regen and "Probabilístico" in tipo_regen else (precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio) if use_regen else {})
-            df_dia_e = calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio)
+            df_dia_e = calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=prevenciones_list)
             
             render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, use_rm, use_pend, estacion_anio, "mapa", gap_vias, pax_dia_total=0)
             render_dashboard_energia_v112(df_dia_e, active_sers, fecha_sel, st.session_state.get('sl_ui_mapa', 480.0))
@@ -367,7 +379,7 @@ def main():
                         with st.spinner("Calculando termodinámica..."):
                             trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb = simular_tramo_termodinamico(
                                 sb_flota, False, km_o, km_d, via_sb, pct_trac, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
-                                None, est_plan, 480.0
+                                est_plan, 480.0, prevenciones=prevenciones_list
                             )
                         
                         distrib_sb = distribuir_energia_sers(neto_sb, th_sb, km_o, km_d, active_sers)
@@ -392,7 +404,7 @@ def main():
                     df_s, _ = parsear_planilla_maestra(f_pl.read(), f_pl.name)
                     if not df_s.empty and st.button("🚀 Iniciar Simulación de Gemelo Digital", use_container_width=True):
                         df_px_f = df_px[df_px['Fecha_s'].apply(clasificar_dia) == tipo_dia_plan] if not df_px.empty else pd.DataFrame()
-                        res, res_e = procesar_planificador_reactivo(df_s, df_px_f, est_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen)
+                        res, res_e = procesar_planificador_reactivo(df_s, df_px_f, est_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, prevenciones=prevenciones_list)
                         st.session_state['plan_ready'], st.session_state['plan_res'], st.session_state['plan_res_e'] = True, res, res_e
 
         if st.session_state.get('plan_ready', False) and modo_plan != "Laboratorio (Tramo Único)":
