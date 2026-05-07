@@ -5,6 +5,7 @@ import unicodedata
 from io import BytesIO
 from datetime import datetime, date, timedelta
 from config import *
+import config
 
 # =============================================================================
 # 1. UTILIDADES Y GEOMETRÍA
@@ -12,8 +13,9 @@ from config import *
 def clasificar_dia(d_str):
     try:
         d = datetime.strptime(d_str, '%Y-%m-%d')
-        try: feriados = feriados_2026
-        except NameError: feriados = []
+        try: feriados = getattr(config, 'feriados_2026', [])
+        except Exception: feriados = []
+            
         if d_str in feriados or d.weekday() == 6: return 'Domingo/Festivo'
         if d.weekday() == 5: return 'Sábado'
         return 'Laboral'
@@ -151,54 +153,66 @@ def clean_pax_number(x):
 def make_unique(df):
     if df.empty: return df
     cols = pd.Series(df.columns)
-    for dup in cols[cols.duplicated()].unique(): cols[cols==dup] = [f"{dup}_{i}" if i else dup for i in range(sum(cols==dup))]
+    for dup in cols[cols.duplicated()].unique(): 
+        cols[cols==dup] = [f"{dup}_{i}" if i else dup for i in range(sum(cols==dup))]
     df.columns = cols
     return df
 
-try:
-    _EST_NORM = sorted({re.sub(r'[^a-z0-9]','', e.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n')): i for i, e in enumerate(ESTACIONES)}.items(), key=lambda x: -len(x[0]))
-except:
-    _EST_NORM = []
+try: est_lista = ESTACIONES
+except NameError: est_lista = getattr(config, 'ESTACIONES', [])
+
+_EST_NORM = sorted({re.sub(r'[^a-z0-9]','', e.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n')): i for i, e in enumerate(est_lista)}.items(), key=lambda x: -len(x[0]))
 
 def _col_to_est_idx(col):
+    try: est = ESTACIONES
+    except NameError: est = getattr(config, 'ESTACIONES', [])
+    if not est: return None
+    
     cu = re.sub(r'[^a-z0-9]','', col.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
-    try:
-        if 'americas' in cu: return ESTACIONES.index('Las Americas')
-        if 'vina' in cu: return ESTACIONES.index('Viña del Mar')
-        if 'aldea' in cu: return ESTACIONES.index('Sargento Aldea')
-        if 'belloto' in cu: return ESTACIONES.index('El Belloto')
-        if 'concepcion' in cu: return ESTACIONES.index('La Concepcion')
-        if 'villaalem' in cu: return ESTACIONES.index('Villa Alemana')
-        if 'salto' in cu: return ESTACIONES.index('El Salto')
-    except: pass
+    if 'americas' in cu: return est.index('Las Americas')
+    if 'vina' in cu: return est.index('Viña del Mar')
+    if 'aldea' in cu: return est.index('Sargento Aldea')
+    if 'belloto' in cu: return est.index('El Belloto')
+    if 'concepcion' in cu: return est.index('La Concepcion')
+    if 'villaalem' in cu: return est.index('Villa Alemana')
+    if 'salto' in cu: return est.index('El Salto')
     for nk, idx in _EST_NORM:
         if nk in cu: return idx
     return None
 
 def interp_pos(km):
-    try:
-        km_tot = KM_TOTAL
-        km = max(0.0, min(float(km), km_tot))
-        return float(np.interp(km, KM_ACUM, EST_LATS)), float(np.interp(km, KM_ACUM, EST_LONS))
-    except: return 0.0, 0.0
+    try: km_tot = KM_TOTAL
+    except NameError: km_tot = getattr(config, 'KM_TOTAL', 43.13)
+    try: km_acum = KM_ACUM
+    except NameError: km_acum = getattr(config, 'KM_ACUM', [])
+    try: est_lats = EST_LATS
+    except NameError: est_lats = getattr(config, 'EST_LATS', [])
+    try: est_lons = EST_LONS
+    except NameError: est_lons = getattr(config, 'EST_LONS', [])
+    
+    if not km_acum or not est_lats or not est_lons: return 0.0, 0.0
+    
+    km = max(0.0, min(float(km), km_tot))
+    return float(np.interp(km, km_acum, est_lats)), float(np.interp(km, km_acum, est_lons))
 
 def km_to_ec(km, tol=1.5):
-    try:
-        dists = [abs(km - k) for k in KM_ACUM]
-        idx = int(np.argmin(dists))
-        return EC[idx] if dists[idx] <= tol else f"{km:.1f}km"
-    except: return f"{km:.1f}km"
+    try: km_acum = KM_ACUM
+    except NameError: km_acum = getattr(config, 'KM_ACUM', [])
+    try: ec_names = EC
+    except NameError: ec_names = getattr(config, 'EC', [])
+    
+    if not km_acum or not ec_names: return f"{km:.1f}km"
+    
+    dists = [abs(km - k) for k in km_acum]
+    idx = int(np.argmin(dists))
+    return ec_names[idx] if dists[idx] <= tol else f"{km:.1f}km"
 
 def svc_label(km_orig, km_dest): 
     return f"{km_to_ec(km_orig)}-{km_to_ec(km_dest)}"
 
 def calc_tren_km_real_general(row):
+    # 💡 LÓGICA DE MANIOBRAS ELIMINADA: Solo viaje comercial puro (Tabula Rasa)
     k_s,k_e = min(row['km_orig'],row['km_dest']), max(row['km_orig'],row['km_dest'])
-    man = row.get('maniobra')
-    try:
-        if man in ['CORTE_BTO','ACOPLE_BTO','CORTE_PU_SA_BTO', 'CORTE_SA', 'ACOPLE_SA']:
-            return abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0) + 0.5
-    except: pass
     return abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0)
 
 # =============================================================================
@@ -213,7 +227,8 @@ def get_perfiles_pax(df_px):
     df_p['Tipo_Dia'] = df_p['Fecha_s'].apply(clasificar_dia)
     
     try: pcols = PAX_COLS
-    except NameError: pcols = []
+    except NameError: pcols = getattr(config, 'PAX_COLS', [])
+    if not pcols: return {}
     
     for c in pcols + ['CargaMax']:
         if c in df_p.columns: df_p[c] = pd.to_numeric(df_p[c], errors='coerce').fillna(0)
@@ -234,11 +249,14 @@ def get_pax_at_km(pax_d, km_pos, via, pax_max_fallback=0):
     if not pax_d or not isinstance(pax_d, dict): return pax_max_fallback
     if sum(pax_d.values()) == 0 and pax_max_fallback > 0: return pax_max_fallback
     pax_val = 0
-    try:
-        n_est = N_EST
-        km_acum = KM_ACUM
-        pcols = PAX_COLS
-    except NameError: return pax_max_fallback
+    try: n_est = N_EST
+    except NameError: n_est = getattr(config, 'N_EST', 21)
+    try: km_acum = KM_ACUM
+    except NameError: km_acum = getattr(config, 'KM_ACUM', [])
+    try: pcols = PAX_COLS
+    except NameError: pcols = getattr(config, 'PAX_COLS', [])
+    
+    if not km_acum or not pcols: return pax_max_fallback
     
     if via == 1:
         for i in range(n_est):
@@ -256,6 +274,11 @@ def get_pax_at_km(pax_d, km_pos, via, pax_max_fallback=0):
 
 def procesar_thdr(data, fname, via_param=1):
     try:
+        try: km_total = KM_TOTAL
+        except NameError: km_total = getattr(config, 'KM_TOTAL', 43.13)
+        try: km_acum = KM_ACUM
+        except NameError: km_acum = getattr(config, 'KM_ACUM', [])
+        
         ext = fname.lower()
         if ext.endswith('.csv'):
             try: raw = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)
@@ -365,15 +388,14 @@ def procesar_thdr(data, fname, via_param=1):
         df['Via'] = via_param
         df['Fecha_str'] = fecha_str
 
+        def _safe_get(r, col):
+            try: return r.get(col, np.nan)
+            except: return np.nan
+
         def _get_trip_geometry(row):
-            try: km_total = KM_TOTAL
-            except NameError: km_total = 43.13
-            try: km_acum = KM_ACUM
-            except NameError: return pd.Series([np.nan, np.nan, 0.0, 0.0, None])
-            
             stops = []
             for col, e_idx in est_cols.items():
-                val = row.get(col, np.nan)
+                val = _safe_get(row, col)
                 if pd.notna(val) and val > 0:
                     stops.append((val, e_idx))
             
@@ -393,12 +415,13 @@ def procesar_thdr(data, fname, via_param=1):
             
             t_ini = adj_stops[0][0]
             t_fin = adj_stops[-1][0]
-            km_orig = km_acum[adj_stops[0][1]]
-            km_dest = km_acum[adj_stops[-1][1]]
+            km_orig = km_acum[adj_stops[0][1]] if km_acum else 0.0
+            km_dest = km_acum[adj_stops[-1][1]] if km_acum else km_total
             
             nodos = []
             seen_kms = set()
             for _, e, orig_t in adj_stops:
+                if not km_acum: continue
                 k = km_acum[e]
                 if k not in seen_kms:
                     t_val = orig_t if orig_t >= t_ini or t_ini > 1440 else orig_t + 1440.0 
@@ -418,8 +441,9 @@ def procesar_thdr(data, fname, via_param=1):
 
         def calc_dwell_dynamic(row):
             try:
-                idx_orig = int(np.argmin([abs(row['km_orig'] - k) for k in KM_ACUM]))
-                idx_dest = int(np.argmin([abs(row['km_dest'] - k) for k in KM_ACUM]))
+                if not km_acum: return 8.0
+                idx_orig = int(np.argmin([abs(row['km_orig'] - k) for k in km_acum]))
+                idx_dest = int(np.argmin([abs(row['km_dest'] - k) for k in km_acum]))
                 n_stops = max(0, abs(idx_dest - idx_orig) - 1)
                 return round(n_stops * (8.0 / 19.0), 3)
             except: return 8.0 
@@ -472,8 +496,9 @@ def cargar_pax(data, fname, via_param=1):
 
         if full is None or full.empty or len(full) <= 10: return pd.DataFrame()
 
-        try: pcols = PAX_COLS
-        except NameError: return pd.DataFrame()
+        try: pcols = getattr(config, 'PAX_COLS', [])
+        except Exception: pcols = []
+        if not pcols: return pd.DataFrame()
 
         header_idx = 9
         EXACT_MAP = {'PUE':'PUE','PUERTO':'PUE','PU':'PUE','BEL':'BEL','BELLAVISTA':'BEL','BE':'BEL','FRA':'FRA','FRANCIA':'FRA','FR':'FRA','BAR':'BAR','BARON':'BAR','BA':'BAR','POR':'POR','PORTALES':'POR','PO':'POR','REC':'REC','RECREO':'REC','RE':'REC','MIR':'MIR','MIRAMAR':'MIR','MI':'MIR','VIN':'VIN','VINA DEL MAR':'VIN','VIÑA DEL MAR':'VIN','VM':'VIN','HOS':'HOS','HOSPITAL':'HOS','HO':'HOS','CHO':'CHO','CHORRILLOS':'CHO','CH':'CHO','SLT':'SLT','SALTO':'SLT','EL SALTO':'SLT','ES':'SLT','ELS':'SLT','VAL':'VAL','VALENCIA':'VAL','QUI':'QUI','QUILPUE':'QUI','QUILPUÉ':'QUI','QU':'QUI','SOL':'SOL','EL SOL':'SOL','SO':'SOL','ESO':'SOL','BTO':'BTO','EL BELLOTO':'BTO','BELLOTO':'BTO','EB':'BTO','ELB':'BTO','AME':'AME','LAS AMERICAS':'AME','AMERICAS':'AME','LAS':'AME','LAM':'AME','AM':'AME','CON':'CON','LA CONCEPCION':'CON','CONCEPCION':'CON','LAC':'CON','LCO':'CON','CO':'CON','VAM':'VAM','VILLA ALEMANA':'VAM','ALEMANA':'VAM','VIL':'VAM','VALE':'VAM','VL':'VAM','SGA':'SGA','SARGENTO ALDEA':'SGA','ALDEA':'SGA','SAR':'SGA','SA':'SGA','PEN':'PEN','PENABLANCA':'PEN','PEÑABLANCA':'PEN','PENA BLANCA':'PEN','PENA':'PEN','PE':'PEN','LIM':'LIM','LIMACHE':'LIM','LI':'LIM'}
@@ -531,11 +556,11 @@ def cargar_pax(data, fname, via_param=1):
     except Exception as e: return pd.DataFrame()
 
 def match_pax(row, df_pax):
-    try: pcols = PAX_COLS
-    except NameError: pcols = []
+    try: pcols = getattr(config, 'PAX_COLS', [])
+    except Exception: pcols = []
     
     EMPTY = ({c: 0 for c in pcols}, 0, '--:--:--', 'No Detectado', -1)
-    if df_pax.empty: return EMPTY
+    if df_pax.empty or not pcols: return EMPTY
     def _to_int(v):
         try: return int(float(v)) if pd.notna(v) else 0
         except: return 0
@@ -560,8 +585,8 @@ def match_pax(row, df_pax):
         sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
         match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
         if not match_exacto.empty:
-            best_match = match_exacto.iloc[0]
-            return {c: _to_int(best_match.get(c, 0)) for c in pcols}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
+            best = match_exacto.iloc[0]
+            return {c: _to_int(best.get(c, 0)) for c in pcols}, _to_int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR', '')), best.name
 
     if pd.notna(t_i):
         best_match = sub.loc[sub['diff'].idxmin()]
@@ -572,10 +597,10 @@ def match_pax(row, df_pax):
 
 def parsear_planilla_maestra(data, fname):
     try:
-        try: km_acum = KM_ACUM
-        except NameError: km_acum = []
-        try: ec_names = EC
-        except NameError: ec_names = []
+        try: km_acum = getattr(config, 'KM_ACUM', [])
+        except Exception: km_acum = []
+        try: ec_names = getattr(config, 'EC', [])
+        except Exception: ec_names = []
         
         ext = fname.lower()
         dfs = {}
@@ -638,20 +663,24 @@ def parsear_planilla_maestra(data, fname):
 
                         via = 1 if viaje_num % 2 == 0 else 2
                         if via == 1:
-                            km_orig = km_acum[0] 
-                            if servicio_num >= 600: km_dest = km_acum[20] 
-                            elif 400 <= servicio_num < 600: km_dest = km_acum[18] 
-                            else: km_dest = km_acum[14] 
+                            km_orig = km_acum[0] if km_acum else 0.0
+                            if servicio_num >= 600: km_dest = km_acum[20] if len(km_acum) > 20 else 43.13
+                            elif 400 <= servicio_num < 600: km_dest = km_acum[18] if len(km_acum) > 18 else 30.4
+                            else: km_dest = km_acum[14] if len(km_acum) > 14 else 25.3
                         else:
-                            km_dest = km_acum[0] 
-                            if servicio_num >= 600: km_orig = km_acum[20] 
-                            elif 400 <= servicio_num < 600: km_orig = km_acum[18] 
-                            elif 200 <= servicio_num < 400: km_orig = km_acum[14] 
-                            else: km_orig = km_acum[14] 
+                            km_dest = km_acum[0] if km_acum else 0.0
+                            if servicio_num >= 600: km_orig = km_acum[20] if len(km_acum) > 20 else 43.13
+                            elif 400 <= servicio_num < 600: km_orig = km_acum[18] if len(km_acum) > 18 else 30.4
+                            elif 200 <= servicio_num < 400: km_orig = km_acum[14] if len(km_acum) > 14 else 25.3
+                            else: km_orig = km_acum[14] if len(km_acum) > 14 else 25.3
                             
-                        ruta = f"{ec_names[km_acum.index(km_orig)]}-{ec_names[km_acum.index(km_dest)]}"
-                        nodos_via = [(0.0, k) for k in (km_acum[km_acum.index(km_orig):km_acum.index(km_dest)+1] if via==1 else km_acum[km_acum.index(km_dest):km_acum.index(km_orig)+1][::-1])]
-                        
+                        if km_acum and ec_names:
+                            ruta = f"{ec_names[km_acum.index(km_orig)]}-{ec_names[km_acum.index(km_dest)]}"
+                            nodos_via = [(0.0, k) for k in (km_acum[km_acum.index(km_orig):km_acum.index(km_dest)+1] if via==1 else km_acum[km_acum.index(km_dest):km_acum.index(km_orig)+1][::-1])]
+                        else:
+                            ruta = f"{km_orig}-{km_dest}"
+                            nodos_via = [(0.0, km_orig), (0.0, km_dest)]
+                            
                         viajes.append({
                             '_id': f"PLAN_{servicio_num}_{int(t_ini)}", 't_ini': t_ini, 'Via': via,
                             'km_orig': km_orig, 'km_dest': km_dest, 'nodos': nodos_via,
@@ -703,21 +732,31 @@ def parsear_planilla_maestra(data, fname):
                             else: via = 1 if viaje_num % 2 == 0 else 2
                             
                             if via == 1:
-                                km_orig = km_acum[0] 
-                                if servicio_num >= 600: km_dest = km_acum[20] 
-                                elif 400 <= servicio_num < 600: km_dest = km_acum[18] 
-                                elif 200 <= servicio_num < 400: km_dest = km_acum[14] 
-                                else: km_dest = km_acum[14] 
+                                km_orig = km_acum[0] if km_acum else 0.0
+                                if servicio_num >= 600: km_dest = km_acum[20] if len(km_acum) > 20 else 43.13
+                                elif 400 <= servicio_num < 600: km_dest = km_acum[18] if len(km_acum) > 18 else 30.4
+                                elif 200 <= servicio_num < 400: km_dest = km_acum[14] if len(km_acum) > 14 else 25.3
+                                else: km_dest = km_acum[14] if len(km_acum) > 14 else 25.3
                             else:
-                                km_dest = km_acum[0] 
-                                if servicio_num >= 600: km_orig = km_acum[20] 
-                                elif 400 <= servicio_num < 600: km_orig = km_acum[18] 
-                                elif 200 <= servicio_num < 400: km_orig = km_acum[14] 
-                                else: km_orig = km_acum[14] 
+                                km_dest = km_acum[0] if km_acum else 0.0
+                                if servicio_num >= 600: km_orig = km_acum[20] if len(km_acum) > 20 else 43.13
+                                elif 400 <= servicio_num < 600: km_orig = km_acum[18] if len(km_acum) > 18 else 30.4
+                                elif 200 <= servicio_num < 400: km_orig = km_acum[14] if len(km_acum) > 14 else 25.3
+                                else: km_orig = km_acum[14] if len(km_acum) > 14 else 25.3
                                 
-                            ruta = f"{ec_names[km_acum.index(km_orig)]}-{ec_names[km_acum.index(km_dest)]}"
-                            nodos_via = [(0.0, k) for k in (km_acum[km_acum.index(km_orig):km_acum.index(km_dest)+1] if via==1 else km_acum[km_acum.index(km_dest):km_acum.index(km_orig)+1][::-1])]
-                            viajes.append({'_id': f"PLAN_{servicio_num}_{int(t_ini)}", 't_ini': t_ini, 'Via': via, 'km_orig': km_orig, 'km_dest': km_dest, 'nodos': nodos_via, 'tipo_tren': 'XT-100', 'doble': es_doble, 'num_servicio': str(servicio_num), 'svc_type': ruta, 'maniobra': None})
+                            if km_acum and ec_names:
+                                ruta = f"{ec_names[km_acum.index(km_orig)]}-{ec_names[km_acum.index(km_dest)]}"
+                                nodos_via = [(0.0, k) for k in (km_acum[km_acum.index(km_orig):km_acum.index(km_dest)+1] if via==1 else km_acum[km_acum.index(km_dest):km_acum.index(km_orig)+1][::-1])]
+                            else:
+                                ruta = f"{km_orig}-{km_dest}"
+                                nodos_via = [(0.0, km_orig), (0.0, km_dest)]
+                                
+                            viajes.append({
+                                '_id': f"PLAN_{servicio_num}_{int(t_ini)}", 't_ini': t_ini, 'Via': via,
+                                'km_orig': km_orig, 'km_dest': km_dest, 'nodos': nodos_via,
+                                'tipo_tren': 'XT-100', 'doble': es_doble, 'num_servicio': str(servicio_num), 'svc_type': ruta,
+                                'maniobra': None
+                            })
                             
         df_viajes = pd.DataFrame(viajes)
         if not df_viajes.empty: df_viajes = df_viajes.drop_duplicates(subset=['_id'])
@@ -725,119 +764,9 @@ def parsear_planilla_maestra(data, fname):
     except Exception as e: return pd.DataFrame(), str(e)
 
 def cargar_vacios_efe(data, fname):
-    try:
-        raw = pd.read_csv(BytesIO(data), sep=',', encoding='utf-8') if fname.lower().endswith('.csv') else pd.read_excel(BytesIO(data), engine="xlrd" if fname.lower().endswith(".xls") else "openpyxl")
-        if raw is None or raw.empty: return pd.DataFrame()
-        fecha_str = extraer_fecha_segura(raw, fname)
-        raw.columns = [str(c).strip().upper() for c in raw.columns]
-        col_tren, col_hora, col_desde, col_hasta, col_kms = next((c for c in raw.columns if 'TREN' in c), None), next((c for c in raw.columns if 'HORA' in c), None), next((c for c in raw.columns if 'DESDE' in c), None), next((c for c in raw.columns if 'HASTA' in c), None), next((c for c in raw.columns if 'KMS' in c), None)
-        if not all([col_tren, col_hora, col_desde, col_hasta]): return pd.DataFrame()
-        
-        try: km_acum = KM_ACUM
-        except NameError: km_acum = []
-        
-        viajes = []
-        for _, r in raw.iterrows():
-            tren, hora, desde, hasta, kms_str = str(r[col_tren]).strip(), str(r[col_hora]).strip(), str(r[col_desde]).strip(), str(r[col_hasta]).strip(), str(r.get(col_kms, '0')).replace(',', '.')
-            if tren in ('nan', '') or hora in ('nan', ''): continue
-            t_ini = parse_time_to_mins(hora)
-            if t_ini is None: continue
-            try: kms = float(kms_str)
-            except: kms = 0.0
-            num = int(re.search(r'\d+', tren.upper()).group(0)) if re.search(r'\d+', tren.upper()) else 0
-            tipo_tren = 'SFE' if 'SFE' in tren.upper() or num >= 36 else ('XT-M' if 'XT' in tren.upper() and 28 <= num <= 35 or 28 <= num <= 35 else 'XT-100')
-            def _map_est(name):
-                n = name.upper()
-                if 'COCHERA' in n or 'TALLER' in n or 'BELLOTO' in n: return 14
-                if 'ALDEA' in n: return 18
-                if 'LIMACHE' in n: return 20
-                if 'PUERTO' in n: return 0
-                idx = _col_to_est_idx(n)
-                return idx if idx is not None else 14
-            idx_orig, idx_dest = _map_est(desde), _map_est(hasta)
-            viajes.append({'Fecha_str': fecha_str, 't_asigned': t_ini, 'tipo': tipo_tren, 'doble': False, 'origen_txt': desde, 'destino_txt': hasta, 'km_orig': km_acum[idx_orig] if km_acum else 0.0, 'km_dest': km_acum[idx_dest] if km_acum else 0.0, 'dist': kms, 'Via': 1 if km_acum and km_acum[idx_orig] <= km_acum[idx_dest] else 2, 'motriz_num': tren, 'is_efe': True, 'cochera': 'COCHERA' in desde.upper() or 'COCHERA' in hasta.upper()})
-        return pd.DataFrame(viajes)
-    except Exception as e: return pd.DataFrame()
+    # 💡 TABULA RASA: Lógica de Vacíos EFE eliminada según instrucción.
+    return pd.DataFrame()
 
 def get_vacios_dia(df_dia):
-    # 💡 ESCUDO DEFENSIVO DEFINITIVO: Cero riesgo de caídas por NameError
-    try: cap_puerto_val = CAP_PUERTO
-    except NameError: cap_puerto_val = 4
-    
-    try: cap_limache_val = CAP_LIMACHE
-    except NameError: cap_limache_val = 16
-    
-    try: km_acum_list = KM_ACUM
-    except NameError: km_acum_list = []
-    
-    try: estaciones_list = ESTACIONES
-    except NameError: estaciones_list = []
-    
-    vacios = []
-    if df_dia.empty: return vacios
-    agrupador = 'motriz_num' if 'motriz_num' in df_dia.columns else 'num_servicio'
-    
-    def _get_est_name(km): 
-        if not km_acum_list or not estaciones_list: return f"km {km:.1f}"
-        return estaciones_list[int(np.argmin([abs(km - k) for k in km_acum_list]))] if min([abs(km - k) for k in km_acum_list]) <= 1.5 else f"km {km:.1f}"
-
-    end_locations = {'PU': [], 'LI': [], 'BTO': [], 'SA': [], 'OTHER': []}
-    start_locations = {'PU': [], 'LI': []}
-
-    for tren, group in df_dia.sort_values('t_ini').groupby(agrupador):
-        if str(tren).strip() == '' or str(tren).strip() == 'nan': continue
-        viajes = group.to_dict('records')
-        if not viajes: continue
-        
-        p = viajes[0]
-        if p.get('km_orig', 0) <= 2.0:
-            start_locations['PU'].append({'tren': tren, 't_ini': p['t_ini'], 'tipo': p.get('tipo_tren', 'XT-100'), 'doble': p.get('doble', False), 'num_servicio': str(p.get('num_servicio', ''))})
-        elif p.get('km_orig', 0) >= 41.0:
-            start_locations['LI'].append({'tren': tren, 't_ini': p['t_ini'], 'tipo': p.get('tipo_tren', 'XT-100'), 'doble': p.get('doble', False), 'num_servicio': str(p.get('num_servicio', ''))})
-
-        if km_acum_list and len(km_acum_list) > 18:
-            if abs(p.get('km_orig', 0) - km_acum_list[14]) < 0.1: vacios.append({'t_asigned': p['t_ini'] - 10, 'tipo': p.get('tipo_tren', 'XT-100'), 'doble': p.get('doble', False), 'cochera': True, 'km_orig': km_acum_list[14], 'km_dest': km_acum_list[14], 'dist': 0.5, 'motriz_num': tren, 'origen_txt': 'Taller EB', 'destino_txt': 'El Belloto', 'servicio_previo': '—', 'servicio_siguiente': str(p.get('num_servicio', ''))})
-            elif abs(p.get('km_orig', 0) - km_acum_list[18]) < 0.1: vacios.append({'t_asigned': p['t_ini'] - 20, 'tipo': p.get('tipo_tren', 'XT-100'), 'doble': p.get('doble', False), 'cochera': True, 'km_orig': km_acum_list[18], 'km_dest': km_acum_list[18], 'dist': 0.5, 'motriz_num': tren, 'origen_txt': 'Siding SA', 'destino_txt': 'Sargento Aldea', 'servicio_previo': '—', 'servicio_siguiente': str(p.get('num_servicio', ''))})
-            
-        for i in range(len(viajes) - 1):
-            k_o, k_d = viajes[i].get('km_dest', 0), viajes[i+1].get('km_orig', 0)
-            if 0.1 < abs(k_o - k_d) <= 20.0: vacios.append({'t_asigned': viajes[i]['t_fin'] + 5, 'tipo': viajes[i].get('tipo_tren', 'XT-100'), 'doble': viajes[i].get('doble', False), 'cochera': False, 'km_orig': k_o, 'km_dest': k_d, 'dist': abs(k_o - k_d), 'motriz_num': tren, 'origen_txt': _get_est_name(k_o), 'destino_txt': _get_est_name(k_d), 'servicio_previo': str(viajes[i].get('num_servicio', '')), 'servicio_siguiente': str(viajes[i+1].get('num_servicio', ''))})
-
-        u = viajes[-1]
-        km_d = u.get('km_dest', 0)
-        loc = 'OTHER'
-        if km_d <= 2.0: loc = 'PU'
-        elif km_d >= 41.0: loc = 'LI'
-        elif km_acum_list and len(km_acum_list) > 18:
-            if abs(km_d - km_acum_list[14]) < 2.0: loc = 'BTO'
-            elif abs(km_d - km_acum_list[18]) < 2.0: loc = 'SA'
-
-        end_locations[loc].append({
-            'tren': tren, 't_fin': u['t_fin'], 'km_dest': km_d, 'tipo': u.get('tipo_tren', 'XT-100'), 'doble': u.get('doble', False), 'num_servicio': str(u.get('num_servicio', ''))
-        })
-
-    if km_acum_list and len(km_acum_list) > 20:
-        pu_starts = sorted(start_locations['PU'], key=lambda x: x['t_ini'])
-        for i, t in enumerate(pu_starts):
-            if i >= cap_puerto_val:
-                vacios.append({'t_asigned': t['t_ini'] - 10.0, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': km_acum_list[0], 'km_dest': km_acum_list[0], 'dist': 0.5, 'motriz_num': t['tren'], 'origen_txt': 'Siding Puerto', 'destino_txt': 'Puerto (Inyección Matutina)', 'servicio_previo': '—', 'servicio_siguiente': t['num_servicio']})
-
-        li_starts = sorted(start_locations['LI'], key=lambda x: x['t_ini'])
-        for i, t in enumerate(li_starts):
-            if i >= cap_limache_val:
-                vacios.append({'t_asigned': t['t_ini'] - 10.0, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': km_acum_list[20], 'km_dest': km_acum_list[20], 'dist': 0.5, 'motriz_num': t['tren'], 'origen_txt': 'Siding Limache', 'destino_txt': 'Limache (Inyección Matutina)', 'servicio_previo': '—', 'servicio_siguiente': t['num_servicio']})
-
-        pu_trains = sorted(end_locations['PU'], key=lambda x: x['t_fin'], reverse=True)
-        for i, t in enumerate(pu_trains):
-            if i >= cap_puerto_val:
-                vacios.append({'t_asigned': t['t_fin'] + 5.0, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': km_acum_list[0], 'km_dest': km_acum_list[0], 'dist': 0.5, 'motriz_num': t['tren'], 'origen_txt': 'Puerto (Exceso Cap)', 'destino_txt': 'Siding Puerto', 'servicio_previo': t['num_servicio'], 'servicio_siguiente': '—'})
-
-        li_trains = sorted(end_locations['LI'], key=lambda x: x['t_fin'], reverse=True)
-        for i, t in enumerate(li_trains):
-            if i >= cap_limache_val:
-                vacios.append({'t_asigned': t['t_fin'] + 5.0, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': km_acum_list[20], 'km_dest': km_acum_list[20], 'dist': 0.5, 'motriz_num': t['tren'], 'origen_txt': 'Limache (Exceso Cap)', 'destino_txt': 'Siding Limache', 'servicio_previo': t['num_servicio'], 'servicio_siguiente': '—'})
-
-        for t in end_locations['BTO']: vacios.append({'t_asigned': t['t_fin'] + 5, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': t['km_dest'], 'km_dest': km_acum_list[14], 'dist': 0.5, 'motriz_num': t['tren'], 'origen_txt': 'El Belloto', 'destino_txt': 'Taller EB', 'servicio_previo': t['num_servicio'], 'servicio_siguiente': '—'})
-        for t in end_locations['SA']: vacios.append({'t_asigned': t['t_fin'] + 5, 'tipo': t['tipo'], 'doble': t['doble'], 'cochera': True, 'km_orig': t['km_dest'], 'km_dest': km_acum_list[18], 'dist': 0.5, 'motriz_num': t['tren'], 'origen_txt': 'Sargento Aldea', 'destino_txt': 'Siding SA', 'servicio_previo': t['num_servicio'], 'servicio_siguiente': '—'})
-
-    return vacios
+    # 💡 TABULA RASA: Lógica teórica de Vacíos eliminada según instrucción.
+    return []
