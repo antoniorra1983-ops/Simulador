@@ -8,15 +8,16 @@ try:
 except ImportError:
     pass
 
+# Función de extracción defensiva (Protege contra fallos de caché en Streamlit)
+def _get_val(name, default):
+    try: return getattr(config, name, default)
+    except Exception: return default
+
 # =============================================================================
 # 1. MOTOR CINEMÁTICO TRAMO A TRAMO (GEOMETRÍA Y PERFILES DE VELOCIDAD)
 # =============================================================================
 def _build_profile(use_rm, via):
-    try: 
-        segs_base = getattr(config, 'SPEED_PROFILE', [])
-    except Exception: 
-        segs_base = []
-        
+    segs_base = _get_val('SPEED_PROFILE', [])
     segs = segs_base if via == 1 else list(reversed(segs_base))
     km_pts, t_pts, cum_t = [], [], 0.0
     
@@ -45,11 +46,7 @@ for k, v in _PROF.items():
 _VEL_ARRAY_NORM = np.zeros(45000, dtype=float)
 _VEL_ARRAY_RM = np.zeros(45000, dtype=float)
 
-try: 
-    segs_base_init = getattr(config, 'SPEED_PROFILE', [])
-except Exception: 
-    segs_base_init = []
-
+segs_base_init = _get_val('SPEED_PROFILE', [])
 for ki, kf, _, vn, vr in segs_base_init:
     start_idx = int(ki)
     end_idx = min(int(kf) + 1, 45000)
@@ -63,10 +60,7 @@ def vel_at_km(km_km, via, use_rm):
     return 0.0
 
 def km_at_t(t_ini, t_fin, t, via, use_rm=False, km_orig=None, km_dest=None, nodos=None, t_arr=None):
-    try: 
-        km_total_limit = getattr(config, 'KM_TOTAL', 43.13)
-    except Exception: 
-        km_total_limit = 43.13
+    km_total_limit = _get_val('KM_TOTAL', 43.13)
     
     if nodos is not None and len(nodos) >= 2:
         if t <= nodos[0][0]: return nodos[0][1]
@@ -74,7 +68,6 @@ def km_at_t(t_ini, t_fin, t, via, use_rm=False, km_orig=None, km_dest=None, nodo
         if t_arr is None: t_arr = [n[0] for n in nodos]
         idx = np.searchsorted(t_arr, t)
         
-        # Desempaquetado seguro de nodos para evitar errores en la nube
         nodo_A = nodos[idx-1]
         nodo_B = nodos[idx]
         t_A = nodo_A[0] if isinstance(nodo_A, tuple) else nodo_A
@@ -122,7 +115,7 @@ def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos, t_arr=N
     else: return "CRUISE", vel_max
 
 # =============================================================================
-# 2. CÁLCULO DE AUXILIARES (MODELO BOTTOM-UP INDEPENDIENTE V131)
+# 2. CÁLCULO DE AUXILIARES (MODELO BOTTOM-UP INDEPENDIENTE)
 # =============================================================================
 def calcular_aux_dinamico(f_flota, n_uni, hora_decimal, pax_abordo, estacion_anio, estado_marcha, is_precalc=False):
     """
@@ -131,12 +124,7 @@ def calcular_aux_dinamico(f_flota, n_uni, hora_decimal, pax_abordo, estacion_ani
     EL COMPRESOR NEUMÁTICO SE CALCULA AFUERA (Tanque MRP), excepto en el pre-cálculo de red.
     """
     hora_int = int(hora_decimal) % 24
-    
-    try: 
-        perfil_dict = getattr(config, 'AUX_HVAC_HORA', {})
-    except Exception: 
-        perfil_dict = {}
-        
+    perfil_dict = _get_val('AUX_HVAC_HORA', {})
     perfil = perfil_dict.get(estacion_anio, perfil_dict.get("primavera", [0.5]*24)) if isinstance(perfil_dict, dict) else [0.5]*24
     f_hvac = perfil[hora_int] if len(perfil) > hora_int else 0.5
     
@@ -160,14 +148,13 @@ def calcular_aux_dinamico(f_flota, n_uni, hora_decimal, pax_abordo, estacion_ani
     if estado_marcha in ["BRAKE", "BRAKE_STATION", "BRAKE_OVERSPEED"]: 
         p_vent = p_vent_max * 1.0  # 100% refrigerando inversores al regenerar
     elif estado_marcha == "ACCEL": 
-        p_vent = p_vent_max * 0.5  # 50% Load shedding
+        p_vent = p_vent_max * 0.5  # 50% Load shedding protegiendo la catenaria
     else: 
         p_vent = p_vent_max * 0.1  # 10% basal al rodar libremente
         
     p_total = p_base + p_clima + p_vent
     
-    # Si es una llamada del precalculador de red eléctrica (Load Flow), 
-    # inyectamos un 20% estadístico del compresor para no distorsionar el cálculo general.
+    # Si es una llamada del precalculador de red eléctrica (Load Flow)
     if is_precalc:
         p_total += f_flota.get('p_compresor_kw', 3.68) * n_uni * 0.20
         
@@ -176,15 +163,10 @@ def calcular_aux_dinamico(f_flota, n_uni, hora_decimal, pax_abordo, estacion_ani
 # =============================================================================
 # 3. FÍSICA TERMODINÁMICA Y LOAD FLOW 
 # =============================================================================
-# 💡 FIRMA INQUEBRANTABLE: **kwargs protege contra desajustes de app.py
+# 💡 FIRMA INDESTRUCTIBLE: Integración de **kwargs y variable prevenciones
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False, prevenciones=None, **kwargs):
     
-    # Lectura defensiva de la flota
-    try: 
-        flota_dict = getattr(config, 'FLOTA', {})
-    except Exception: 
-        flota_dict = {}
-        
+    flota_dict = _get_val('FLOTA', {})
     f = flota_dict.get(tipo_tren, flota_dict.get("XT-100", {
         "tara_t": 86.1, "m_iner_t": 7.20, "a_freno_ms2": 1.2, "davis_A": 1615.0, 
         "davis_B": 0.0, "davis_C": 0.5458, "f_trac_max_kn": 110.0, 
@@ -208,21 +190,9 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     pax_dict = pax_dict or {}
     dt = 1.0  
     
-    # Bloque defensivo PEP-8 para la red
-    try: 
-        km_acum_list = getattr(config, 'KM_ACUM', [])
-    except Exception: 
-        km_acum_list = []
-        
-    try: 
-        pax_kg_val = getattr(config, 'PAX_KG', 75.0)
-    except Exception: 
-        pax_kg_val = 75.0
-        
-    try: 
-        eta_regen_val = getattr(config, 'ETA_REGEN_NETA', 0.85)
-    except Exception: 
-        eta_regen_val = 0.85
+    km_acum_list = _get_val('KM_ACUM', [])
+    pax_kg_val = _get_val('PAX_KG', 75.0)
+    eta_regen_val = _get_val('ETA_REGEN_NETA', 0.85)
 
     def _safe_get_pax(km_val, via_val, d_dict, def_val):
         try:
@@ -311,20 +281,13 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 
             f_pend = 0.0
             if use_pend:
-                # Lectura PEP-8 para la topografía
-                try: 
-                    elev_km = getattr(config, 'ELEV_KM', [])
-                    elev_m = getattr(config, 'ELEV_M', [])
-                except Exception: 
-                    elev_km = []
-                    elev_m = []
-                            
+                elev_km = _get_val('ELEV_KM', [])
+                elev_m = _get_val('ELEV_M', [])
                 if elev_km and elev_m and len(elev_km) == len(elev_m):
                     for j in range(1, len(elev_km)):
                         if elev_km[j-1] <= km_actual <= elev_km[j] or (j == len(elev_km)-1 and km_actual > elev_km[j]):
                             pend = ((elev_m[j] - elev_m[j-1]) / max(0.001, (elev_km[j] - elev_km[j-1])*1000)) * 1000
-                            try: davis_e_n = getattr(config, 'DAVIS_E_N_PERMIL', 9.81)
-                            except: davis_e_n = 9.81
+                            davis_e_n = _get_val('DAVIS_E_N_PERMIL', 9.81)
                             f_pend = davis_e_n * pend * (masa_kg / 1000.0) * (1.0 if via_op==1 else -1.0)
                             break
                         
@@ -393,14 +356,13 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             
             if compresor_on:
                 p_comp_inst = f.get('p_compresor_kw', 3.68) * n_uni
-                mrp_bar += 0.0122 * dt_actual  # Tasa física de recuperación 
+                mrp_bar += 0.0122 * dt_actual 
                 if mrp_bar >= 10.0:
                     mrp_bar = 10.0
                     compresor_on = False
             else:
                 p_comp_inst = 0.0
                 
-            # Se le suma el compresor como pieza de Lego independiente (Bottom-Up)
             hora_actual = (t_ini_mins + t_horas * 60.0) / 60.0
             aux_kw_inst = calcular_aux_dinamico(f, n_uni, hora_actual, pax_mid, estacion_anio, estado_marcha) + p_comp_inst
             aux += (aux_kw_inst * (dt_actual / 3600.0))
@@ -411,10 +373,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
 
         # 💡 LLEGADA AL ANDÉN (Simulación Termodinámica en Estación)
         if i < len(paradas_km) - 2:
-            try: 
-                dwell_s = getattr(config, 'DWELL_DEF', 25.0)
-            except Exception: 
-                dwell_s = 25.0
+            dwell_s = _get_val('DWELL_DEF', 25.0)
             
             # Gasto neumático de zapatas (0.3 Bares)
             mrp_bar -= 0.3
@@ -483,30 +442,11 @@ def precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio="prim
     t_max = int(df_dia['t_fin'].max())
     time_steps = np.arange(t_min, t_max + 1, 10.0 / 60.0)
     
-    try: 
-        eta_regen_val = getattr(config, 'ETA_REGEN_NETA', 0.85)
-    except Exception: 
-        eta_regen_val = 0.85
-        
-    try: 
-        lambda_val = getattr(config, 'LAMBDA_REGEN_KM', 5.0)
-    except Exception: 
-        lambda_val = 5.0
-        
-    try: 
-        eta_max_val = getattr(config, 'ETA_MAX', 0.70)
-    except Exception: 
-        eta_max_val = 0.70
-        
-    try: 
-        pax_kg_val = getattr(config, 'PAX_KG', 75.0)
-    except Exception: 
-        pax_kg_val = 75.0
-        
-    try: 
-        flota_dict = getattr(config, 'FLOTA', {})
-    except Exception: 
-        flota_dict = {}
+    eta_regen_val = _get_val('ETA_REGEN_NETA', 0.85)
+    lambda_val = _get_val('LAMBDA_REGEN_KM', 5.0)
+    eta_max_val = _get_val('ETA_MAX', 0.70)
+    pax_kg_val = _get_val('PAX_KG', 75.0)
+    flota_dict = _get_val('FLOTA', {})
     
     for via_ in [1, 2]:
         via_trains = df_dia[df_dia['Via'] == via_]
@@ -538,7 +478,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio="prim
                 pos = km_at_t(tr['t_ini'], tr['t_fin'], m, tr['Via'], use_rm, tr['km_orig'], tr['km_dest'], tr['nodos'], tr['t_arr'])
                 v_ms = v_kmh / 3.6
                 
-                # Pasamos flag is_precalc=True para que agregue 20% del compresor y permita un Load Flow realista
+                # Pasamos flag is_precalc=True para que el Load Flow sume el compresor estadístico y cuadre las subestaciones
                 p_aux_kw = calcular_aux_dinamico(f, n_uni, m / 60.0, tr['pax_abordo'], estacion_anio, state, is_precalc=True)
                 
                 f_davis = ((f['davis_A'] * 2) + (f['davis_B'] * 2 * v_kmh) + (f['davis_C'] * 1.35 * (v_kmh**2))) if n_uni == 2 else (f['davis_A'] + f['davis_B']*v_kmh + f['davis_C']*(v_kmh**2))
