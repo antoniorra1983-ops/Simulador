@@ -5,14 +5,16 @@ import unicodedata
 from io import BytesIO
 from datetime import datetime, date, timedelta
 
+# Importación segura de configuración (Escudo NameError)
 try:
     import config
 except ImportError:
     pass
 
 # =============================================================================
-# 1. UTILIDADES Y GEOMETRÍA
+# 1. UTILIDADES DE TIEMPO Y DÍAS
 # =============================================================================
+
 def clasificar_dia(d_str):
     try:
         d = datetime.strptime(d_str, '%Y-%m-%d')
@@ -47,11 +49,12 @@ def parse_time_to_mins(val):
     if sv in ('', 'nan'): return None
     if ' ' in sv: sv = sv.split(' ')[-1]
     m = re.search(r'(\d{1,2}):(\d{2})(?::(\d{2}))?', sv)
-    if m: return int(m.group(1)) * 60.0 + int(m.group(2)) + (int(m.group(3)) / 60.0 if m.group(3) else 0.0)
+    if m: 
+        return int(m.group(1)) * 60.0 + int(m.group(2)) + (int(m.group(3)) / 60.0 if m.group(3) else 0.0)
     try:
         f = float(sv)
-        if f < 1.0: return f * 1440.0
-        if f < 2400.0: return (int(f // 100) * 60.0) + (f % 100)
+        if f < 1.0: return f * 1440.0 
+        if f < 2400.0: return (int(f // 100) * 60.0) + (f % 100) 
     except: pass
     return None
 
@@ -84,7 +87,12 @@ def parse_excel_date(val):
             if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
     return None
 
+# =============================================================================
+# 2. PARSERS DE INFRAESTRUCTURA Y LIMPIEZA
+# =============================================================================
+
 def extraer_fecha_segura(df_raw, fname):
+    """Motor Regex avanzado para detectar la fecha operativa en nombres o celdas. (Forensic Date Parser)"""
     for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
         m = re.search(pat, str(fname))
         if m:
@@ -100,7 +108,7 @@ def extraer_fecha_segura(df_raw, fname):
             d, mon, y = int(match[:2]), int(match[2:4]), int(match[4:])
             if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{mon:02d}-{d:02d}"
             y2, mon2, d2 = int(match[:4]), int(match[4:6]), int(match[6:])
-            if 1 <= d2 <= 31 and 1 <= mon2 <= 12 and 2000 <= y2 <= 2100: return f"{y2:04d}-{mon2:02d}-{d2:02d}"
+            if 2000 <= y2 <= 2100 and 1 <= mon2 <= 12 and 1 <= d2 <= 31: return f"{y2:04d}-{mon2:02d}-{d2:02d}"
         except: pass
         
     for i in range(len(s_fname) - 5):
@@ -111,7 +119,7 @@ def extraer_fecha_segura(df_raw, fname):
             y2, mon2, d2 = int(match[:2]), int(match[2:4]), int(match[4:])
             if 20 <= y2 <= 99 and 1 <= mon2 <= 12 and 1 <= d2 <= 31: return f"{2000+y2:04d}-{mon2:02d}-{d2:02d}"
         except: pass
-            
+
     for i in range(min(50, len(df_raw))):
         row_vals = [str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)]
         row_str = ' '.join(row_vals)
@@ -134,6 +142,7 @@ def extraer_fecha_segura(df_raw, fname):
             if val_clean.isdigit() and 40000 <= int(val_clean) <= 60000:
                 try: return (date(1899, 12, 30) + timedelta(days=int(val_clean))).strftime('%Y-%m-%d')
                 except: pass
+    
     return "2026-01-01"
 
 def clean_primary_key(x):
@@ -185,12 +194,28 @@ def _col_to_est_idx(col):
         if nk in cu: return idx
     return None
 
+def km_to_ec(km, tol=1.5):
+    try: 
+        km_acum = getattr(config, 'KM_ACUM', [])
+        ec_names = getattr(config, 'EC', [])
+    except Exception: 
+        return f"{km:.1f}km"
+    
+    if not km_acum or not ec_names: return f"{km:.1f}km"
+    
+    dists = [abs(km - k) for k in km_acum]
+    idx = int(np.argmin(dists))
+    return ec_names[idx] if dists[idx] <= tol else f"{km:.1f}km"
+
+def svc_label(km_orig, km_dest): 
+    return f"{km_to_ec(km_orig)}-{km_to_ec(km_dest)}"
+
 def calc_tren_km_real_general(row):
     k_s, k_e = min(row['km_orig'], row['km_dest']), max(row['km_orig'], row['km_dest'])
     return abs(k_e - k_s) * (2.0 if row.get('doble', False) else 1.0)
 
 # =============================================================================
-# 2. LECTURA DE DATOS (ETL - PREVENCIONES, PASAJEROS, THDR)
+# 3. LECTURA DE ARCHIVOS ESPECÍFICOS (PREVENCIONES, PASAJEROS, THDR)
 # =============================================================================
 
 def cargar_prevenciones(data, fname):
@@ -224,22 +249,23 @@ def cargar_prevenciones(data, fname):
                 continue
                 
             try:
-                # Normalización de comas por puntos y extracción Regex inteligente
+                # Normalización de comas por puntos (errores humanos)
                 v1 = float(str(row[c_ini]).replace(',', '.'))
                 v2 = float(str(row[c_fin]).replace(',', '.'))
                 via = int(float(str(row[c_via]).replace(',', '.')))
                 
+                # Extracción de velocidad numérica vía Regex
                 vel_str = str(row[c_vel])
                 vel_match = re.search(r'(\d+)', vel_str)
                 if vel_match: vel = float(vel_match.group(1))
                 else: continue
                     
-                # ORDENAMIENTO AUTOMÁTICO: Resuelve errores de tipeo de PK invertidos (ej Barón 2.9 a 0.9)
+                # ORDENAMIENTO: min/max soluciona el error de PK invertidos (ej Barón 2.9 a 0.9)
                 km_min, km_max = min(v1, v2), max(v1, v2)
                 prevenciones.append({'via': via, 'km_min': km_min, 'km_max': km_max, 'v_kmh': vel})
-            except Exception: pass
+            except: pass
         return prevenciones
-    except Exception: return []
+    except: return []
 
 def get_perfiles_pax(df_px):
     if df_px.empty: return {}
@@ -461,7 +487,7 @@ def procesar_thdr(data, fname, via_param=1):
         if df.empty: return pd.DataFrame(), "Todos los viajes descartados por falta de tiempos."
         
         df['km_viaje'] = abs(df['km_dest'] - df['km_orig'])
-        df['svc_type'] = df.apply(lambda r: f"{km_to_ec(r['km_orig'])}-{km_to_ec(r['km_dest'])}", axis=1)
+        df['svc_type'] = df.apply(lambda r: svc_label(r['km_orig'], r['km_dest']), axis=1)
 
         def calc_dwell_dynamic(row):
             try:
