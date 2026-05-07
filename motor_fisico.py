@@ -183,8 +183,7 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
 # =============================================================================
 # 3. FÍSICA TERMODINÁMICA Y LOAD FLOW 
 # =============================================================================
-# 💡 FIX: Firma corregida exactamente (agregada variable es_vacio y prevenciones)
-def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False, prevenciones=None):
+def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False, prevenciones=None, **kwargs):
     try: 
         flota_dict = config.FLOTA
     except Exception: 
@@ -275,32 +274,14 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             
             pax_mid = pax_abordo
             if pax_dict and sum(pax_dict.values()) > 0:
-                try: 
-                    pcols = config.PAX_COLS
-                except Exception: 
-                    try: 
-                        pcols = getattr(config, 'PAX_COLS', [])
-                    except Exception: 
-                        pcols = []
-                if km_acum_list and pcols:
-                    if via_op == 1:
-                        for j in range(len(km_acum_list)):
-                            if km_actual >= km_acum_list[j] and j < len(pcols):
-                                val = pax_dict.get(pcols[j])
-                                if val is not None: pax_mid = val
-                            else: break
-                    else:
-                        for j in range(len(km_acum_list) - 1, -1, -1):
-                            if km_actual <= km_acum_list[j] and j < len(pcols):
-                                val = pax_dict.get(pcols[j])
-                                if val is not None: pax_mid = val
-                            else: break
+                pax_mid = _safe_get_pax(km_actual, via_op, pax_dict, pax_abordo)
 
             masa_kg = ((f['tara_t'] + f['m_iner_t']) * 1000 * n_uni) + (pax_mid * pax_kg_val)
             
             v_cons_kmh = max(5.0, vel_at_km(km_actual, via_op, use_rm))
             if v_consigna_override is not None: v_cons_kmh = min(v_cons_kmh, v_consigna_override)
             
+            # 💡 MEJORA: Radar Predictivo (Lookahead ATC) para Prevenciones
             if prevenciones:
                 for p in prevenciones:
                     if p['via'] == via_op:
@@ -528,7 +509,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio="prim
                 f_davis = ((f['davis_A'] * 2) + (f['davis_B'] * 2 * v_kmh) + (f['davis_C'] * 1.35 * (v_kmh**2))) if n_uni == 2 else (f['davis_A'] + f['davis_B']*v_kmh + f['davis_C']*(v_kmh**2))
                 if state in ("BRAKE", "BRAKE_STATION", "BRAKE_OVERSPEED"):
                     f_req_freno = max(0.0, masa_kg * (f.get('a_freno_ms2', 1.2) * 0.9) - f_davis)
-                    f_disp_freno = min(f.get('f_freno_max_kn', 105.0)*1000*n_uni, (f.get('p_freno_max_kw', f.get('p_max_kw', 720.0)*1.2)*1000*n_uni)/max(0.1, v_ms)) if v_kmh >= f.get('v_freno_min', 3.81) else 0.0
+                    f_disp_freno = min(f.get('f_freno_max_kn', 105.0)*1000*n_uni, (f.get('p_freno_max_kw', f['p_max_kw']*1.2)*1000*n_uni)/max(0.1, v_ms)) if v_kmh >= f.get('v_freno_min', 3.81) else 0.0
                     p_gen_kw = ((min(f_req_freno, f_disp_freno) * v_ms) / 1000.0 * eta_regen_val) - p_aux_kw
                     if p_gen_kw > 0: braking_by_idx[i].append((tr['idx'], pos, p_gen_kw))
                     braking_ticks_per_trip[tr['idx']] += 1
