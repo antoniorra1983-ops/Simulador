@@ -4,7 +4,6 @@ import re
 import unicodedata
 from io import BytesIO
 from datetime import datetime, date, timedelta
-from config import *
 import config
 
 # =============================================================================
@@ -158,37 +157,39 @@ def make_unique(df):
     df.columns = cols
     return df
 
-try: est_lista = ESTACIONES
-except NameError: est_lista = getattr(config, 'ESTACIONES', [])
+try: est_lista = getattr(config, 'ESTACIONES', [])
+except Exception: est_lista = []
 
 _EST_NORM = sorted({re.sub(r'[^a-z0-9]','', e.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n')): i for i, e in enumerate(est_lista)}.items(), key=lambda x: -len(x[0]))
 
 def _col_to_est_idx(col):
-    try: est = ESTACIONES
-    except NameError: est = getattr(config, 'ESTACIONES', [])
+    try: est = getattr(config, 'ESTACIONES', [])
+    except Exception: est = []
     if not est: return None
     
     cu = re.sub(r'[^a-z0-9]','', col.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
-    if 'americas' in cu: return est.index('Las Americas')
-    if 'vina' in cu: return est.index('Viña del Mar')
-    if 'aldea' in cu: return est.index('Sargento Aldea')
-    if 'belloto' in cu: return est.index('El Belloto')
-    if 'concepcion' in cu: return est.index('La Concepcion')
-    if 'villaalem' in cu: return est.index('Villa Alemana')
-    if 'salto' in cu: return est.index('El Salto')
+    try:
+        if 'americas' in cu: return est.index('Las Americas')
+        if 'vina' in cu: return est.index('Viña del Mar')
+        if 'aldea' in cu: return est.index('Sargento Aldea')
+        if 'belloto' in cu: return est.index('El Belloto')
+        if 'concepcion' in cu: return est.index('La Concepcion')
+        if 'villaalem' in cu: return est.index('Villa Alemana')
+        if 'salto' in cu: return est.index('El Salto')
+    except: pass
     for nk, idx in _EST_NORM:
         if nk in cu: return idx
     return None
 
 def interp_pos(km):
-    try: km_tot = KM_TOTAL
-    except NameError: km_tot = getattr(config, 'KM_TOTAL', 43.13)
-    try: km_acum = KM_ACUM
-    except NameError: km_acum = getattr(config, 'KM_ACUM', [])
-    try: est_lats = EST_LATS
-    except NameError: est_lats = getattr(config, 'EST_LATS', [])
-    try: est_lons = EST_LONS
-    except NameError: est_lons = getattr(config, 'EST_LONS', [])
+    try: km_tot = getattr(config, 'KM_TOTAL', 43.13)
+    except Exception: km_tot = 43.13
+    try: km_acum = getattr(config, 'KM_ACUM', [])
+    except Exception: km_acum = []
+    try: est_lats = getattr(config, 'EST_LATS', [])
+    except Exception: est_lats = []
+    try: est_lons = getattr(config, 'EST_LONS', [])
+    except Exception: est_lons = []
     
     if not km_acum or not est_lats or not est_lons: return 0.0, 0.0
     
@@ -196,10 +197,10 @@ def interp_pos(km):
     return float(np.interp(km, km_acum, est_lats)), float(np.interp(km, km_acum, est_lons))
 
 def km_to_ec(km, tol=1.5):
-    try: km_acum = KM_ACUM
-    except NameError: km_acum = getattr(config, 'KM_ACUM', [])
-    try: ec_names = EC
-    except NameError: ec_names = getattr(config, 'EC', [])
+    try: km_acum = getattr(config, 'KM_ACUM', [])
+    except Exception: km_acum = []
+    try: ec_names = getattr(config, 'EC', [])
+    except Exception: ec_names = []
     
     if not km_acum or not ec_names: return f"{km:.1f}km"
     
@@ -211,13 +212,68 @@ def svc_label(km_orig, km_dest):
     return f"{km_to_ec(km_orig)}-{km_to_ec(km_dest)}"
 
 def calc_tren_km_real_general(row):
-    # 💡 LÓGICA DE MANIOBRAS ELIMINADA: Solo viaje comercial puro (Tabula Rasa)
     k_s,k_e = min(row['km_orig'],row['km_dest']), max(row['km_orig'],row['km_dest'])
     return abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0)
 
 # =============================================================================
-# 2. FUNCIONES DE LECTURA (ETL - PASAJEROS Y THDR)
+# 2. FUNCIONES DE LECTURA (ETL - PREVENCIONES, PASAJEROS Y THDR)
 # =============================================================================
+
+def cargar_prevenciones(data, fname):
+    """ Extrae las Prevenciones (TSR) del archivo oficial y las limpia matemáticamente """
+    try:
+        ext = fname.lower()
+        if ext.endswith('.csv'):
+            try: df = pd.read_csv(BytesIO(data), sep=',', encoding='utf-8')
+            except: df = pd.read_csv(BytesIO(data), sep=';', encoding='latin-1')
+        else:
+            eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
+            df = pd.read_excel(BytesIO(data), engine=eng)
+            
+        if df.empty: return []
+        
+        cols = [str(c).upper().strip() for c in df.columns]
+        df.columns = cols
+        
+        c_ini = next((c for c in cols if 'INICIO' in c or 'PK INI' in c), None)
+        c_fin = next((c for c in cols if 'FIN' in c or 'PK FIN' in c), None)
+        c_via = next((c for c in cols if 'VIA' in c or 'VÍA' in c), None)
+        c_vel = next((c for c in cols if 'VEL' in c), None)
+        c_est = next((c for c in cols if 'ESTADO' in c), None)
+        
+        if not all([c_ini, c_fin, c_via, c_vel]): return []
+        
+        prevenciones = []
+        for _, row in df.iterrows():
+            estado = str(row.get(c_est, '')).upper()
+            if c_est and 'PENDIENTE' not in estado and 'ACTIVA' not in estado and estado != 'NAN' and estado != '':
+                continue
+                
+            try:
+                v1_str = str(row[c_ini]).replace(',', '.')
+                v2_str = str(row[c_fin]).replace(',', '.')
+                v1 = float(v1_str)
+                v2 = float(v2_str)
+                via = int(float(str(row[c_via]).replace(',', '.')))
+                
+                vel_str = str(row[c_vel])
+                vel_match = re.search(r'(\d+)', vel_str)
+                if vel_match:
+                    vel = float(vel_match.group(1))
+                else:
+                    continue
+                    
+                km_min, km_max = min(v1, v2), max(v1, v2)
+                prevenciones.append({
+                    'via': via,
+                    'km_min': km_min,
+                    'km_max': km_max,
+                    'v_kmh': vel
+                })
+            except Exception: pass
+        return prevenciones
+    except Exception: return []
+
 def get_perfiles_pax(df_px):
     if df_px.empty: return {}
     df_p = df_px.copy()
@@ -226,8 +282,8 @@ def get_perfiles_pax(df_px):
     if df_p.empty: return {}
     df_p['Tipo_Dia'] = df_p['Fecha_s'].apply(clasificar_dia)
     
-    try: pcols = PAX_COLS
-    except NameError: pcols = getattr(config, 'PAX_COLS', [])
+    try: pcols = getattr(config, 'PAX_COLS', [])
+    except Exception: pcols = []
     if not pcols: return {}
     
     for c in pcols + ['CargaMax']:
@@ -249,12 +305,12 @@ def get_pax_at_km(pax_d, km_pos, via, pax_max_fallback=0):
     if not pax_d or not isinstance(pax_d, dict): return pax_max_fallback
     if sum(pax_d.values()) == 0 and pax_max_fallback > 0: return pax_max_fallback
     pax_val = 0
-    try: n_est = N_EST
-    except NameError: n_est = getattr(config, 'N_EST', 21)
-    try: km_acum = KM_ACUM
-    except NameError: km_acum = getattr(config, 'KM_ACUM', [])
-    try: pcols = PAX_COLS
-    except NameError: pcols = getattr(config, 'PAX_COLS', [])
+    try: n_est = getattr(config, 'N_EST', 21)
+    except Exception: n_est = 21
+    try: km_acum = getattr(config, 'KM_ACUM', [])
+    except Exception: km_acum = []
+    try: pcols = getattr(config, 'PAX_COLS', [])
+    except Exception: pcols = []
     
     if not km_acum or not pcols: return pax_max_fallback
     
@@ -274,10 +330,10 @@ def get_pax_at_km(pax_d, km_pos, via, pax_max_fallback=0):
 
 def procesar_thdr(data, fname, via_param=1):
     try:
-        try: km_total = KM_TOTAL
-        except NameError: km_total = getattr(config, 'KM_TOTAL', 43.13)
-        try: km_acum = KM_ACUM
-        except NameError: km_acum = getattr(config, 'KM_ACUM', [])
+        try: km_total = getattr(config, 'KM_TOTAL', 43.13)
+        except Exception: km_total = 43.13
+        try: km_acum = getattr(config, 'KM_ACUM', [])
+        except Exception: km_acum = []
         
         ext = fname.lower()
         if ext.endswith('.csv'):
@@ -764,9 +820,7 @@ def parsear_planilla_maestra(data, fname):
     except Exception as e: return pd.DataFrame(), str(e)
 
 def cargar_vacios_efe(data, fname):
-    # 💡 TABULA RASA: Lógica de Vacíos EFE eliminada según instrucción.
     return pd.DataFrame()
 
 def get_vacios_dia(df_dia):
-    # 💡 TABULA RASA: Lógica teórica de Vacíos eliminada según instrucción.
     return []
