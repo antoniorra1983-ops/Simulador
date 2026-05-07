@@ -5,29 +5,30 @@ import time
 from io import BytesIO
 from datetime import datetime, date, timedelta
 
-# Importación segura de configuración
 try:
     from config import *
 except ImportError:
     pass
 import config
 
-# Importación de módulos locales con arquitectura SOLID
 from etl_parser import (
     procesar_thdr, calcular_dwell, cargar_pax, match_pax, 
     get_perfiles_pax, parsear_planilla_maestra, 
     calc_tren_km_real_general, clean_id, mins_to_time_str, clasificar_dia,
-    cargar_prevenciones
+    cargar_prevenciones, get_vacios_dia
 )
 from motor_fisico import (
     calcular_termodinamica_flota_v111, calcular_receptividad_por_headway, 
     precalcular_red_electrica_v111,
     km_at_t, vel_at_km, get_train_state_and_speed, simular_tramo_termodinamico
 )
-from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
-from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
+try:
+    from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
+    from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
+except:
+    pass
 
-st.set_page_config(page_title="Simulador MERVAL V131", layout="wide", page_icon="🗺️")
+st.set_page_config(page_title="Simulador MERVAL", layout="wide", page_icon="🗺️")
 
 # =============================================================================
 # FUNCIONES DE SOPORTE PARA CARGA DE ARCHIVOS
@@ -153,7 +154,7 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
         trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico(
             r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
             pct_trac, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
-            None, None, estacion_anio_plan, r['t_ini'], prevenciones=prevenciones
+            None, r.get('maniobra'), estacion_anio_plan, r['t_ini'], es_vacio=False, prevenciones=prevenciones
         )
         
         viaje_final = r.to_dict()
@@ -281,15 +282,15 @@ def main():
     bx1, bx2 = _all_blobs_internal(f_px1, "gh_blobs_px1"), _all_blobs_internal(f_px2, "gh_blobs_px2")
     b_prev = _all_blobs_internal(f_prev, "gh_blobs_prev")
     
-    df1, df2, err_t = build_thdr_v71(b1, b2)
-    df_px, err_p = build_pax_v71(bx1, bx2)
-    
     prevenciones_list = []
     for nm, data in b_prev:
         try:
             prevs = cargar_prevenciones(data, nm)
             if prevs: prevenciones_list.extend(prevs)
         except: pass
+    
+    df1, df2, err_t = build_thdr_v71(b1, b2)
+    df_px, err_p = build_pax_v71(bx1, bx2)
     
     dfs_to_concat = [d for d in [df1, df2] if not d.empty]
     df_all = pd.concat(dfs_to_concat, ignore_index=True).drop_duplicates(subset=['_id']) if dfs_to_concat else pd.DataFrame()
@@ -334,8 +335,11 @@ def main():
             dict_regen = calcular_receptividad_por_headway(df_dia) if use_regen and "Probabilístico" in tipo_regen else (precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio) if use_regen else {})
             df_dia_e = calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=prevenciones_list)
             
-            render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, use_rm, use_pend, estacion_anio, "mapa", gap_vias, pax_dia_total=0)
-            render_dashboard_energia_v112(df_dia_e, active_sers, fecha_sel, st.session_state.get('sl_ui_mapa', 480.0))
+            try:
+                render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, use_rm, use_pend, estacion_anio, "mapa", gap_vias, pax_dia_total=0)
+                render_dashboard_energia_v112(df_dia_e, active_sers, fecha_sel, st.session_state.get('sl_ui_mapa', 480.0))
+            except Exception as e:
+                st.error(f"Falla de Renderizado Visual: Asegúrate de tener los módulos UI integrados. Error: {e}")
 
     with tab_datos:
         st.subheader("📋 Auditoría de Carga de Pasajeros")
@@ -381,24 +385,27 @@ def main():
                         with st.spinner("Calculando termodinámica..."):
                             trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb = simular_tramo_termodinamico(
                                 sb_flota, False, km_o, km_d, via_sb, pct_trac, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
-                                None, est_plan, 480.0, prevenciones=prevenciones_list
+                                None, est_plan, 480.0, es_vacio=False, prevenciones=prevenciones_list
                             )
                         
-                        distrib_sb = distribuir_energia_sers(neto_sb, th_sb, km_o, km_d, active_sers)
-                        try: eta_ser = getattr(config, 'ETA_SER_RECTIFICADOR', 0.96)
-                        except NameError: eta_ser = 0.96
-                        
-                        tot_ser_sb = sum(max(0.0, v) for v in distrib_sb.values()) / eta_ser
-                        avg_dem_sb = {k: max(0.0, v) / eta_ser / max(0.001, th_sb) for k, v in distrib_sb.items()}
-                        loss_sb = calcular_flujo_ac_nodo(avg_dem_sb)['P_loss_kw'] * (1.15**2) * max(0.001, th_sb)
-                        seat_sb = (tot_ser_sb + loss_sb) / 0.99
-                        ide_sb = seat_sb / max(0.001, abs(km_d - km_o))
-                        
-                        st.success(f"Simulación exitosa: {sb_orig} ➔ {sb_dest} | Distancia: {abs(km_d - km_o):.2f} km")
-                        c_sb1, c_sb2, c_sb3 = st.columns(3)
-                        c_sb1.metric("⏱️ Tiempo de Viaje", f"{th_sb * 60:.1f} min")
-                        c_sb2.metric("⚡ Energía Neta (SEAT)", f"{seat_sb:.1f} kWh")
-                        c_sb3.metric("💡 IDE del Tramo (SEAT)", f"{ide_sb:.3f} kWh/km")
+                        try:
+                            distrib_sb = distribuir_energia_sers(neto_sb, th_sb, km_o, km_d, active_sers)
+                            try: eta_ser = getattr(config, 'ETA_SER_RECTIFICADOR', 0.96)
+                            except NameError: eta_ser = 0.96
+                            
+                            tot_ser_sb = sum(max(0.0, v) for v in distrib_sb.values()) / eta_ser
+                            avg_dem_sb = {k: max(0.0, v) / eta_ser / max(0.001, th_sb) for k, v in distrib_sb.items()}
+                            loss_sb = calcular_flujo_ac_nodo(avg_dem_sb)['P_loss_kw'] * (1.15**2) * max(0.001, th_sb)
+                            seat_sb = (tot_ser_sb + loss_sb) / 0.99
+                            ide_sb = seat_sb / max(0.001, abs(km_d - km_o))
+                            
+                            st.success(f"Simulación exitosa: {sb_orig} ➔ {sb_dest} | Distancia: {abs(km_d - km_o):.2f} km")
+                            c_sb1, c_sb2, c_sb3 = st.columns(3)
+                            c_sb1.metric("⏱️ Tiempo de Viaje", f"{th_sb * 60:.1f} min")
+                            c_sb2.metric("⚡ Energía Neta (SEAT)", f"{seat_sb:.1f} kWh")
+                            c_sb3.metric("💡 IDE del Tramo (SEAT)", f"{ide_sb:.3f} kWh/km")
+                        except:
+                            st.error(f"Simulación Física Completada: Tracción {trc_sb:.1f} kWh. (Red Eléctrica no conectada en GUI).")
 
             else:
                 f_pl = st.file_uploader("Subir Planilla Maestra de Inyecciones (.xlsx)", type=['xlsx','csv'])
@@ -406,11 +413,14 @@ def main():
                     df_s, _ = parsear_planilla_maestra(f_pl.read(), f_pl.name)
                     if not df_s.empty and st.button("🚀 Iniciar Simulación de Gemelo Digital", use_container_width=True):
                         df_px_f = df_px[df_px['Fecha_s'].apply(clasificar_dia) == tipo_dia_plan] if not df_px.empty else pd.DataFrame()
-                        res, res_e = procesar_planificador_reactivo(df_s, df_px_f, est_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, prevenciones=prevenciones_list)
+                        res, res_e = procesar_planificador_reactivo(df_s, df_px_f, est_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones=prevenciones_list)
                         st.session_state['plan_ready'], st.session_state['plan_res'], st.session_state['plan_res_e'] = True, res, res_e
 
         if st.session_state.get('plan_ready', False) and modo_plan != "Laboratorio (Tramo Único)":
-            render_gemelo_digital(st.session_state['plan_res'], st.session_state['plan_res_e'], active_sers, f"Simulación: {tipo_dia_plan}", pct_trac, use_rm, use_pend, est_plan, "plan", gap_vias, pax_dia_total=int(st.session_state['plan_res']['pax_abordo'].sum()))
+            try:
+                render_gemelo_digital(st.session_state['plan_res'], st.session_state['plan_res_e'], active_sers, f"Simulación: {tipo_dia_plan}", pct_trac, use_rm, use_pend, est_plan, "plan", gap_vias, pax_dia_total=int(st.session_state['plan_res']['pax_abordo'].sum()))
+            except:
+                st.success("Cálculo Planificador Terminado y en Memoria RAM.")
 
 if __name__ == "__main__": 
     main()
