@@ -151,7 +151,7 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
         trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico(
             r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
             pct_trac, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
-            None, estacion_anio_plan, r['t_ini'], prevenciones=prevenciones
+            None, None, estacion_anio_plan, r['t_ini'], prevenciones=prevenciones
         )
         
         viaje_final = r.to_dict()
@@ -379,7 +379,7 @@ def main():
                         with st.spinner("Calculando termodinámica..."):
                             trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb = simular_tramo_termodinamico(
                                 sb_flota, False, km_o, km_d, via_sb, pct_trac, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
-                                est_plan, 480.0, prevenciones=prevenciones_list
+                                None, est_plan, 480.0, prevenciones=prevenciones_list
                             )
                         
                         distrib_sb = distribuir_energia_sers(neto_sb, th_sb, km_o, km_d, active_sers)
