@@ -3,16 +3,19 @@ import pandas as pd
 import numpy as np
 import config
 from config import *
-from etl_parser import calc_tren_km_real_general, get_pax_at_km
 
 # =============================================================================
 # 1. MOTOR CINEMÁTICO TRAMO A TRAMO (GEOMETRÍA Y PERFILES DE VELOCIDAD)
 # =============================================================================
 def _build_profile(use_rm, via):
-    segs_base = getattr(config, 'SPEED_PROFILE', [])
+    try: segs_base = SPEED_PROFILE
+    except NameError: 
+        try: segs_base = getattr(config, 'SPEED_PROFILE', [])
+        except: segs_base = []
+        
     segs = segs_base if via == 1 else list(reversed(segs_base))
-    
     km_pts, t_pts, cum_t = [], [], 0.0
+    
     if not segs:
         return np.array([0.0]), np.array([0.0])
         
@@ -36,8 +39,11 @@ for k, v in _PROF.items():
 _VEL_ARRAY_NORM = np.zeros(45000, dtype=float)
 _VEL_ARRAY_RM = np.zeros(45000, dtype=float)
 
-# Carga segura del array de velocidades
-segs_base_init = getattr(config, 'SPEED_PROFILE', [])
+try: segs_base_init = SPEED_PROFILE
+except NameError: 
+    try: segs_base_init = getattr(config, 'SPEED_PROFILE', [])
+    except: segs_base_init = []
+
 for ki, kf, _, vn, vr in segs_base_init:
     start_idx = int(ki)
     end_idx = min(int(kf) + 1, 45000)
@@ -50,7 +56,11 @@ def vel_at_km(km_km, via, use_rm):
     return 0.0
 
 def km_at_t(t_ini, t_fin, t, via, use_rm=False, km_orig=None, km_dest=None, nodos=None, t_arr=None):
-    km_total_limit = getattr(config, 'KM_TOTAL', 43.13)
+    try: km_total_limit = KM_TOTAL
+    except NameError: 
+        try: km_total_limit = getattr(config, 'KM_TOTAL', 43.13)
+        except: km_total_limit = 43.13
+    
     if nodos is not None and len(nodos) >= 2:
         if t <= nodos[0][0]: return nodos[0][1]
         if t >= nodos[-1][0]: return nodos[-1][1]
@@ -103,8 +113,14 @@ def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos, t_arr=N
 def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", p_vent_max=7.6, f_compresor_dwell=1.03):
     hora_int = int(hora_decimal) % 24
     
-    # 💡 BLINDAJE: Extracción segura de la matriz horaria
-    perfil_dict = getattr(config, 'AUX_HVAC_HORA', getattr(config, '_AUX_HVAC_HORA', {}))
+    # 💡 ESCUDO ANTI-NAME ERROR: Extracción segura de la matriz horaria
+    try: perfil_dict = AUX_HVAC_HORA
+    except NameError: 
+        try: perfil_dict = _AUX_HVAC_HORA
+        except NameError: 
+            try: perfil_dict = getattr(config, 'AUX_HVAC_HORA', {})
+            except: perfil_dict = {}
+        
     perfil = perfil_dict.get(estacion_anio, perfil_dict.get("primavera", [0.5]*24)) if isinstance(perfil_dict, dict) else [0.5]*24
     f_hvac = perfil[hora_int] if len(perfil) > hora_int else 0.5
     
@@ -116,8 +132,15 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
     else:
         f_ocup = 1.0
         
-    frac_base = getattr(config, 'FRAC_BASE', getattr(config, '_FRAC_BASE', 0.12))
-    frac_hvac = getattr(config, 'FRAC_HVAC', getattr(config, '_FRAC_HVAC', 0.45))
+    try: frac_base = FRAC_BASE
+    except NameError:
+        try: frac_base = getattr(config, 'FRAC_BASE', 0.12)
+        except: frac_base = 0.12
+        
+    try: frac_hvac = FRAC_HVAC
+    except NameError:
+        try: frac_hvac = getattr(config, 'FRAC_HVAC', 0.45)
+        except: frac_hvac = 0.45
 
     # Lógica de Modulación por Estado Termodinámico (Load Shedding vs Freno Forzado)
     if estado_marcha == "DWELL":
@@ -150,7 +173,12 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
 # 3. FÍSICA TERMODINÁMICA Y LOAD FLOW (INCLUYE ACUMULADOR NEUMÁTICO)
 # =============================================================================
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False):
-    flota_dict = getattr(config, 'FLOTA', {})
+    # 💡 ESCUDO ANTI-NAME ERROR: Extracción segura de diccionarios
+    try: flota_dict = FLOTA
+    except NameError: 
+        try: flota_dict = getattr(config, 'FLOTA', {})
+        except: flota_dict = {}
+        
     f = flota_dict.get(tipo_tren, flota_dict.get("XT-100", {
         "tara_t": 86.1, "m_iner_t": 7.20, "a_freno_ms2": 1.2, "davis_A": 1615.0, 
         "davis_B": 0.0, "davis_C": 0.5458, "f_trac_max_kn": 110.0, 
@@ -158,15 +186,18 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
         "jerk_ms3": 1.3
     }))
     
+    # Termostato Estacional (Adiós al Hardcode de aux_kw)
     if estacion_anio == "invierno":
         aux_nominal_unidad = f.get('aux_kw_heat', f.get('aux_kw', 65.16))
     else:
         aux_nominal_unidad = f.get('aux_kw_cool', f.get('aux_kw', 58.76))
         
+    p_vent_max = f.get('p_vent_trac_kw', 7.6)
     f_compresor_especifico = f.get('f_compresor_dwell', 1.03)
-    
+        
     trc, aux, reg, t_horas = 0.0, 0.0, 0.0, 0.0
     
+    # Acumulador Neumático Virtual
     mrp_bar = 10.0
     compresor_on = False
     p_comp = f.get('p_compresor_kw', 3.68)
@@ -187,10 +218,27 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     pax_dict = pax_dict or {}
     dt = 1.0  
     
-    km_acum_list = getattr(config, 'KM_ACUM', [])
-    pax_kg_val = getattr(config, 'PAX_KG', 75.0)
-    eta_regen_val = getattr(config, 'ETA_REGEN_NETA', 0.85)
-    
+    try: km_acum_list = KM_ACUM
+    except NameError: 
+        try: km_acum_list = getattr(config, 'KM_ACUM', [])
+        except: km_acum_list = []
+        
+    try: pax_kg_val = PAX_KG
+    except NameError: 
+        try: pax_kg_val = getattr(config, 'PAX_KG', 75.0)
+        except: pax_kg_val = 75.0
+        
+    try: eta_regen_val = ETA_REGEN_NETA
+    except NameError: 
+        try: eta_regen_val = getattr(config, 'ETA_REGEN_NETA', 0.85)
+        except: eta_regen_val = 0.85
+        
+    def _safe_get_pax(km_val, via_val, d_dict, def_val):
+        try:
+            from etl_parser import get_pax_at_km
+            return get_pax_at_km(d_dict, km_val, via_val, def_val)
+        except: return def_val
+
     for i in range(len(paradas_km)-1):
         p_ini, p_fin = paradas_km[i], paradas_km[i+1]
         dist_total_tramo = abs(p_fin - p_ini) * 1000.0
@@ -215,13 +263,13 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             elif maniobra == 'ACOPLE_SA' and km_actual < 29.1: es_doble = False
             
             n_uni = 2 if es_doble else 1
-            pax_mid = get_pax_at_km(pax_dict, km_actual, via_op, pax_abordo) if pax_dict else pax_abordo
+            pax_mid = _safe_get_pax(km_actual, via_op, pax_dict, pax_abordo) if pax_dict else pax_abordo
             masa_kg = ((f['tara_t'] + f['m_iner_t']) * 1000 * n_uni) + (pax_mid * pax_kg_val)
             
             v_cons_kmh = max(5.0, vel_at_km(km_actual, via_op, use_rm))
             if v_consigna_override is not None: v_cons_kmh = min(v_cons_kmh, v_consigna_override)
             
-            # 💡 FIX APLICADO: Velocidad estricta de 10 km/h para maniobras y cocheras (Depot Mode)
+            # 💡 FIX APLICADO: Límite estricto de 10 km/h para maniobras puras de cochera (Depot Mode)
             if maniobra is not None or (es_vacio and dist_total_tramo <= 600.0):
                 v_cons_kmh = min(v_cons_kmh, 10.0)
             
@@ -242,18 +290,28 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if n_uni == 2: f_davis = (f['davis_A'] * 2) + (f['davis_B'] * 2 * v_kmh) + (f['davis_C'] * 1.35 * (v_kmh**2))
             else: f_davis = f['davis_A'] + f['davis_B']*v_kmh + f['davis_C']*(v_kmh**2)
                 
-            # 💡 BLINDAJE APLICADO: Extracción de Pendiente con GetAttr para evitar NameError
+            # 💡 ESCUDO ANTI-NAME ERROR: Extracción segura de Pendientes
             f_pend = 0.0
             if use_pend:
-                elev_km = getattr(config, 'ELEV_KM', getattr(config, '_ELEV_KM', []))
-                elev_m = getattr(config, 'ELEV_M', getattr(config, '_ELEV_M', []))
-                
-                if elev_km and elev_m:
+                try: elev_km, elev_m = ELEV_KM, ELEV_M
+                except NameError: 
+                    try: elev_km, elev_m = _ELEV_KM, _ELEV_M
+                    except NameError: 
+                        try:
+                            elev_km = getattr(config, 'ELEV_KM', [])
+                            elev_m = getattr(config, 'ELEV_M', [])
+                        except:
+                            elev_km, elev_m = [], []
+                            
+                if elev_km and elev_m and len(elev_km) == len(elev_m):
                     for j in range(1, len(elev_km)):
                         if elev_km[j-1] <= km_actual <= elev_km[j] or (j == len(elev_km)-1 and km_actual > elev_km[j]):
                             pend = ((elev_m[j] - elev_m[j-1]) / max(0.001, (elev_km[j] - elev_km[j-1])*1000)) * 1000
-                            davis_e_n_permil = getattr(config, 'DAVIS_E_N_PERMIL', 9.81)
-                            f_pend = davis_e_n_permil * pend * (masa_kg / 1000.0) * (1.0 if via_op==1 else -1.0)
+                            try: davis_e_n = DAVIS_E_N_PERMIL
+                            except: 
+                                try: davis_e_n = getattr(config, 'DAVIS_E_N_PERMIL', 9.81)
+                                except: davis_e_n = 9.81
+                            f_pend = davis_e_n * pend * (masa_kg / 1000.0) * (1.0 if via_op==1 else -1.0)
                             break
                         
             a_freno_op = f.get('a_freno_ms2', 1.2) * 0.9 
@@ -324,15 +382,15 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                     compresor_on = False
 
             hora_actual = (t_ini_mins + t_horas * 60.0) / 60.0
-            aux += (calcular_aux_dinamico(aux_nominal_unidad * n_uni, hora_actual, pax_mid, f.get('cap_max', 398) * n_uni, estacion_anio, estado_marcha, f.get('p_vent_trac_kw', 7.6) * n_uni, f_compresor_especifico) * (dt_actual / 3600.0))
+            aux += (calcular_aux_dinamico(aux_nominal_unidad * n_uni, hora_actual, pax_mid, f.get('cap_max', 398) * n_uni, estacion_anio, estado_marcha, p_vent_max * n_uni, f_compresor_especifico) * (dt_actual / 3600.0))
             t_horas += dt_actual / 3600.0
             dist_recorrida += step_m
             v_ms = v_new
 
         # DETENCIÓN EN ANDÉN: Consumo Eléctrico de Puertas y Gasto Neumático
         if i < len(paradas_km) - 2:
-            dwell_s = getattr(config, 'DWELL_DEF', 25.0)
-            p_vent_max = f.get('p_vent_trac_kw', 7.6) * n_uni
+            try: dwell_s = getattr(config, 'DWELL_DEF', 25.0)
+            except: dwell_s = 25.0
             
             mrp_bar -= 0.3
             if mrp_bar <= 8.0:
@@ -341,7 +399,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             aux += (f.get('p_puertas_kw', 0.9) * n_uni * (3.0 / 3600.0))
             
             hora_media_dwell = (t_ini_mins + (t_horas + (dwell_s / 2.0) / 3600.0) * 60.0) / 60.0
-            aux_kw_dwell = calcular_aux_dinamico(aux_nominal_unidad * n_uni, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni, estacion_anio, "DWELL", p_vent_max, f_compresor_especifico)
+            aux_kw_dwell = calcular_aux_dinamico(aux_nominal_unidad * n_uni, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni, estacion_anio, "DWELL", p_vent_max * n_uni, f_compresor_especifico)
             aux += aux_kw_dwell * (dwell_s / 3600.0)
             
             if compresor_on:
@@ -357,12 +415,12 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                     
             t_horas += (dwell_s / 3600.0)
 
-    # Dwell final en estación de término
     n_paradas_reales = max(0, len(paradas_km) - 2)
-    dwell_h = (n_paradas_reales * getattr(config, 'DWELL_DEF', 25.0)) / 3600.0
+    try: dwell_h = (n_paradas_reales * getattr(config, 'DWELL_DEF', 25.0)) / 3600.0
+    except: dwell_h = (n_paradas_reales * 25.0) / 3600.0
+    
     hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
-    p_vent_max = f.get('p_vent_trac_kw', 7.6) * (2 if doble else 1)
-    aux_kw_dwell = calcular_aux_dinamico(aux_nominal_unidad * (2 if doble else 1), hora_media_dwell, pax_abordo, f.get('cap_max', 398) * (2 if doble else 1), estacion_anio, "DWELL", p_vent_max, f_compresor_especifico)
+    aux_kw_dwell = calcular_aux_dinamico(aux_nominal_unidad * (2 if doble else 1), hora_media_dwell, pax_abordo, f.get('cap_max', 398) * (2 if doble else 1), estacion_anio, "DWELL", p_vent_max * (2 if doble else 1), f_compresor_especifico)
     aux += aux_kw_dwell * dwell_h
     t_horas += dwell_h
     
@@ -404,11 +462,30 @@ def precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio="prim
     t_max = int(df_dia['t_fin'].max())
     time_steps = np.arange(t_min, t_max + 1, 10.0 / 60.0)
     
-    eta_regen_val = getattr(config, 'ETA_REGEN_NETA', 0.85)
-    lambda_val = getattr(config, 'LAMBDA_REGEN_KM', 5.0)
-    eta_max_val = getattr(config, 'ETA_MAX', 0.70)
-    pax_kg_val = getattr(config, 'PAX_KG', 75.0)
-    flota_dict = getattr(config, 'FLOTA', {})
+    try: eta_regen_val = ETA_REGEN_NETA
+    except: 
+        try: eta_regen_val = getattr(config, 'ETA_REGEN_NETA', 0.85)
+        except: eta_regen_val = 0.85
+        
+    try: lambda_val = LAMBDA_REGEN_KM
+    except: 
+        try: lambda_val = getattr(config, 'LAMBDA_REGEN_KM', 5.0)
+        except: lambda_val = 5.0
+        
+    try: eta_max_val = ETA_MAX
+    except: 
+        try: eta_max_val = getattr(config, 'ETA_MAX', 0.70)
+        except: eta_max_val = 0.70
+        
+    try: pax_kg_val = PAX_KG
+    except: 
+        try: pax_kg_val = getattr(config, 'PAX_KG', 75.0)
+        except: pax_kg_val = 75.0
+        
+    try: flota_dict = FLOTA
+    except: 
+        try: flota_dict = getattr(config, 'FLOTA', {})
+        except: flota_dict = {}
     
     for via_ in [1, 2]:
         via_trains = df_dia[df_dia['Via'] == via_]
@@ -503,3 +580,113 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_re
     
     df_e[['kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto']] = df_e.apply(_wrapper_energia, axis=1)
     return df_e
+
+# =============================================================================
+# 5. PLANIFICADOR
+# =============================================================================
+@st.cache_data(show_spinner="Integrando física y demanda de pasajeros...")
+def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje=150):
+    viajes_completos = []
+    perfiles_por_servicio = {}
+    perfiles_por_via = {}
+    
+    try: pax_cols_list = PAX_COLS
+    except: 
+        try: pax_cols_list = getattr(config, 'PAX_COLS', ['PUE'])
+        except: pax_cols_list = ['PUE']
+        
+    try: flota_dict = FLOTA
+    except: 
+        try: flota_dict = getattr(config, 'FLOTA', {})
+        except: flota_dict = {}
+    
+    if not df_px_filtered.empty:
+        for via in [1, 2]:
+            sub_via = df_px_filtered[df_px_filtered['Via'] == via]
+            if not sub_via.empty:
+                pd_dict = {c: int(round(sub_via[c].mean())) for c in pax_cols_list if c in sub_via.columns}
+                if 'CargaMax' in sub_via.columns:
+                    pd_dict['CargaMax_Promedio'] = int(round(sub_via['CargaMax'].mean()))
+                perfiles_por_via[via] = pd_dict
+                
+        if 'Tren_Clean' in df_px_filtered.columns:
+            for tren, group in df_px_filtered.groupby('Tren_Clean'):
+                if str(tren).strip() == '': continue
+                pd_dict = {c: int(round(group[c].mean())) for c in pax_cols_list if c in group.columns}
+                if 'CargaMax' in group.columns:
+                    pd_dict['CargaMax_Promedio'] = int(round(group['CargaMax'].mean()))
+                perfiles_por_servicio[str(tren)] = pd_dict
+
+    for idx, r in df_sint.iterrows():
+        via_tren = r['Via']
+        t_ini_tren = r['t_ini']
+        num_srv = str(r.get('num_servicio', '')).strip()
+        
+        pax_arr_viaje = {c: 0 for c in pax_cols_list}
+        pax_calculado = 0
+        
+        f_tipo = flota_dict.get(r['tipo_tren'], {})
+        cap_m = f_tipo.get('cap_max', 398) * (2 if r['doble'] else 1)
+        
+        if perfiles_por_servicio and num_srv in perfiles_por_servicio:
+            perfil_srv = perfiles_por_servicio[num_srv]
+            pax_calculado = perfil_srv.get('CargaMax_Promedio', 0)
+            pax_arr_viaje = {k: v for k, v in perfil_srv.items() if k != 'CargaMax_Promedio'}
+        elif not df_px_filtered.empty:
+            sub_v = df_px_filtered[df_px_filtered['Via'] == via_tren].copy()
+            if not sub_v.empty and 't_ini_p' in sub_v.columns:
+                sub_v['diff'] = sub_v['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_ini_tren)), 1440 - abs(float(x) - float(t_ini_tren))))
+                idx_min = sub_v['diff'].idxmin()
+                if sub_v.loc[idx_min, 'diff'] <= 20:
+                    best_t = sub_v.loc[idx_min, 't_ini_p']
+                    best_group = sub_v[sub_v['t_ini_p'] == best_t]
+                    if 'CargaMax' in best_group.columns:
+                        pax_calculado = int(round(best_group['CargaMax'].mean()))
+                    pax_arr_viaje = {c: int(round(best_group[c].mean())) for c in pax_cols_list if c in best_group.columns}
+                else:
+                    pax_dict_dinamico = perfiles_por_via.get(via_tren, {})
+                    pax_abordo_base = pax_dict_dinamico.get('CargaMax_Promedio', pax_promedio_viaje)
+                    f_gauss = 0.2 + 0.8 * np.exp(-0.5 * ((t_ini_tren - 450)/60)**2) + 0.8 * np.exp(-0.5 * ((t_ini_tren - 1080)/90)**2)
+                    pax_calculado = int(pax_abordo_base * f_gauss * 1.5)
+                    if pax_dict_dinamico:
+                        pax_arr_viaje = {k: int(v * f_gauss * 1.5) for k, v in pax_dict_dinamico.items() if k != 'CargaMax_Promedio'}
+                    else:
+                        pax_arr_viaje = {c: int(pax_calculado / len(pax_cols_list)) for c in pax_cols_list}
+            else:
+                f_gauss = 0.2 + 0.8 * np.exp(-0.5 * ((t_ini_tren - 450)/60)**2) + 0.8 * np.exp(-0.5 * ((t_ini_tren - 1080)/90)**2)
+                pax_calculado = int(pax_promedio_viaje * f_gauss * 1.5)
+                pax_arr_viaje = {c: int(pax_calculado / len(pax_cols_list)) for c in pax_cols_list}
+        else:
+            f_gauss = 0.2 + 0.8 * np.exp(-0.5 * ((t_ini_tren - 450)/60)**2) + 0.8 * np.exp(-0.5 * ((t_ini_tren - 1080)/90)**2)
+            pax_calculado = int(pax_promedio_viaje * f_gauss * 1.5)
+            pax_arr_viaje = {c: int(pax_calculado / len(pax_cols_list)) for c in pax_cols_list}
+
+        pax_calculado = min(pax_calculado, cap_m)
+        pax_arr_viaje = {k: min(v, cap_m) for k, v in pax_arr_viaje.items()}
+
+        trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico(
+            r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
+            pct_trac, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
+            None, None, estacion_anio_plan, r['t_ini']
+        )
+        
+        viaje_final = r.to_dict()
+        viaje_final['pax_d'] = pax_arr_viaje
+        viaje_final['pax_abordo'] = pax_calculado
+        viaje_final['t_fin'] = r['t_ini'] + (t_h * 60.0)
+        viajes_completos.append(viaje_final)
+        
+    df_sint_final = pd.DataFrame(viajes_completos)
+    df_sint_final['tren_km'] = df_sint_final.apply(calc_tren_km_real_general, axis=1)
+    df_sint_final.index = df_sint_final['_id']
+    
+    if use_regen:
+        if "Probabilístico" in tipo_regen:
+            dict_regen_sint = calcular_receptividad_por_headway(df_sint_final)
+        else:
+            dict_regen_sint = precalcular_red_electrica_v111(df_sint_final, pct_trac, use_rm, estacion_anio_plan)
+    else:
+        dict_regen_sint = {}
+        
+    df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan)
+    return df_sint_final, df_sint_e
