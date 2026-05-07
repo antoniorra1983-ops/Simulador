@@ -17,18 +17,20 @@ from etl_parser import (
     calc_tren_km_real_general, clean_id, mins_to_time_str, clasificar_dia,
     cargar_prevenciones, get_vacios_dia
 )
+
 from motor_fisico import (
     calcular_termodinamica_flota_v111, calcular_receptividad_por_headway, 
     precalcular_red_electrica_v111,
-    km_at_t, vel_at_km, get_train_state_and_speed, simular_tramo_termodinamico_v131
+    km_at_t, vel_at_km, get_train_state_and_speed, simular_tramo_termodinamico
 )
+
 try:
     from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
     from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
 except:
     pass
 
-st.set_page_config(page_title="Simulador MERVAL V131", layout="wide", page_icon="🗺️")
+st.set_page_config(page_title="Simulador MERVAL", layout="wide", page_icon="🗺️")
 
 # =============================================================================
 # FUNCIONES DE SOPORTE PARA CARGA DE ARCHIVOS
@@ -151,7 +153,7 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
         pax_calculado = min(pax_calculado, cap_m)
         pax_arr_viaje = {k: min(v, cap_m) for k, v in pax_arr_viaje.items()}
 
-        trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico_v131(
+        trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico(
             r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
             pct_trac, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
             None, r.get('maniobra'), estacion_anio_plan, r['t_ini'], es_vacio=False, prevenciones=prevenciones
@@ -491,7 +493,7 @@ def main():
                         nodos_sb = [(0.0, km_acum_safe[i]) for i in (range(idx_o, idx_d + 1) if via_sb == 1 else range(idx_o, idx_d - 1, -1))]
                         
                         with st.spinner("Calculando termodinámica..."):
-                            trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb = simular_tramo_termodinamico_v131(
+                            trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb = simular_tramo_termodinamico(
                                 sb_flota, False, km_o, km_d, via_sb, pct_trac, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
                                 None, estacion_anio_plan, 480.0, es_vacio=False, prevenciones=prevenciones_list
                             )
@@ -515,7 +517,6 @@ def main():
                         except:
                             st.error(f"Simulación Física Completada: Tracción {trc_sb:.1f} kWh. (Red Eléctrica no conectada en GUI).")
 
-        # 💡 LANZAMIENTO DEL MOTOR SINTÉTICO
         if modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"]:
             if st.button("🚀 Ejecutar Gemelo Digital del Planificador", use_container_width=True, type="primary"):
                 st.session_state['simulacion_plan_lista'] = False
