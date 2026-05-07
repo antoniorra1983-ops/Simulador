@@ -319,7 +319,7 @@ def main():
         df_all['maniobra'] = None
         df_all['tren_km'] = df_all.apply(calc_tren_km_real_general, axis=1)
 
-    fechas = sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if str(d) != '2026-01-01' and pd.notna(d)]))) if not df_all.empty else []
+    fechas = sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)]))) if not df_all.empty else []
 
     # --- ESTRUCTURA DE TABS (DASHBOARD) ---
     tab_mapa, tab_datos, tab_planificador = st.tabs([
