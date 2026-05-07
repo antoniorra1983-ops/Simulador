@@ -720,7 +720,7 @@ def cargar_vacios_efe(data, fname):
     except Exception as e: return pd.DataFrame()
 
 def get_vacios_dia(df_dia):
-    # 💡 ESCUDO DEFENSIVO: Bypass de encapsulamiento para evitar NameError en Cloud
+    # 💡 ESCUDO DEFENSIVO NATIVO: Evita NameError en la nube
     cap_puerto = getattr(config, 'CAP_PUERTO', 4)
     cap_limache = getattr(config, 'CAP_LIMACHE', 16)
     
