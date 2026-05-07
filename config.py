@@ -1,5 +1,5 @@
 # config.py - Variables Globales e Infraestructura MERVAL
-# Versión Certificada v128: Perfiles de Potencia Segregados y Geometría de Vía
+# Versión Certificada v130: Genoma Completo de Flota y Termodinámica Segregada
 
 # =============================================================================
 # 1. INFRAESTRUCTURA Y RED
@@ -37,6 +37,7 @@ EST_LONS = [-71.62709,-71.62088,-71.61244,-71.60567,-71.59123,-71.57501,-71.5616
             -71.55180,-71.54315,-71.53346,-71.52104,-71.46888,-71.44453,-71.42884,
             -71.40651,-71.37354,-71.36594,-71.35302,-71.27771]
 
+# Restricciones físicas de parqueo (Stabling Plan de Lazo Cerrado)
 CAP_PUERTO  = 4
 CAP_BELLOTO = 16
 CAP_LIMACHE = 16
@@ -81,12 +82,12 @@ AUX_HVAC_HORA = {
     "primavera": [0.35,0.32,0.30,0.30,0.32,0.40, 0.50,0.58,0.65,0.70,0.72,0.75, 0.78,0.80,0.78,0.74,0.70,0.60, 0.55,0.50,0.45,0.40,0.38,0.36],
 }
 
-# Fracciones de carga según auditoría de potencia
+# Fracciones de carga (Componentes Vitales)
 FRAC_BASE = 0.12  # Carga Vital y TCMS
 FRAC_HVAC = 0.45  # Climatización Máxima Instalada
 
 # =============================================================================
-# 4. PERFIL DE VELOCIDADES DE VÍA (Circuitos de Vía en metros)
+# 4. PERFIL DE VELOCIDADES DE VÍA
 # =============================================================================
 SPEED_PROFILE = [
     (90.6,122.3,31.7,0,0),(122.3,215.3,93.0,52,43),(215.3,372.6,157.3,52,43),
@@ -129,7 +130,7 @@ SPEED_PROFILE = [
 ]
 
 # =============================================================================
-# 5. DICCIONARIO DE FLOTA CERTIFICADA 
+# 5. DICCIONARIO DE FLOTA CERTIFICADA (GENOMA COMPLETO V130)
 # =============================================================================
 FLOTA = {
     "XT-100": {
@@ -137,11 +138,11 @@ FLOTA = {
         "m_iner_t"     : 7.20,  
         "coches"       : 2,  
         "cap_sent"     : 94,  
-        "cap_max"      : 473,
+        "cap_max"      : 473,           # ALSTOM: 35.48t (Carga Máx / 75kg)
         "n_motores"    : 4,  
         "a_max_ms2"    : 1.0,  
         "a_freno_ms2"  : 1.2,
-        "jerk_ms3"     : 1.3,
+        "jerk_ms3"     : 1.3,           # ALSTOM: Dinámica certificada
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.92,  
         "davis_A"      : 1615.00,  
@@ -151,11 +152,12 @@ FLOTA = {
         "f_freno_max_kn": 105.0,  
         "p_max_kw"     : 720.0,
         "p_freno_max_kw": 600.0,
-        "aux_kw_cool"  : 58.76,         
-        "aux_kw_heat"  : 65.16,         
-        "p_compresor_kw": 3.68,  
-        "p_puertas_kw" : 0.9,    # 6 puertas x 150W (Apertura Unilateral)
-        "p_vent_trac_kw": 7.6    
+        "aux_kw_cool"  : 58.76,         # Techo Verano (HVAC 100%)
+        "aux_kw_heat"  : 65.16,         # Techo Invierno (Resistencias 100%)
+        "p_compresor_kw": 3.68,         # ALSTOM VFD Soft-Load
+        "p_puertas_kw" : 0.9,           # 6 puertas x 150W (Unilateral)
+        "p_vent_trac_kw": 7.6,          # Ventilación forzada
+        "f_compresor_dwell": 1.03       # +3% Neumática (Puertas/Frenos sin balonas)
     },
     "XT-M": {
         "tara_t"       : 95.0,  
@@ -168,7 +170,7 @@ FLOTA = {
         "a_freno_ms2"  : 1.2,
         "jerk_ms3"     : 0.8,
         "v_freno_min"  : 3.81,  
-        "eta_motor"    : 0.95,   # Eficiencia SEPSA certificada
+        "eta_motor"    : 0.95,          # Eficiencia Certificada SEPSA/Alstom
         "davis_A"      : 1440.60,  
         "davis_B"      : 0.00,
         "davis_C"      : 0.35,      
@@ -180,7 +182,8 @@ FLOTA = {
         "aux_kw_heat"  : 78.0,         
         "p_compresor_kw": 4.60,  
         "p_puertas_kw" : 0.9,    
-        "p_vent_trac_kw": 8.5
+        "p_vent_trac_kw": 8.5,
+        "f_compresor_dwell": 1.06       # +3% Base + 3% Balonas Neumáticas
     },
     "SFE": {
         "tara_t"       : 141.0,  
@@ -203,8 +206,9 @@ FLOTA = {
         "aux_kw_cool"  : 180.0,        
         "aux_kw_heat"  : 210.0,        
         "p_compresor_kw": 8.50,  
-        "p_puertas_kw" : 1.35,   # 9 puertas (unilateral 3 coches)
-        "p_vent_trac_kw": 11.4
+        "p_puertas_kw" : 1.35,          # 9 puertas x 150W (Unilateral)
+        "p_vent_trac_kw": 11.4,
+        "f_compresor_dwell": 1.08       # +3% Base + 5% Balonas masivas
     },
 }
 
@@ -216,6 +220,7 @@ feriados_2026 = [
 
 __all__ = [
     'ESTACIONES', 'EC', 'PAX_COLS', 'PAX_IDX', 'KM_TRAMO', 'KM_ACUM', 'KM_TOTAL', 'N_EST',
+    'CAP_PUERTO', 'CAP_BELLOTO', 'CAP_LIMACHE',
     'SER_DATA', 'SEAT_KM', 'SER_CAPACITY_KW', 'SEAT_CAPACITY_KW',
     'Z_EFF_44KV', 'R_AC_44KV', 'V_NOMINAL_AC',
     'ETA_TRAC_SISTEMA', 'ETA_REGEN_NETA', 'LAMBDA_REGEN_KM', 'ETA_SER_RECTIFICADOR', 'ETA_MAX',
