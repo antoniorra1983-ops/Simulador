@@ -7,9 +7,11 @@ from datetime import datetime, date, timedelta
 import config
 
 # =============================================================================
-# 1. UTILIDADES Y GEOMETRÍA
+# 1. UTILIDADES DE TIEMPO Y DÍAS
 # =============================================================================
+
 def clasificar_dia(d_str):
+    """Clasifica una fecha en Laboral, Sábado o Domingo/Festivo según config."""
     try:
         d = datetime.strptime(d_str, '%Y-%m-%d')
         try: feriados = getattr(config, 'feriados_2026', [])
@@ -22,6 +24,7 @@ def clasificar_dia(d_str):
         return 'Laboral'
 
 def mins_to_time_str(mins):
+    """Convierte minutos decimales a formato HH:MM:SS."""
     if pd.isna(mins) or np.isinf(mins): return '--:--:--'
     try:
         m_val = float(mins)
@@ -38,12 +41,14 @@ def mins_to_time_str(mins):
     except: return '--:--:--'
 
 def parse_time_to_mins(val):
+    """Convierte variados formatos de tiempo de Excel a minutos decimales."""
     if pd.isna(val): return None
     sv = str(val).strip().lower()
     if sv in ('', 'nan'): return None
     if ' ' in sv: sv = sv.split(' ')[-1]
     m = re.search(r'(\d{1,2}):(\d{2})(?::(\d{2}))?', sv)
-    if m: return int(m.group(1)) * 60.0 + int(m.group(2)) + (int(m.group(3)) / 60.0 if m.group(3) else 0.0)
+    if m: 
+        return int(m.group(1)) * 60.0 + int(m.group(2)) + (int(m.group(3)) / 60.0 if m.group(3) else 0.0)
     try:
         f = float(sv)
         if f < 1.0: return f * 1440.0
@@ -52,6 +57,7 @@ def parse_time_to_mins(val):
     return None
 
 def parse_excel_date(val):
+    """Parsea fechas de celdas de Excel (Serial o String)."""
     if pd.isna(val): return None
     if isinstance(val, (datetime, pd.Timestamp)): return val.strftime('%Y-%m-%d')
     v_str = re.sub(r'\.0+$', '', str(val).strip()).split(' ')[0]
@@ -80,7 +86,13 @@ def parse_excel_date(val):
             if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
     return None
 
+# =============================================================================
+# 2. PARSERS DE INFRAESTRUCTURA Y LIMPIEZA
+# =============================================================================
+
 def extraer_fecha_segura(df_raw, fname):
+    """Motor Regex avanzado para detectar la fecha operativa en nombres o celdas."""
+    # 1. Buscar en el nombre del archivo
     for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
         m = re.search(pat, str(fname))
         if m:
@@ -89,25 +101,18 @@ def extraer_fecha_segura(df_raw, fname):
             if mon > 12 and d <= 12: d, mon = mon, d
             if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
 
+    # 2. Buscar números continuos de 8 dígitos (AAAAMMDD o DDMMAAAA)
     s_fname = re.sub(r'\D', '', str(fname))
     for i in range(len(s_fname) - 7):
         match = s_fname[i:i+8]
         try:
             d, mon, y = int(match[:2]), int(match[2:4]), int(match[4:])
-            if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{mon:02d}-{d:02d}"
+            if 1 <= d <= 31 and 1 <= mon <= 12 and 2020 <= y <= 2100: return f"{y:04d}-{mon:02d}-{d:02d}"
             y2, mon2, d2 = int(match[:4]), int(match[4:6]), int(match[6:])
-            if 1 <= d2 <= 31 and 1 <= mon2 <= 12 and 2000 <= y2 <= 2100: return f"{y2:04d}-{mon2:02d}-{d2:02d}"
+            if 2020 <= y2 <= 2100 and 1 <= mon2 <= 12 and 1 <= d2 <= 31: return f"{y2:04d}-{mon2:02d}-{d2:02d}"
         except: pass
-        
-    for i in range(len(s_fname) - 5):
-        match = s_fname[i:i+6]
-        try:
-            d, mon, y = int(match[:2]), int(match[2:4]), int(match[4:])
-            if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99: return f"{2000+y:04d}-{mon:02d}-{d:02d}"
-            y2, mon2, d2 = int(match[:2]), int(match[2:4]), int(match[4:])
-            if 20 <= y2 <= 99 and 1 <= mon2 <= 12 and 1 <= d2 <= 31: return f"{2000+y2:04d}-{mon2:02d}-{d2:02d}"
-        except: pass
-            
+
+    # 3. Buscar en las primeras filas del DataFrame
     for i in range(min(50, len(df_raw))):
         row_vals = [str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)]
         row_str = ' '.join(row_vals)
@@ -115,21 +120,7 @@ def extraer_fecha_segura(df_raw, fname):
         if m_dt:
             y, mon, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
             if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
-        m_d = re.search(r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{4})\b', row_str)
-        if m_d:
-            d, mon, y = int(m_d.group(1)), int(m_d.group(2)), int(m_d.group(3))
-            if mon > 12 and d <= 12: d, mon = mon, d
-            if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
-        m_d2 = re.search(r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{2})\b', row_str)
-        if m_d2 and not row_str.replace(".", "").isdigit():
-            d, mon, y = int(m_d2.group(1)), int(m_d2.group(2)), int(m_d2.group(3))
-            if mon > 12 and d <= 12: d, mon = mon, d
-            if 1 <= d <= 31 and 1 <= mon <= 12: return f"{2000+y:04d}-{mon:02d}-{d:02d}"
-        for val in row_vals:
-            val_clean = val.split('.')[0]
-            if val_clean.isdigit() and 40000 <= int(val_clean) <= 60000:
-                try: return (date(1899, 12, 30) + timedelta(days=int(val_clean))).strftime('%Y-%m-%d')
-                except: pass
+    
     return "2026-01-01"
 
 def clean_primary_key(x):
@@ -143,12 +134,6 @@ def clean_id(x):
         return str(int(nums[0])) if nums else str(x).strip().upper()
     except: return str(x).strip().upper()
 
-def clean_pax_number(x):
-    if pd.isna(x): return 0
-    s = re.sub(r'[^\d]', '', re.sub(r'\.0+$', '', str(x).strip().lower()).replace('.', '').replace(',', ''))
-    try: return int(s) if s and s != 'nan' else 0
-    except: return 0
-
 def make_unique(df):
     if df.empty: return df
     cols = pd.Series(df.columns)
@@ -157,6 +142,7 @@ def make_unique(df):
     df.columns = cols
     return df
 
+# Normalización de estaciones para mapeo difuso
 try: est_lista = getattr(config, 'ESTACIONES', [])
 except Exception: est_lista = []
 
@@ -164,7 +150,7 @@ _EST_NORM = sorted({re.sub(r'[^a-z0-9]','', e.lower().replace('á','a').replace(
 
 def _col_to_est_idx(col):
     try: est = getattr(config, 'ESTACIONES', [])
-    except Exception: est = []
+    except Exception: return None
     if not est: return None
     
     cu = re.sub(r'[^a-z0-9]','', col.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
@@ -180,21 +166,6 @@ def _col_to_est_idx(col):
     for nk, idx in _EST_NORM:
         if nk in cu: return idx
     return None
-
-def interp_pos(km):
-    try: km_tot = getattr(config, 'KM_TOTAL', 43.13)
-    except Exception: km_tot = 43.13
-    try: km_acum = getattr(config, 'KM_ACUM', [])
-    except Exception: km_acum = []
-    try: est_lats = getattr(config, 'EST_LATS', [])
-    except Exception: est_lats = []
-    try: est_lons = getattr(config, 'EST_LONS', [])
-    except Exception: est_lons = []
-    
-    if not km_acum or not est_lats or not est_lons: return 0.0, 0.0
-    
-    km = max(0.0, min(float(km), km_tot))
-    return float(np.interp(km, km_acum, est_lats)), float(np.interp(km, km_acum, est_lons))
 
 def km_to_ec(km, tol=1.5):
     try: km_acum = getattr(config, 'KM_ACUM', [])
@@ -212,15 +183,15 @@ def svc_label(km_orig, km_dest):
     return f"{km_to_ec(km_orig)}-{km_to_ec(km_dest)}"
 
 def calc_tren_km_real_general(row):
-    k_s,k_e = min(row['km_orig'],row['km_dest']), max(row['km_orig'],row['km_dest'])
-    return abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0)
+    k_s, k_e = min(row['km_orig'], row['km_dest']), max(row['km_orig'], row['km_dest'])
+    return abs(k_e - k_s) * (2.0 if row.get('doble', False) else 1.0)
 
 # =============================================================================
-# 2. FUNCIONES DE LECTURA (ETL - PREVENCIONES, PASAJEROS Y THDR)
+# 3. LECTURA DE ARCHIVOS ESPECÍFICOS (PREVENCIONES, PASAJEROS, THDR)
 # =============================================================================
 
 def cargar_prevenciones(data, fname):
-    """ Extrae las Prevenciones (TSR) del archivo oficial y las limpia matemáticamente """
+    """Lee y normaliza el archivo de Prevenciones de Vía (TSR) de EFE."""
     try:
         ext = fname.lower()
         if ext.endswith('.csv'):
@@ -235,6 +206,7 @@ def cargar_prevenciones(data, fname):
         cols = [str(c).upper().strip() for c in df.columns]
         df.columns = cols
         
+        # Mapeo inteligente de columnas
         c_ini = next((c for c in cols if 'INICIO' in c or 'PK INI' in c), None)
         c_fin = next((c for c in cols if 'FIN' in c or 'PK FIN' in c), None)
         c_via = next((c for c in cols if 'VIA' in c or 'VÍA' in c), None)
@@ -250,29 +222,23 @@ def cargar_prevenciones(data, fname):
                 continue
                 
             try:
-                v1_str = str(row[c_ini]).replace(',', '.')
-                v2_str = str(row[c_fin]).replace(',', '.')
-                v1 = float(v1_str)
-                v2 = float(v2_str)
+                # Normalización de comas por puntos (errores humanos comunes en Chile)
+                v1 = float(str(row[c_ini]).replace(',', '.'))
+                v2 = float(str(row[c_fin]).replace(',', '.'))
                 via = int(float(str(row[c_via]).replace(',', '.')))
                 
+                # Extracción de velocidad numérica vía Regex
                 vel_str = str(row[c_vel])
                 vel_match = re.search(r'(\d+)', vel_str)
-                if vel_match:
-                    vel = float(vel_match.group(1))
-                else:
-                    continue
+                if vel_match: vel = float(vel_match.group(1))
+                else: continue
                     
+                # ORDENAMIENTO: min/max soluciona el error de PK invertidos (ej Barón 2.9 a 0.9)
                 km_min, km_max = min(v1, v2), max(v1, v2)
-                prevenciones.append({
-                    'via': via,
-                    'km_min': km_min,
-                    'km_max': km_max,
-                    'v_kmh': vel
-                })
-            except Exception: pass
+                prevenciones.append({'via': via, 'km_min': km_min, 'km_max': km_max, 'v_kmh': vel})
+            except: pass
         return prevenciones
-    except Exception: return []
+    except: return []
 
 def get_perfiles_pax(df_px):
     if df_px.empty: return {}
@@ -641,8 +607,8 @@ def match_pax(row, df_pax):
         sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
         match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
         if not match_exacto.empty:
-            best = match_exacto.iloc[0]
-            return {c: _to_int(best.get(c, 0)) for c in pcols}, _to_int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR', '')), best.name
+            best_match = match_exacto.iloc[0]
+            return {c: _to_int(best_match.get(c, 0)) for c in pcols}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
 
     if pd.notna(t_i):
         best_match = sub.loc[sub['diff'].idxmin()]
@@ -819,6 +785,7 @@ def parsear_planilla_maestra(data, fname):
         return df_viajes, "ok"
     except Exception as e: return pd.DataFrame(), str(e)
 
+# STUBS DE SEGURIDAD (Evitan ImportError para la Tabla de Vacíos y garantizan la SSOT)
 def cargar_vacios_efe(data, fname):
     return pd.DataFrame()
 
