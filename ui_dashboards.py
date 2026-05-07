@@ -536,7 +536,6 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             pax_v = int(row.get('pax_inst', 0))
             masa_total = tara_base + ((pax_v * PAX_KG) / 1000.0)
             
-            # 💡 FIX: Inyectamos el Termostato Estacional Inteligente (Bottom-Up)
             if estacion_anio == "invierno":
                 aux_nominal_unidad = f_flota.get('aux_kw_heat', f_flota.get('aux_kw', 65.16))
             else:
@@ -557,7 +556,6 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                 if n_unidades == 2: f_davis = (f_flota['davis_A'] * 2) + (f_flota['davis_B'] * 2 * v_kmh) + (f_flota['davis_C'] * 1.35 * (v_kmh**2))
                 else: f_davis = f_flota['davis_A'] + f_flota['davis_B'] * v_kmh + f_flota['davis_C'] * (v_kmh**2)
                 
-                # 💡 LLAMADA BOTTOM-UP: Cero "hardcodes" antiguos.
                 p_aux_kw = calcular_aux_dinamico(aux_nominal_unidad * n_unidades, hora_m1 / 60.0, pax_v, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state, p_vent_max)
                 eta_m = f_flota.get('eta_motor', 0.92)
                 
@@ -903,12 +901,16 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         with a3: st.metric("📏 Tren-km", f"{km_ac:,.0f}")
         with a4: st.metric("⚡ kWh SERs", f"{total_ser_kwh_44kv:,.0f}")
 
+        # 💡 FIX APLICADO: Escudo protector contra KeyError de "pax_row_idx" (Single Source of Truth)
         if prefix_key == "plan":
             pax_ac = int(df_inic['pax_abordo'].sum()) if not df_inic.empty else 0
         else:
             if not df_inic.empty:
-                df_inic_pax = df_inic[df_inic['pax_row_idx'] != -1].drop_duplicates(subset=['pax_row_idx'])
-                pax_ac = int(df_inic_pax['pax_abordo'].sum())
+                if 'pax_row_idx' in df_inic.columns:
+                    df_inic_pax = df_inic[df_inic['pax_row_idx'] != -1].drop_duplicates(subset=['pax_row_idx'])
+                    pax_ac = int(df_inic_pax['pax_abordo'].sum())
+                else:
+                    pax_ac = int(df_inic['pax_abordo'].sum())
             else:
                 pax_ac = 0
 
