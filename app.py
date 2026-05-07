@@ -26,7 +26,7 @@ from motor_fisico import (
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
 
-st.set_page_config(page_title="Simulador MERVAL V129", layout="wide", page_icon="🗺️")
+st.set_page_config(page_title="Simulador MERVAL V130", layout="wide", page_icon="🗺️")
 
 # =============================================================================
 # FUNCIONES DE SOPORTE PARA CARGA DE ARCHIVOS
@@ -157,7 +157,7 @@ def main():
         st.divider()
         st.subheader("🔌 Configuración de Red")
         
-        # 💡 ESCUDO DEFENSIVO ESTRICTO PARA EVITAR INDEX ERROR (PANTALLA EN BLANCO)
+        # Escudo defensivo para SER_DATA
         try: 
             ser_data_safe = getattr(config, 'SER_DATA', [])
             if not ser_data_safe:
@@ -201,10 +201,19 @@ def main():
             if 'Tren_Clean' not in df_px.columns: 
                 df_px['Tren_Clean'] = df_px['Tren'].apply(clean_id) if 'Tren' in df_px.columns else ''
             with st.spinner("Sincronizando flujos de pasajeros..."):
+                # 💡 FIX APLICADO: Extracción completa (5 datos) para evitar KeyError 'pax_row_idx'
                 pax_res = df_all.apply(lambda r: match_pax(r, df_px), axis=1)
-                df_all['pax_d'], df_all['pax_abordo'] = [x[0] for x in pax_res], [x[1] for x in pax_res]
+                df_all['pax_d'] = [x[0] for x in pax_res]
+                df_all['pax_abordo'] = [x[1] for x in pax_res]
+                df_all['hora_origen_pax'] = [x[2] for x in pax_res]
+                df_all['nro_thdr_pax'] = [x[3] for x in pax_res]
+                df_all['pax_row_idx'] = [x[4] for x in pax_res]
         else:
-            df_all['pax_d'], df_all['pax_abordo'] = [{} for _ in range(len(df_all))], 0
+            df_all['pax_d'] = [{} for _ in range(len(df_all))]
+            df_all['pax_abordo'] = 0
+            df_all['hora_origen_pax'] = '--:--:--'
+            df_all['nro_thdr_pax'] = 'No Detectado'
+            df_all['pax_row_idx'] = -1
             
         df_all['maniobra'] = None
         
@@ -390,7 +399,7 @@ def main():
                         st.session_state['plan_ready'], st.session_state['plan_res'], st.session_state['plan_res_e'] = True, res, res_e
 
         if st.session_state.get('plan_ready', False) and modo_plan != "Laboratorio (Tramo Único)":
-            render_gemelo_digital(st.session_state['plan_res'], st.session_state['plan_res_e'], active_sers, f"Simulación: {tipo_dia_plan}", pct_trac, use_rm, use_pend, est_plan, "plan", gap_vias)
+            render_gemelo_digital(st.session_state['plan_res'], st.session_state['plan_res_e'], active_sers, f"Simulación: {tipo_dia_plan}", pct_trac, use_rm, use_pend, est_plan, "plan", gap_vias, pax_dia_total=0)
 
 if __name__ == "__main__": 
     main()
