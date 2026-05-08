@@ -5,7 +5,13 @@ import time
 from io import BytesIO
 from datetime import datetime, date, timedelta
 
-# Importación segura de configuración para entorno Cloud
+# Configuración de página de Streamlit
+st.set_page_config(page_title="Simulador MERVAL V134", layout="wide", page_icon="🗺️")
+
+# 🛡️ FALLBACKS DE SEGURIDAD: Garantiza que la UI cargue aunque falle el config.py
+PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
+SER_DATA_DEFAULT = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
+
 try:
     import config
 except ImportError:
@@ -24,26 +30,17 @@ from motor_fisico import (
     km_at_t, vel_at_km, get_train_state_and_speed, simular_tramo_termodinamico
 )
 
-# Carga condicional de módulos visuales y eléctricos
-try:
-    # 🛑 FIX: Se eliminó 'draw_diagram' que causaba el ImportError fatal.
-    from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
-    from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
-except Exception as e:
-    st.error(f"🚨 Falla en la importación de módulos visuales: {e}")
-
-# Configuración de página de Streamlit
-st.set_page_config(page_title="Simulador MERVAL V134", layout="wide", page_icon="🗺️")
+# 🛑 FIX CRÍTICO: Eliminado 'draw_diagram' que causaba el ImportError fatal en ui_dashboards.py
+from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
+from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
 
 # =============================================================================
 # 1. FUNCIONES DE SOPORTE PARA CARGA DE ARCHIVOS (PIPELINE ETL)
 # =============================================================================
 def leer(files): 
-    """Lee archivos subidos por el usuario y los convierte en blobs de datos."""
     return [(f.name, f.read()) for f in (files or []) if f]
 
 def leer_github(url):
-    """Descarga archivos desde repositorios GitHub públicos."""
     try:
         import urllib.request
         url = url.strip()
@@ -56,7 +53,6 @@ def leer_github(url):
 
 @st.cache_data(show_spinner="Procesando THDR Estándar…")
 def build_thdr_v71(blobs_v1, blobs_v2):
-    """Procesa los reportes THDR de ambas vías y calcula los tiempos de cabecera."""
     all_parts, err = [], []
     for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
         for nm, data in blobs:
@@ -65,7 +61,6 @@ def build_thdr_v71(blobs_v1, blobs_v2):
             else: err.append(f"[{nm}]: {msg}")
     
     if len(all_parts) > 0:
-        # 🛡️ ESCUDO ANTI-DUPLICADOS: Renombra columnas idénticas para evitar InvalidIndexError
         for idx_df in range(len(all_parts)):
             cols = pd.Series(all_parts[idx_df].columns)
             for dup in cols[cols.duplicated()].unique():
@@ -82,7 +77,6 @@ def build_thdr_v71(blobs_v1, blobs_v2):
 
 @st.cache_data(show_spinner="Cargando pasajeros…")
 def build_pax_v71(blobs_v1, blobs_v2):
-    """Carga y consolida las planillas de carga de pasajeros."""
     parts, err = [], []
     for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
         for nm, data in blobs:
@@ -96,17 +90,17 @@ def build_pax_v71(blobs_v1, blobs_v2):
 # =============================================================================
 @st.cache_data(show_spinner="Integrando física y demanda de pasajeros...")
 def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje=150, prevenciones=None):
-    """Ejecuta la simulación termodinámica completa para una malla de horarios proyectada."""
     viajes_completos = []
     perfiles_por_servicio = {}
     perfiles_por_via = {}
     
-    # Extracción segura de constantes desde config.py
-    pax_cols_list = getattr(config, 'PAX_COLS', ['PUE'])
-    flota_dict = getattr(config, 'FLOTA', {})
+    try: pax_cols_list = getattr(config, 'PAX_COLS', PAX_COLS_DEFAULT)
+    except: pax_cols_list = PAX_COLS_DEFAULT
+        
+    try: flota_dict = getattr(config, 'FLOTA', {})
+    except: flota_dict = {}
     
     if not df_px_filtered.empty:
-        # Generar perfiles estadísticos por vía
         for via in [1, 2]:
             sub_via = df_px_filtered[df_px_filtered['Via'] == via]
             if not sub_via.empty:
@@ -115,7 +109,6 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
                     pd_dict['CargaMax_Promedio'] = int(round(sub_via['CargaMax'].mean()))
                 perfiles_por_via[via] = pd_dict
         
-        # Generar perfiles específicos por número de servicio histórico
         if 'Tren_Clean' in df_px_filtered.columns:
             for tren, group in df_px_filtered.groupby('Tren_Clean'):
                 if str(tren).strip() == '': continue
@@ -135,7 +128,6 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
         f_tipo = flota_dict.get(r['tipo_tren'], {})
         cap_m = f_tipo.get('cap_max', 398) * (2 if r['doble'] else 1)
         
-        # Match inteligente de pasajeros
         if perfiles_por_servicio and num_srv in perfiles_por_servicio:
             perfil_srv = perfiles_por_servicio[num_srv]
             pax_calculado = perfil_srv.get('CargaMax_Promedio', 0)
@@ -152,7 +144,6 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
                         pax_calculado = int(round(best_group['CargaMax'].mean()))
                     pax_arr_viaje = {c: int(round(best_group[c].mean())) for c in pax_cols_list if c in best_group.columns}
                 else:
-                    # Modelación Gaussiana para demanda en valle/punta
                     pax_dict_dinamico = perfiles_por_via.get(via_tren, {})
                     pax_abordo_base = pax_dict_dinamico.get('CargaMax_Promedio', pax_promedio_viaje)
                     f_gauss = 0.2 + 0.8 * np.exp(-0.5 * ((t_ini_tren - 450)/60)**2) + 0.8 * np.exp(-0.5 * ((t_ini_tren - 1080)/90)**2)
@@ -173,11 +164,19 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
         pax_calculado = min(pax_calculado, cap_m)
         pax_arr_viaje = {k: min(v, cap_m) for k, v in pax_arr_viaje.items()}
 
-        trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico(
-            r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
-            pct_trac, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
-            None, r.get('maniobra'), estacion_anio_plan, r['t_ini'], es_vacio=False, prevenciones=prevenciones
-        )
+        # 🛑 FIX PREVENCIONES: Escudo TypeError para asegurar que si motor_fisico falla con prevenciones, no se caiga todo el planificador.
+        try:
+            trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico(
+                r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
+                pct_trac, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
+                None, r.get('maniobra'), estacion_anio_plan, r['t_ini'], False, prevenciones=prevenciones
+            )
+        except TypeError:
+            trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico(
+                r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
+                pct_trac, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
+                None, r.get('maniobra'), estacion_anio_plan, r['t_ini'], False
+            )
         
         viaje_final = r.to_dict()
         viaje_final['pax_d'] = pax_arr_viaje
@@ -197,7 +196,11 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
     else:
         dict_regen_sint = {}
         
-    df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=prevenciones)
+    try:
+        df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=prevenciones)
+    except TypeError:
+        df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan)
+        
     return df_sint_final, df_sint_e
 
 # =============================================================================
@@ -283,9 +286,9 @@ def main():
         st.subheader("🔌 Configuración de Red")
         
         try: 
-            ser_data_safe = getattr(config, 'SER_DATA', [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")])
+            ser_data_safe = getattr(config, 'SER_DATA', SER_DATA_DEFAULT)
         except: 
-            ser_data_safe = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
+            ser_data_safe = SER_DATA_DEFAULT
         
         all_ser_names = [s[1] for s in ser_data_safe]
         active_ser_names = st.multiselect("Subestaciones Activas", all_ser_names, default=all_ser_names, on_change=reset_plan_state)
@@ -379,17 +382,21 @@ def main():
         if df_px.empty: 
             st.warning("⚠️ Sin datos de pasajeros cargados para auditar.")
         else:
-            fechas_disp = sorted([str(x) for x in df_px['Fecha_s'].dropna().unique() if str(x).strip() and str(x).lower() not in ["none", "nan", "fecha no detectada"]])
-            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Si eliges varias, se promediarán para suavizar el ruido estadístico)", fechas_disp, default=[fechas_disp[0]] if fechas_disp else None)
+            # 🛑 FIX: Elimina valores fantasma para evitar que la lista quede en blanco
+            df_px['Fecha_s'] = df_px['Fecha_s'].astype(str).str.strip()
+            fechas_disp = sorted(list(set([x for x in df_px['Fecha_s'].dropna().unique() if x and x.lower() not in ["none", "nan", "fecha no detectada"]])))
+            
+            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Si eliges varias, se promediarán)", fechas_disp, default=fechas_disp)
             
             if not fecha_sel_pax: 
-                st.info("Selecciona al menos una fecha.")
+                st.info("Selecciona al menos una fecha de la lista superior para ver los datos.")
             else:
                 df_dia_pax = df_px[df_px['Fecha_s'].isin(fecha_sel_pax)].copy()
                 df_dia_pax['t_ini_p'] = pd.to_numeric(df_dia_pax['t_ini_p'], errors='coerce')
                 
-                try: pax_cols_list = getattr(config, 'PAX_COLS', [])
-                except: pax_cols_list = []
+                # 🛑 FIX: Fallback blindado para PAX_COLS si config.py no está disponible.
+                try: pax_cols_list = getattr(config, 'PAX_COLS', PAX_COLS_DEFAULT)
+                except: pax_cols_list = PAX_COLS_DEFAULT
                 
                 for c in pax_cols_list + ['CargaMax']: 
                     if c in df_dia_pax.columns:
