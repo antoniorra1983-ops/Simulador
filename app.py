@@ -35,7 +35,7 @@ from motor_fisico import (
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 
 # =============================================================================
-# 1. FUNCIONES DE CARGA CON CACHÉ DE FIRMA (RENDIMIENTO V134)
+# 1. FUNCIONES DE CARGA Y AGRUPACIÓN (RESTAURADAS EN APP.PY PARA SEGURIDAD)
 # =============================================================================
 def leer(files): 
     return [(f.name, f.read()) for f in (files or []) if f]
@@ -52,10 +52,43 @@ def leer_github(url):
     except Exception as e: 
         return None, str(e)
 
+# 🚀 Funciones Agrupadoras: Se devuelven a app.py para evitar AttributeError
+def build_thdr_v71(blobs_v1, blobs_v2):
+    all_parts, err = [], []
+    for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
+        for nm, data in blobs:
+            df, msg = procesar_thdr(data, nm, via_default)
+            if not df.empty: all_parts.append(df)
+            else: err.append(f"[{nm}]: {msg}")
+    
+    if len(all_parts) > 0:
+        for idx_df in range(len(all_parts)):
+            cols = pd.Series(all_parts[idx_df].columns)
+            for dup in cols[cols.duplicated()].unique():
+                cols[cols==dup] = [f"{dup}_{i}" if i else dup for i in range(sum(cols==dup))]
+            all_parts[idx_df].columns = cols
+
+        df_master = pd.concat(all_parts, ignore_index=True)
+        df1 = df_master[df_master['Via'] == 1].copy()
+        df2 = df_master[df_master['Via'] == 2].copy()
+        if not df1.empty and not df2.empty:
+            df1, df2 = calcular_dwell(df1, df2)
+        return df1, df2, err
+    return pd.DataFrame(), pd.DataFrame(), err
+
+def build_pax_v71(blobs_v1, blobs_v2):
+    parts, err = [], []
+    for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
+        for nm, data in blobs:
+            try: parts.append(cargar_pax(data, nm, via_default))
+            except Exception as e: err.append(f"[{nm}]: {e}")
+    if len(parts) > 0: return pd.concat(parts, ignore_index=True), err
+    return pd.DataFrame(), err
+
 @st.cache_data(show_spinner="Consolidando viajes y sincronizando pasajeros...")
 def procesar_datos_completos(_b1, _b2, _bx1, _bx2, sig_pesada):
-    df1, df2, err_t = etl_parser.build_thdr_v71(_b1, _b2)
-    df_px, err_p = etl_parser.build_pax_v71(_bx1, _bx2)
+    df1, df2, err_t = build_thdr_v71(_b1, _b2)
+    df_px, err_p = build_pax_v71(_bx1, _bx2)
     
     dfs_to_concat = [d for d in [df1, df2] if not d.empty]
     df_all = pd.concat(dfs_to_concat, ignore_index=True).drop_duplicates(subset=['_id']) if dfs_to_concat else pd.DataFrame()
@@ -500,7 +533,7 @@ def main():
                 if st.button("⚡ Simular Tramo", use_container_width=True):
                     if sb_orig != sb_dest:
                         idx_o, idx_d = est_safe.index(sb_orig), est_safe.index(sb_dest)
-                        try: km_acum_safe = getattr(config, 'KM_ACUM', [0.0, 43.13])
+                        try: km_acum_safe = getattr(config, 'KM_ACUM', [])
                         except NameError: km_acum_safe = [0.0, 43.13]
                         if not km_acum_safe: km_acum_safe = [0.0, 43.13]
                         
