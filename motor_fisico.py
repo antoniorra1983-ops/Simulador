@@ -202,15 +202,14 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
 
             f_motor, f_regen_tramo, a_net_target = 0.0, 0.0, 0.0
             
-            # 🚀 FIX ENERGÉTICO Y DE PARADAS (El Tren ya no se pasa de largo)
             if estado_marcha == "BRAKE_STATION":
                 f_req_freno = masa_kg * a_freno_op - f_davis - f_pend
                 f_regen_tramo = min(max(0.0, f_req_freno), min(f_freno_max_const, p_freno_max_const/max(0.1, v_ms)))
-                a_net_target = -a_freno_op # Clavamos la fuerza de frenado. Los frenos neumáticos completan el resto
+                a_net_target = -a_freno_op 
             elif estado_marcha == "BRAKE_OVERSPEED":
                 f_req_freno = masa_kg * 0.4 - f_davis - f_pend
                 f_regen_tramo = min(max(0.0, f_req_freno), min(f_freno_max_const, p_freno_max_const/max(0.1, v_ms)))
-                a_net_target = -0.4 # Freno suave para estabilizar velocidad
+                a_net_target = -0.4 
             elif estado_marcha == "ACCEL":
                 f_motor = min(f_trac_max_const, p_trac_max_const / max(0.1, v_ms))
                 a_net_target = (f_motor - f_davis - f_pend) / masa_kg
@@ -232,17 +231,18 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             step_m = (v_ms + v_new) / 2.0 * dt_actual
             if step_m > dist_restante: step_m = dist_restante
             
-            # 🚀 FIX ANTI BUCLE INFINITO (Si el tren se arrastra, salta al final)
+            # 🚀 ESCUDO ANTI-STALL (Evita el bucle infinito)
             if v_ms < 0.1 and v_new < 0.1 and dist_restante > 0:
                 v_new = 2.0
                 step_m = dist_restante
                 dt_actual = step_m / 2.0
             
+            # 💡 ¡CORRECCIÓN CRÍTICA DE ENERGÍA! (De 3600 a 3,600,000 para pasar de Joules a kWh)
             if f_motor > 0: 
                 eta_din = f.get('eta_motor', 0.92) * (1.0 - 0.2 * (1.0 - max(0.1, f_motor / max(1.0, f_trac_max_const)))**3)
-                trc += ((f_motor * step_m) / 3600.0) / eta_din
+                trc += ((f_motor * step_m) / 3600000.0) / eta_din
             if f_regen_tramo > 0 and v_kmh >= v_freno_min_const: 
-                reg += ((f_regen_tramo * step_m) / 3600.0) * eta_regen_neta
+                reg += ((f_regen_tramo * step_m) / 3600000.0) * eta_regen_neta
                 
             aux += (calcular_aux_dinamico(aux_nominal_u * n_uni, (t_ini_mins + t_horas * 60.0) / 60.0, pax_mid, f.get('cap_max', 398) * n_uni, estacion_anio, estado_marcha, f_comp_spec) * (dt_actual / 3600.0))
             t_horas += dt_actual / 3600.0
@@ -278,7 +278,6 @@ def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
 def precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio="primavera"):
     return {idx: 0.70 for idx in df_dia.index}
 
-# 🚀 FIX DE LA FIRMA (Agregamos 'prevenciones=None' para que el orquestador no choque)
 def calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio="primavera", prevenciones=None):
     df_e = df_dia.copy()
     if df_e.empty: return df_e
