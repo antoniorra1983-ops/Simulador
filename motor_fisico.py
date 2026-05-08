@@ -1,12 +1,8 @@
+import streamlit as st
 import numpy as np
 import pandas as pd
 import config
-
-try:
-    from etl_parser import get_pax_at_km_nativo
-except ImportError:
-    def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0):
-        return pax_max_fallback
+from etl_parser import get_pax_at_km_nativo
 
 def vel_at_km(km_km, via, use_rm):
     sp = getattr(config, 'SPEED_PROFILE', [])
@@ -55,11 +51,7 @@ def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos, t_arr=N
 
 def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", f_compresor_dwell=1.03):
     hora_int = int(hora_decimal) % 24
-    try:
-        perfil = getattr(config, '_AUX_HVAC_HORA', {}).get(estacion_anio, [0.5]*24)
-    except Exception:
-        perfil = [0.5]*24
-        
+    perfil = getattr(config, '_AUX_HVAC_HORA', {}).get(estacion_anio, [0.5]*24)
     frac_hvac = getattr(config, '_FRAC_HVAC', 0.7)
     frac_base = getattr(config, '_FRAC_BASE', 0.3)
     f_hvac = perfil[hora_int]
@@ -84,13 +76,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     f = flota.get(tipo_tren, flota.get("XT-100", {}))
     
     km_total = getattr(config, 'KM_TOTAL', 43.13)
-    try:
-        elev_km = getattr(config, '_ELEV_KM', [])
-        elev_m = getattr(config, '_ELEV_M', [])
-    except Exception:
-        elev_km = []
-        elev_m = []
-        
+    elev_km = getattr(config, '_ELEV_KM', [])
+    elev_m = getattr(config, '_ELEV_M', [])
     pax_kg = getattr(config, 'PAX_KG', 75.0)
     eta_regen_neta = getattr(config, 'ETA_REGEN_NETA', 0.72)
     
@@ -121,7 +108,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
         f_trac_max_const = f.get('f_trac_max_kn', 110.0) * 1000 * n_uni * (pct_trac / 100.0)
         p_trac_max_const = f.get('p_max_kw', 720.0) * 1000 * n_uni * (pct_trac / 100.0)
         f_freno_max_const = f.get('f_freno_max_kn', 105.0) * 1000 * n_uni
-        p_freno_max_const = f.get('p_freno_max_kw', 800.0) * 1000 * n_uni 
+        p_freno_max_const = 800.0 * 1000 * n_uni 
         v_freno_min_const = f.get('v_freno_min', 3.81)
         jerk_limit = 1.3 * dt
         eta_motor_const = f.get('eta_motor', 0.92)
@@ -167,10 +154,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 f_req_f = max(0.0, masa_kg * a_freno_op - f_davis - f_pend)
                 f_regen_tramo = min(f_req_f, min(f_freno_max_const, p_freno_max_const/max(0.1, v_ms)))
                 a_net_target = max(-a_freno_op, (-f_regen_tramo - f_davis - f_pend) / masa_kg)
-            elif estado_marcha == "BRAKE_OVERSPEED":
-                f_req_f = max(0.0, masa_kg * 0.4 - f_davis - f_pend)
-                f_regen_tramo = min(f_req_f, min(f_freno_max_const, p_freno_max_const/max(0.1, v_ms)))
-                a_net_target = min((-f_regen_tramo - f_davis - f_pend) / masa_kg, -0.15)
             elif estado_marcha == "ACCEL":
                 f_motor = min(f_trac_max_const, p_trac_max_const / max(0.1, v_ms))
                 a_net_target = (f_motor - f_davis - f_pend) / masa_kg
