@@ -5,14 +5,14 @@ import time
 from io import BytesIO
 from datetime import datetime, date, timedelta
 
-# Importación segura de configuración (Escudo NameError)
+# Importación segura para la nube
 try:
     import config
     from config import *
 except ImportError:
     pass
 
-# Importación de Módulos (Arquitectura Modular SOLID)
+# Módulos de Arquitectura Separada
 from etl_parser import (
     procesar_thdr, calcular_dwell, cargar_pax, match_pax, 
     get_perfiles_pax, parsear_planilla_maestra, 
@@ -24,10 +24,14 @@ from motor_fisico import (
     precalcular_red_electrica_v111,
     km_at_t, vel_at_km, get_train_state_and_speed, simular_tramo_termodinamico
 )
-from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
-from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
 
-st.set_page_config(page_title="Simulador MERVAL V131", layout="wide", page_icon="🗺️")
+try:
+    from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112, draw_diagram
+    from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
+except ImportError:
+    pass
+
+st.set_page_config(page_title="Simulador MERVAL V132", layout="wide", page_icon="🗺️")
 
 # =============================================================================
 # FUNCIONES DE SOPORTE PARA CARGA DE ARCHIVOS
@@ -233,6 +237,7 @@ def main():
                         st.session_state[key] = []; st.rerun()
 
         st.subheader("Carga de Planillas Locales")
+        # 🚀 RESTAURACIÓN DE LA ARQUITECTURA DE ARCHIVOS: Todos los Uploaders devueltos a la vida.
         f_v1 = st.file_uploader("THDR Vía 1 (Puerto→Limache)", accept_multiple_files=True, key="t1")
         f_v2 = st.file_uploader("THDR Vía 2 (Limache→Puerto)", accept_multiple_files=True, key="t2")
         f_px1 = st.file_uploader("Pasajeros Vía 1", accept_multiple_files=True, key="px1")
@@ -258,7 +263,7 @@ def main():
         
         try: 
             ser_data_safe = getattr(config, 'SER_DATA', [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")])
-        except NameError: 
+        except: 
             ser_data_safe = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
         
         all_ser_names = [s[1] for s in ser_data_safe]
@@ -273,23 +278,26 @@ def main():
     def _all_blobs_internal(f_uploader, gh_key): 
         return tuple(leer(f_uploader) + st.session_state.get(gh_key, []))
 
-    b1, b2 = _all_blobs_internal(f_v1, "gh_blobs_v1"), _all_blobs_internal(f_v2, "gh_blobs_v2")
-    bx1, bx2 = _all_blobs_internal(f_px1, "gh_blobs_px1"), _all_blobs_internal(f_px2, "gh_blobs_px2")
-    b_prev = _all_blobs_internal(f_prev, "gh_blobs_prev")
-    
-    prevenciones_list = []
-    for nm, data in b_prev:
-        try:
-            prevs = cargar_prevenciones(data, nm)
-            if prevs: prevenciones_list.extend(prevs)
-        except: pass
-    
-    df1, df2, err_t = build_thdr_v71(b1, b2)
-    df_px, err_p = build_pax_v71(bx1, bx2)
-    
-    dfs_to_concat = [d for d in [df1, df2] if not d.empty]
-    df_all = pd.concat(dfs_to_concat, ignore_index=True).drop_duplicates(subset=['_id']) if dfs_to_concat else pd.DataFrame()
+    # 🚀 RESTAURACIÓN DEL PIPELINE DE DATOS: Lee cualquier archivo disponible sin bloqueos.
+    b1 = _all_blobs_internal(f_v1, "gh_blobs_v1")
+    b2 = _all_blobs_internal(f_v2, "gh_blobs_v2")
+    bx1 = _all_blobs_internal(f_px1, "gh_blobs_px1")
+    bx2 = _all_blobs_internal(f_px2, "gh_blobs_px2")
+        f_v1 = st.file_uploader("THDR V1", accept_multiple_files=True, key="h1")
+        f_v2 = st.file_uploader("THDR V2", accept_multiple_files=True, key="h2")
+        f_pax_ref = st.file_uploader("Pasajeros Ref", accept_multiple_files=True, key="px_r")
 
+    # Procesamiento de datos globales
+    b1 = leer(f_v1) + st.session_state.get('gh_blobs_v1', [])
+    b2 = leer(f_v2) + st.session_state.get('gh_blobs_v2', [])
+    bx1 = leer(f_pax_ref) + st.session_state.get('gh_blobs_px1', [])
+    bx2 = st.session_state.get('gh_blobs_px2', [])
+
+    df1, df2, _ = build_thdr_v71(b1, b2) if (b1 or b2) else (pd.DataFrame(), pd.DataFrame(), [])
+    df_px, _ = build_pax_v71(bx1, bx2) if (bx1 or bx2) else (pd.DataFrame(), [])
+    
+    df_all = pd.concat([df1, df2], ignore_index=True) if not df1.empty or not df2.empty else pd.DataFrame()
+    
     if not df_all.empty:
         if not df_px.empty:
             if 'Tren_Clean' not in df_px.columns: 
@@ -350,7 +358,8 @@ def main():
                 df_dia_pax = df_px[df_px['Fecha_s'].isin(fecha_sel_pax)].copy()
                 df_dia_pax['t_ini_p'] = pd.to_numeric(df_dia_pax['t_ini_p'], errors='coerce')
                 
-                pax_cols_list = getattr(config, 'PAX_COLS', [])
+                try: pax_cols_list = getattr(config, 'PAX_COLS', [])
+                except: pax_cols_list = []
                 
                 for c in pax_cols_list + ['CargaMax']: 
                     if c in df_dia_pax.columns:
@@ -427,6 +436,7 @@ def main():
                     )
                     
                     if fechas_sel_plan:
+                        st.success(f"✅ Promediando demanda de {len(fechas_sel_plan)} día(s) tipo {tipo_dia_plan}.")
                         nombre_perfil = f"Promedio Real ({len(fechas_sel_plan)} días {tipo_dia_plan})"
                         df_px_filtered = df_px[df_px['Fecha_s'].isin(fechas_sel_plan)].copy()
                     else: 
@@ -451,7 +461,7 @@ def main():
                     if df_temp.empty: 
                         st.error(f"Error procesando: {msg}")
                     else:
-                        st.success("✅ Planilla decodificada. Distribuye la flota por trayecto:")
+                        st.success("✅ Planilla decodificada. Distribuye la flota por trayecto (Rolling Stock Rostering):")
                         rutas_unicas = list(df_temp['svc_type'].value_counts().keys())
                         if 'flota_map_v2' not in st.session_state or set(st.session_state['flota_map_v2']['Ruta']) != set(rutas_unicas):
                             st.session_state['flota_map_v2'] = pd.DataFrame([{"Ruta": r, "Total Viajes": df_temp['svc_type'].value_counts()[r], "XT-100": df_temp['svc_type'].value_counts()[r], "XT-M": 0, "SFE": 0} for r in rutas_unicas])
@@ -462,8 +472,9 @@ def main():
             
             elif modo_plan == "Laboratorio (Tramo Único)":
                 try: est_safe = getattr(config, 'ESTACIONES', [])
-                except NameError: est_safe = ['Puerto', 'Limache']
-                
+                except NameError: est_safe = ['Puerto', 'Bellavista', 'Francia', 'Baron', 'Portales', 'Recreo', 'Miramar', 'Viña del Mar', 'Hospital', 'Chorrillos', 'El Salto', 'Valencia', 'Quilpue', 'El Sol', 'El Belloto', 'Las Americas', 'La Concepcion', 'Villa Alemana', 'Sargento Aldea', 'Peñablanca', 'Limache']
+                if not est_safe: est_safe = ['Puerto', 'Limache']
+
                 col_s1, col_s2, col_s3, col_s4 = st.columns(4)
                 with col_s1: sb_orig = st.selectbox("Estación Origen", est_safe, key="sb_o")
                 with col_s2: sb_dest = st.selectbox("Estación Destino", est_safe, index=max(0, len(est_safe)-1), key="sb_d")
@@ -473,8 +484,9 @@ def main():
                 if st.button("⚡ Simular Tramo", use_container_width=True):
                     if sb_orig != sb_dest:
                         idx_o, idx_d = est_safe.index(sb_orig), est_safe.index(sb_dest)
-                        try: km_acum_safe = getattr(config, 'KM_ACUM', [0.0, 43.13])
-                        except NameError: km_acum_safe = [0.0, 43.13]
+                        try: km_acum_safe = getattr(config, 'KM_ACUM', [])
+                        except NameError: km_acum_safe = [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13]
+                        if not km_acum_safe: km_acum_safe = [0.0, 43.13]
                         
                         km_o, km_d = km_acum_safe[idx_o], km_acum_safe[idx_d]
                         via_sb = 1 if idx_o < idx_d else 2
@@ -488,8 +500,11 @@ def main():
                         
                         try:
                             distrib_sb = distribuir_energia_sers(neto_sb, th_sb, km_o, km_d, active_sers)
-                            tot_ser_sb = sum(max(0.0, v) for v in distrib_sb.values()) / 0.96
-                            avg_dem_sb = {k: max(0.0, v) / 0.96 / max(0.001, th_sb) for k, v in distrib_sb.items()}
+                            try: eta_ser = getattr(config, 'ETA_SER_RECTIFICADOR', 0.96)
+                            except NameError: eta_ser = 0.96
+                            
+                            tot_ser_sb = sum(max(0.0, v) for v in distrib_sb.values()) / eta_ser
+                            avg_dem_sb = {k: max(0.0, v) / eta_ser / max(0.001, th_sb) for k, v in distrib_sb.items()}
                             loss_sb = calcular_flujo_ac_nodo(avg_dem_sb)['P_loss_kw'] * (1.15**2) * max(0.001, th_sb)
                             seat_sb = (tot_ser_sb + loss_sb) / 0.99
                             ide_sb = seat_sb / max(0.001, abs(km_d - km_o))
@@ -500,19 +515,20 @@ def main():
                             c_sb2.metric("⚡ Energía Neta (SEAT)", f"{seat_sb:.1f} kWh")
                             c_sb3.metric("💡 IDE del Tramo (SEAT)", f"{ide_sb:.3f} kWh/km")
                         except:
-                            st.error(f"Simulación Física Completada: Tracción {trc_sb:.1f} kWh.")
+                            st.error(f"Simulación Física Completada: Tracción {trc_sb:.1f} kWh. (Red Eléctrica no conectada en GUI).")
 
+        # 💡 LANZAMIENTO DEL MOTOR SINTÉTICO
         if modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"]:
             if st.button("🚀 Ejecutar Gemelo Digital del Planificador", use_container_width=True, type="primary"):
                 st.session_state['simulacion_plan_lista'] = False
                 with st.spinner("Decodificando Malla e inyectando al Motor Cinemático Termodinámico..."):
                     if modo_plan == "Matriz Sintética":
                         df_sintetico_list = []
-                        try: est_safe = getattr(config, 'ESTACIONES', ['Puerto', 'Limache'])
+                        try: est_safe = getattr(config, 'ESTACIONES', [])
                         except NameError: est_safe = ['Puerto', 'Limache']
-                        try: km_acum_safe = getattr(config, 'KM_ACUM', [0.0, 43.13])
+                        try: km_acum_safe = getattr(config, 'KM_ACUM', [])
                         except NameError: km_acum_safe = [0.0, 43.13]
-                        try: ec_safe = getattr(config, 'EC', ['PU', 'LI'])
+                        try: ec_safe = getattr(config, 'EC', [])
                         except NameError: ec_safe = ['PU', 'LI']
                         
                         for idx, row in df_plan_edit.iterrows():
