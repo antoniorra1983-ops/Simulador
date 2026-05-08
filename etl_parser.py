@@ -228,8 +228,7 @@ def calcular_dwell(df1, df2):
     return df1, df2
 
 # =============================================================================
-# 🚀 NUEVA LÓGICA DE PASAJEROS: EXTRACCIÓN POSICIONAL ESTRICTA
-# Obedece a la garantía de que el formato de EFE jamás cambia de lugar.
+# 🚀 LÓGICA RESTAURADA Y BLINDADA SEGÚN REGLAS DE USUARIO
 # =============================================================================
 def cargar_pax(data, fname, via_param=1):
     try:
@@ -241,69 +240,89 @@ def cargar_pax(data, fname, via_param=1):
             eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
             full = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
 
-        if full is None or full.empty: return pd.DataFrame()
+        if full is None or full.empty or len(full) <= 10: return pd.DataFrame()
 
-        # 💡 POSICIONAL ESTRICTO: Buscar la fila exacta donde arrancan los datos (Hora en Col 0)
-        start_idx = -1
-        for i in range(min(25, len(full))):
-            val = str(full.iloc[i, 0]).strip()
-            # Verifica si es formato hora "06:30", "6:30:00" o decimal de Excel
-            if re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', val):
-                start_idx = i
-                break
-            try:
-                f = float(val)
-                if 0.0 < f < 1.0: 
-                    start_idx = i
+        # REGLA INQUEBRANTABLE 1: El título manda para el Fallback
+        name_u = fname.upper()
+        via_titulo = 1 if 'V1' in name_u or 'VIA 1' in name_u or 'VIA1' in name_u else (2 if 'V2' in name_u or 'VIA 2' in name_u or 'VIA2' in name_u else via_param)
+
+        header_idx = 9 # Asumimos cabecera en fila 10 (índice 9)
+        col_mapping = {}
+        EXACT_MAP = {'PUE':'PUE','PUERTO':'PUE','PU':'PUE','BEL':'BEL','BELLAVISTA':'BEL','BE':'BEL','FRA':'FRA','FRANCIA':'FRA','FR':'FRA','BAR':'BAR','BARON':'BAR','BA':'BAR','POR':'POR','PORTALES':'POR','PO':'POR','REC':'REC','RECREO':'REC','RE':'REC','MIR':'MIR','MIRAMAR':'MIR','MI':'MIR','VIN':'VIN','VINA DEL MAR':'VIN','VIÑA DEL MAR':'VIN','VM':'VIN','HOS':'HOS','HOSPITAL':'HOS','HO':'HOS','CHO':'CHO','CHORRILLOS':'CHO','CH':'CHO','SLT':'SLT','SALTO':'SLT','EL SALTO':'SLT','ES':'SLT','ELS':'SLT','VAL':'VAL','VALENCIA':'VAL','QUI':'QUI','QUILPUE':'QUI','QUILPUÉ':'QUI','QU':'QUI','SOL':'SOL','EL SOL':'SOL','SO':'SOL','ESO':'SOL','BTO':'BTO','EL BELLOTO':'BTO','BELLOTO':'BTO','EB':'BTO','ELB':'BTO','AME':'AME','LAS AMERICAS':'AME','AMERICAS':'AME','LAS':'AME','LAM':'AME','AM':'AME','CON':'CON','LA CONCEPCION':'CON','CONCEPCION':'CON','LAC':'CON','LCO':'CON','CO':'CON','VAM':'VAM','VILLA ALEMANA':'VAM','ALEMANA':'VAM','VIL':'VAM','VALE':'VAM','VL':'VAM','SGA':'SGA','SARGENTO ALDEA':'SGA','ALDEA':'SGA','SAR':'SGA','SA':'SGA','PEN':'PEN','PENABLANCA':'PEN','PEÑABLANCA':'PEN','PENA BLANCA':'PEN','PENA':'PEN','PE':'PEN','LIM':'LIM','LIMACHE':'LIM','LI':'LIM'}
+        keys_sorted = sorted(EXACT_MAP.keys(), key=len, reverse=True)
+
+        # REGLA INQUEBRANTABLE 2: Si A10 dice N° THDR, la columna 0 es sagrada.
+        val_a10 = str(full.iloc[9, 0]).strip().upper()
+        if 'THDR' in val_a10 or 'N°' in val_a10 or 'NRO' in val_a10 or 'VIAJE' in val_a10 or re.search(r'\d+', val_a10):
+            col_mapping[0] = 'Nro_THDR_raw'
+
+        for c_idx in range(full.shape[1]):
+            if c_idx in col_mapping: continue # Si ya mapeamos la columna 0, no la tocamos
+            
+            vals = [str(full.iloc[r, c_idx]).strip().upper() for r in range(max(0, header_idx-4), header_idx+1)]
+            combo = " ".join(vals)
+            combo_norm = unicodedata.normalize('NFD', combo).encode('ascii', 'ignore').decode().replace('.', '').replace(':', '')
+
+            mapped = False
+            for k in keys_sorted:
+                if k == vals[-1] or k == vals[-2] or f" {k} " in f" {combo_norm} " or f"_{k}_" in f"_{combo_norm}_":
+                    col_mapping[c_idx] = EXACT_MAP[k]
+                    mapped = True
                     break
-            except: pass
+            
+            if mapped: continue
+            if 'HORA' in combo_norm and 'ORIG' in combo_norm: col_mapping[c_idx] = 'Hora Origen'
+            elif 'THDR' in combo_norm and 'TREN' not in combo_norm: col_mapping[c_idx] = 'Nro_THDR_raw'
+            elif 'TREN' in combo_norm or 'SERVICIO' in combo_norm: col_mapping[c_idx] = 'Tren'
+            elif 'TOTAL' in combo_norm or 'BORDO' in combo_norm or 'CARGA' in combo_norm or 'MAX' in combo_norm:
+                if 'CargaMax' not in col_mapping.values() and not any(exc in combo_norm for exc in ['THDR', 'TREN', 'HORA', 'VIA']):
+                    col_mapping[c_idx] = 'CargaMax'
 
-        if start_idx == -1:
-            start_idx = 10 # Fallback: Asume fila 11 (índice 10) estándar EFE
-
-        data_rows = full.iloc[start_idx:].copy().reset_index(drop=True)
+        data_rows = full.iloc[header_idx + 1:].copy()
         df = pd.DataFrame()
-
-        # 💡 MAPEO DIRECTO POR COLUMNA (Sin leer los encabezados, ciego e infalible)
-        df['Hora Origen'] = data_rows.iloc[:, 0].values if data_rows.shape[1] > 0 else ''
-        df['Tren'] = data_rows.iloc[:, 1].values if data_rows.shape[1] > 1 else ''
-        df['Nro_THDR_raw'] = data_rows.iloc[:, 2].values if data_rows.shape[1] > 2 else ''
-
-        # Orden de estaciones: Vía 1 (PUE -> LIM), Vía 2 (LIM -> PUE)
-        est_orden = PAX_COLS if via_param == 1 else list(reversed(PAX_COLS))
-
-        # Extraer las 21 estaciones exactas (Columnas 3 a 23)
-        for i, st in enumerate(est_orden):
-            col_idx = 3 + i
-            if col_idx < data_rows.shape[1]:
-                df[st] = data_rows.iloc[:, col_idx].values
-            else:
-                df[st] = '0'
-
-        # La columna 24 es el Total / CargaMax
-        if 24 < data_rows.shape[1]:
-            df['CargaMax'] = data_rows.iloc[:, 24].values
-        else:
-            df['CargaMax'] = '0'
-
+        for c_idx, col_name in col_mapping.items():
+            if isinstance(c_idx, int) and c_idx < full.shape[1]: 
+                df[col_name] = data_rows.iloc[:, c_idx].values
+                
         fecha_global = extraer_fecha_segura(full, fname)
-        df['Fecha_s'] = fecha_global
+        date_col_idx = -1
+        for c_idx in range(full.shape[1]):
+            if 'FECHA' in str(full.iloc[header_idx, c_idx]).upper():
+                date_col_idx = c_idx; break
+        
+        if date_col_idx != -1:
+            df['Fecha_Excel_Raw'] = data_rows.iloc[:, date_col_idx].values
+            df['Fecha_s'] = df['Fecha_Excel_Raw'].apply(parse_excel_date).fillna(fecha_global).replace('', fecha_global).ffill()
+        elif full.shape[1] > 3 and 3 not in col_mapping:
+            df['Fecha_Excel_Raw'] = data_rows.iloc[:, 3].values
+            df['Fecha_s'] = df['Fecha_Excel_Raw'].apply(parse_excel_date).fillna(fecha_global).replace('', fecha_global).ffill()
+        else:
+            df['Fecha_s'] = fecha_global
+                
+        for col in ['Hora Origen', 'Nro_THDR_raw', 'Tren', 'CargaMax']:
+            if col not in df.columns: df[col] = '' if col != 'CargaMax' else '0'
+        for c in PAX_COLS:
+            if c not in df.columns: df[c] = '0'
 
         df['Nro_THDR'] = df['Nro_THDR_raw'].apply(clean_primary_key)
         df['Tren_Clean'] = df['Tren'].apply(clean_id)
         df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
-        df['Via'] = via_param
+        
+        # REGLA INQUEBRANTABLE 3: El N° THDR define la Vía (Par = V1, Impar = V2)
+        def determinar_via_por_thdr(row):
+            thdr_str = str(row.get('Nro_THDR_raw', ''))
+            nums = re.findall(r'\d+', thdr_str)
+            if nums:
+                return 1 if int(nums[0]) % 2 == 0 else 2
+            return via_titulo
+
+        df['Via'] = df.apply(determinar_via_por_thdr, axis=1)
         
         df = df.dropna(subset=['t_ini_p'])
         if df.empty: return pd.DataFrame()
-
-        # Limpieza matemática final
-        for c in PAX_COLS + ['CargaMax']: 
-            df[c] = df[c].apply(clean_pax_number)
-
+        for c in PAX_COLS + ['CargaMax']: df[c] = df[c].apply(clean_pax_number)
         return df
-    except Exception as e: 
-        return pd.DataFrame()
+    except Exception as e: return pd.DataFrame()
 
 def build_pax_v71(blobs_v1, blobs_v2):
     parts, err = [], []
@@ -328,15 +347,14 @@ def match_pax(row, df_pax):
     sub = df_pax[df_pax['Via'] == via].copy()
     if sub.empty: return EMPTY
     
-    # 💡 FIX MORTAL: Filtro de fecha suave. Si no cuadra el nombre del Excel, no aborta, sigue buscando.
     if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
         sub_date = sub[sub['Fecha_s'] == thdr_date]
         if not sub_date.empty: 
             sub = sub_date
+        else: 
+            return EMPTY 
 
     sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
-    
-    # 1. Match Exacto por Nro de Viaje (THDR)
     if nro_viaje != '' and 'Nro_THDR' in sub.columns:
         sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
         match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
@@ -344,7 +362,6 @@ def match_pax(row, df_pax):
             best = match_exacto.iloc[0]
             return {c: _to_int(best.get(c, 0)) for c in PAX_COLS}, _to_int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR', '')), best.name
 
-    # 2. Match por tiempo más cercano (Fallback de Seguridad)
     if pd.notna(t_i):
         best_match = sub.loc[sub['diff'].idxmin()]
         if best_match['diff'] <= 15: 
