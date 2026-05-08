@@ -12,6 +12,80 @@ st.set_page_config(page_title="Simulador MERVAL V134", layout="wide", page_icon=
 PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
 SER_DATA_DEFAULT = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
 
+# =============================================================================
+# DICCIONARIO DE FLOTA (NUEVOS PARÁMETROS CERTIFICADOS)
+# =============================================================================
+FLOTA = {
+    "XT-100": {
+        "tara_t"       : 86.1,  
+        "m_iner_t"     : 7.20,  
+        "coches"       : 2,  
+        "cap_sent"     : 94,  
+        "cap_max"      : 473,           # ALSTOM: 35.48t (Carga Máx)
+        "n_motores"    : 4,  
+        "a_max_ms2"    : 1.0,  
+        "a_freno_ms2"  : 1.2,
+        "jerk_ms3"     : 1.3,           # ALSTOM: Dinámica certificada
+        "v_freno_min"  : 3.81,  
+        "eta_motor"    : 0.92,  
+        "davis_A"      : 1615.00,  
+        "davis_B"      : 0.00,
+        "davis_C"      : 0.5458,     
+        "f_trac_max_kn": 110.0,   
+        "f_freno_max_kn": 105.0,  
+        "p_max_kw"     : 720.0,
+        "p_freno_max_kw": 600.0,
+        "aux_kw_cool"  : 58.76,         # Techo Verano (HVAC 100%)
+        "aux_kw_heat"  : 65.16,         # Techo Invierno (Resistencias 100%)
+        "f_compresor_dwell": 1.03       # +3% Neumática (Puertas/Frenos)
+    },
+    "XT-M": {
+        "tara_t"       : 95.0,  
+        "m_iner_t"     : 8.0,  
+        "coches"       : 2,  
+        "cap_sent"     : 94,  
+        "cap_max"      : 376,
+        "n_motores"    : 4,  
+        "a_max_ms2"    : 1.0,  
+        "a_freno_ms2"  : 1.2,
+        "jerk_ms3"     : 1.0,
+        "v_freno_min"  : 3.81,  
+        "eta_motor"    : 0.95,          # Eficiencia Pura Motor
+        "davis_A"      : 1440.60,  
+        "davis_B"      : 0.00,
+        "davis_C"      : 0.35,      
+        "f_trac_max_kn": 115.0,   
+        "f_freno_max_kn": 110.0,  
+        "p_max_kw"     : 1040.0,
+        "p_freno_max_kw": 800.0,
+        "aux_kw_cool"  : 68.0,         
+        "aux_kw_heat"  : 78.0,         
+        "f_compresor_dwell": 1.06       # +3% Base + 3% Balonas
+    },
+    "SFE": {
+        "tara_t"       : 141.0,  
+        "m_iner_t"     : 11.2,  
+        "coches"       : 3,  
+        "cap_max"      : 780,
+        "n_motores"    : 8,       
+        "a_max_ms2"    : 1.02,
+        "a_freno_ms2"  : 1.30,  
+        "jerk_ms3"     : 1.0,
+        "v_freno_min"  : 3.81,
+        "eta_motor"    : 0.94,      
+        "davis_A"      : 2480.00,  
+        "davis_B"      : 0.00,
+        "davis_C"      : 0.4714,     
+        "f_trac_max_kn": 220.0,   
+        "f_freno_max_kn": 190.0,  
+        "p_max_kw"     : 2400.0,
+        "p_freno_max_kw": 2800.0,
+        "aux_kw_cool"  : 180.0,        
+        "aux_kw_heat"  : 210.0,        
+        "f_compresor_dwell": 1.08       # +3% Base + 5% Balonas masivas
+    },
+}
+
 try:
     import config
 except ImportError:
@@ -32,7 +106,7 @@ from etl_parser import (
 from motor_fisico import (
     calcular_termodinamica_flota_v111, calcular_receptividad_por_headway, 
     precalcular_red_electrica_v111,
-    km_at_t, vel_at_km, get_train_state_and_speed, simular_tramo_termodinamico
+    km_at_t, vel_at_km, get_train_state_and_speed, simular_tramo_termodinamico, calcular_aux_dinamico
 )
 
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
@@ -55,6 +129,7 @@ def leer_github(url):
             return nm, r.read()
     except Exception as e: return None, str(e)
 
+# NOTA: Sin @st.cache_data aquí. El caché se aplica en la función "procesar_datos_completos" para optimizar.
 def build_thdr_v71(blobs_v1, blobs_v2):
     all_parts, err = [], []
     for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
@@ -87,9 +162,10 @@ def build_pax_v71(blobs_v1, blobs_v2):
     if len(parts) > 0: return pd.concat(parts, ignore_index=True), err
     return pd.DataFrame(), err
 
-# 🚀 FIX DE RENDIMIENTO: Aislamos la firma de THDR y Pasajeros
+# 🚀 ESCUDO DE RENDIMIENTO 1: Hash Evasion
+# Los guiones bajos (_b1, _b2) evitan que Streamlit congele la RAM escaneando megabytes de Excel.
 @st.cache_data(show_spinner="Consolidando Viajes y Sincronizando Pasajeros...")
-def procesar_datos_completos(_b1, _b2, _bx1, _bx2, data_sig_pesada):
+def procesar_datos_completos(_b1, _b2, _bx1, _bx2, data_sig):
     df1, df2, err_t = build_thdr_v71(_b1, _b2)
     df_px, err_p = build_pax_v71(_bx1, _bx2)
     
@@ -118,11 +194,10 @@ def procesar_datos_completos(_b1, _b2, _bx1, _bx2, data_sig_pesada):
         
     return df_all, df_px, err_t, err_p
 
-# 🚀 NUEVO: Función ultra-rápida exclusiva para Prevenciones
 @st.cache_data(show_spinner="Cargando Prevenciones de Vía...")
-def procesar_prevenciones_cached(blobs_prev):
+def procesar_prevenciones_cached(_bprev, data_sig):
     p_list = []
-    for nm, data in blobs_prev:
+    for nm, data in _bprev:
         try:
             p = cargar_prevenciones(data, nm)
             if p: p_list.extend(p)
@@ -138,7 +213,7 @@ def simular_dia_historico_cached(_df_dia, pct_trac, use_pend, use_rm, use_regen,
         return calcular_termodinamica_flota_v111(_df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio)
 
 @st.cache_data(show_spinner="Integrando física y demanda de pasajeros...")
-def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig):
+def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, data_sig):
     viajes_completos = []
     perfiles_por_servicio = {}
     perfiles_por_via = {}
@@ -146,8 +221,8 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
     try: pax_cols_list = getattr(config, 'PAX_COLS', PAX_COLS_DEFAULT)
     except: pax_cols_list = PAX_COLS_DEFAULT
         
-    try: flota_dict = getattr(config, 'FLOTA', {})
-    except: flota_dict = {}
+    try: flota_dict = getattr(config, 'FLOTA', FLOTA)
+    except: flota_dict = FLOTA
     
     if not _df_px_filtered.empty:
         for via in [1, 2]:
@@ -174,7 +249,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         pax_arr_viaje = {c: 0 for c in pax_cols_list}
         pax_calculado = 0
         
-        f_tipo = flota_dict.get(r['tipo_tren'], {})
+        f_tipo = flota_dict.get(r['tipo_tren'], FLOTA["XT-100"])
         cap_m = f_tipo.get('cap_max', 398) * (2 if r['doble'] else 1)
         
         if perfiles_por_servicio and num_srv in perfiles_por_servicio:
@@ -263,86 +338,34 @@ def main():
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
-        st.cache_data.clear()
+        # 🚀 LA SOLUCIÓN: Eliminado st.cache_data.clear() de aquí.
+        # Ahora tocar los sliders es instantáneo y no borra la RAM de los archivos Excel.
 
     with st.sidebar:
-        st.header("📂 Archivos Base")
-        with st.expander("🔗 Cargar desde GitHub (Batch)", expanded=False):
-            urls_txt = st.text_area("Lista de URLs", placeholder="https://github.com/...", height=100)
-            gh_via = st.radio("Tipo manual", ["Detección Automática", "THDR V1", "THDR V2", "Pasajeros V1", "Pasajeros V2", "Prevenciones"], horizontal=False, index=0)
-            if st.button("⬇️ Descargar Todo", use_container_width=True): 
-                urls = [u.strip() for u in urls_txt.split('\n') if u.strip()]
-                if urls:
-                    success_count = 0
-                    for url in urls:
-                        with st.spinner(f"Descargando {url.split('/')[-1]}..."):
-                            nm, data_or_err = leer_github(url)
-                        if nm and isinstance(data_or_err, bytes):
-                            lnm = nm.lower()
-                            if gh_via == "THDR V1": k = "gh_blobs_v1"
-                            elif gh_via == "THDR V2": k = "gh_blobs_v2"
-                            elif gh_via == "Pasajeros V1": k = "gh_blobs_px1"
-                            elif gh_via == "Pasajeros V2": k = "gh_blobs_px2"
-                            elif gh_via == "Prevenciones": k = "gh_blobs_prev"
-                            else:
-                                if "prevencion" in lnm or "tsr" in lnm: k = "gh_blobs_prev"
-                                elif "v1" in lnm or "via1" in lnm: 
-                                    if "pax" in lnm or "pasajero" in lnm or "export" in lnm: k = "gh_blobs_px1"
-                                    else: k = "gh_blobs_v1"
-                                elif "v2" in lnm or "via2" in lnm:
-                                    if "pax" in lnm or "pasajero" in lnm or "export" in lnm: k = "gh_blobs_px2"
-                                    else: k = "gh_blobs_v2"
-                                elif "pax" in lnm or "pasajero" in lnm or "export" in lnm: k = "gh_blobs_px1"
-                                else: k = "gh_blobs_v1" 
-                            if k not in st.session_state: st.session_state[k] = []
-                            st.session_state[k].append((nm, data_or_err))
-                            success_count += 1
-                    if success_count > 0:
-                        st.success(f"✅ Se cargaron {success_count} archivos.")
-                        st.rerun()
-
-            st.divider()
-            for lbl, key in [("V1","gh_blobs_v1"),("V2","gh_blobs_v2"),("Pax V1","gh_blobs_px1"),("Pax V2","gh_blobs_px2"),("Prevenciones","gh_blobs_prev")]:
-                blobs_gh = st.session_state.get(key, [])
-                if blobs_gh:
-                    st.caption(f"GitHub {lbl}: {len(blobs_gh)} archivo(s)")
-                    if st.button(f"🗑️ Limpiar {lbl}", key=f"gh_clear_{lbl}"):
-                        st.session_state[key] = []; st.rerun()
-
-        st.subheader("Carga de Planillas Locales")
-        f_v1 = st.file_uploader("THDR Vía 1 (Puerto→Limache)", accept_multiple_files=True, key="t1")
-        f_v2 = st.file_uploader("THDR Vía 2 (Limache→Puerto)", accept_multiple_files=True, key="t2")
-        f_px1 = st.file_uploader("Pasajeros Vía 1", accept_multiple_files=True, key="px1")
-        f_px2 = st.file_uploader("Pasajeros Vía 2", accept_multiple_files=True, key="px2")
-        f_prev = st.file_uploader("🚧 Prevenciones de Vía (.csv, .xlsx)", accept_multiple_files=True, key="prev")
+        st.header("📂 Inyección de Datos")
+        f_v1 = st.file_uploader("THDR V1", accept_multiple_files=True, key="t1")
+        f_v2 = st.file_uploader("THDR V2", accept_multiple_files=True, key="t2")
+        f_px1 = st.file_uploader("Pasajeros V1", accept_multiple_files=True, key="px1")
+        f_px2 = st.file_uploader("Pasajeros V2", accept_multiple_files=True, key="px2")
+        f_prev = st.file_uploader("🚧 Prevenciones (.csv, .xlsx)", accept_multiple_files=True, key="prev")
         
         st.divider()
-        st.subheader("⚙️ Parámetros Físicos del Escenario")
-        use_rm      = st.checkbox("🚦 Velocidades RM (Riel Mojado)", value=False, on_change=reset_plan_state)
+        st.subheader("⚙️ Parámetros Físicos")
+        use_rm      = st.checkbox("🚦 Velocidades RM", value=False, on_change=reset_plan_state)
         pct_trac    = st.slider("⚙️ % Tracción Nominal", 30, 100, 90, 5, on_change=reset_plan_state)
-        use_pend    = st.toggle("⛰️ Pendientes Físicas", value=True, on_change=reset_plan_state)
-        use_regen   = st.toggle("⚡ Activar Regeneración", value=True, on_change=reset_plan_state)
+        use_pend    = st.toggle("⛰️ Pendientes", value=True, on_change=reset_plan_state)
+        use_regen   = st.toggle("⚡ Regeneración", value=True, on_change=reset_plan_state)
         tipo_regen  = st.radio("Modelo de Regeneración", ["Físico (Load Flow)", "Probabilístico (Headway)"], on_change=reset_plan_state)
         
-        st.divider()
-        st.subheader("🌡️ Climatización y Auxiliares")
         mes_sel = st.selectbox("Mes de operación", ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"], index=3, on_change=reset_plan_state)
-        _M = {"Enero":"verano","Febrero":"verano","Marzo":"otoño","Abril":"otoño","Mayo":"otoño","Junio":"invierno","Julio":"invierno","Agosto":"invierno","Septiembre":"primavera","Octubre":"primavera","Noviembre":"primavera","Diciembre":"verano"}
-        estacion_anio = _M[mes_sel]
+        estacion_anio = {"Enero":"verano","Febrero":"verano","Marzo":"otoño","Abril":"otoño","Mayo":"otoño","Junio":"invierno","Julio":"invierno","Agosto":"invierno","Septiembre":"primavera","Octubre":"primavera","Noviembre":"primavera","Diciembre":"verano"}[mes_sel]
         
-        st.divider()
-        st.subheader("🔌 Configuración de Red")
-        
-        try: 
-            ser_data_safe = getattr(config, 'SER_DATA', [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")])
-        except: 
-            ser_data_safe = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
+        try: ser_data_safe = getattr(config, 'SER_DATA', SER_DATA_DEFAULT)
+        except: ser_data_safe = SER_DATA_DEFAULT
         
         all_ser_names = [s[1] for s in ser_data_safe]
         active_ser_names = st.multiselect("Subestaciones Activas", all_ser_names, default=all_ser_names, on_change=reset_plan_state)
-        active_sers = [s for s in ser_data_safe if s[1] in active_ser_names]
-        if not active_sers: 
-            active_sers = [ser_data_safe[0]]
+        active_sers = [s for s in ser_data_safe if s[1] in active_ser_names] or [ser_data_safe[0]]
         
         gap_vias = st.slider("Separación Visual Vías (px)", 120, 350, 200, 10)
 
@@ -355,25 +378,23 @@ def main():
     bx2 = _all_blobs_internal(f_px2, "gh_blobs_px2")
     b_prev = _all_blobs_internal(f_prev, "gh_blobs_prev")
     
-    # 🚀 FIX DE RENDIMIENTO MÁXIMO: Firmas Desacopladas
-    # La firma pesada ahora SOLO observa los Excel gigantes.
-    sig_thdr_pax = ""
-    for b in [b1, b2, bx1, bx2]:
+    # 🚀 LLAVE DE RENDIMIENTO: Hash Evasion
+    # Genera un texto enano en base a los archivos. Streamlit hashea esto al instante.
+    file_signature = ""
+    for b in [b1, b2, bx1, bx2, b_prev]:
         for nm, data in b:
-            sig_thdr_pax += f"{nm}_{len(data)}|"
+            file_signature += f"{nm}_{len(data)}|"
 
-    # 1. Procesamiento Pesado (Solo corre si cambian los THDR o Pasajeros)
-    df_all, df_px, err_t, err_p = procesar_datos_completos(b1, b2, bx1, bx2, sig_thdr_pax)
-    
-    # 2. Procesamiento Ligero (Las Prevenciones se procesan al instante)
-    prevenciones_list = procesar_prevenciones_cached(b_prev)
+    # Carga de Datos blindada por la firma ultraligera
+    df_all, df_px, err_t, err_p = procesar_datos_completos(b1, b2, bx1, bx2, file_signature)
+    prevenciones_list = procesar_prevenciones_cached(b_prev, file_signature)
 
     with st.sidebar:
         if err_t:
-            with st.expander(f"⚠️ {len(err_t)} Errores de Lectura THDR"):
+            with st.expander(f"⚠️ {len(err_t)} Errores THDR"):
                 for e in err_t: st.caption(e)
         if err_p:
-            with st.expander(f"⚠️ {len(err_p)} Errores de Lectura Pasajeros"):
+            with st.expander(f"⚠️ {len(err_p)} Errores Pax"):
                 for e in err_p: st.caption(e)
 
     fechas = sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)]))) if not df_all.empty else []
@@ -391,8 +412,8 @@ def main():
             fecha_sel = st.selectbox("📅 Fecha Operativa (THDR)", fechas, key="fs_hist")
             df_dia = df_all[df_all['Fecha_str']==fecha_sel].copy()
             
-            # El motor físico se recarga rápido combinando las dos firmas
-            sig_fisica = sig_thdr_pax + str(len(prevenciones_list)) + fecha_sel
+            # Ejecución protegida de Física (Ultra rápida en Caché)
+            sig_fisica = file_signature + fecha_sel + str(pct_trac) + str(use_rm) + str(use_pend) + str(use_regen) + tipo_regen + estacion_anio
             df_dia_e = simular_dia_historico_cached(df_dia, pct_trac, use_pend, use_rm, use_regen, tipo_regen, estacion_anio, prevenciones_list, sig_fisica)
             
             try:
@@ -409,7 +430,7 @@ def main():
             df_px['Fecha_s'] = df_px['Fecha_s'].astype(str).str.strip()
             fechas_disp = sorted(list(set([x for x in df_px['Fecha_s'].dropna().unique() if x and x.lower() not in ["none", "nan", "fecha no detectada"]])))
             
-            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Si eliges varias, se promediarán para suavizar el ruido estadístico)", fechas_disp, default=fechas_disp)
+            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Si eliges varias, se promediarán)", fechas_disp, default=fechas_disp)
             
             if not fecha_sel_pax: 
                 st.info("Selecciona al menos una fecha.")
@@ -541,7 +562,7 @@ def main():
                 if st.button("⚡ Simular Tramo", use_container_width=True):
                     if sb_orig != sb_dest:
                         idx_o, idx_d = est_safe.index(sb_orig), est_safe.index(sb_dest)
-                        try: km_acum_safe = getattr(config, 'KM_ACUM', [0.0, 43.13])
+                        try: km_acum_safe = getattr(config, 'KM_ACUM', [])
                         except NameError: km_acum_safe = [0.0, 43.13]
                         if not km_acum_safe: km_acum_safe = [0.0, 43.13]
                         
@@ -630,7 +651,7 @@ def main():
                 st.session_state['simulacion_plan_lista'] = True
 
         if st.session_state.get('simulacion_plan_lista', False) and 'raw_plan_df' in st.session_state:
-            plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + sig_thdr_pax
+            plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature
             df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig)
             st.divider()
             try:
