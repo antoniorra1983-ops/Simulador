@@ -65,6 +65,13 @@ def build_thdr_v71(blobs_v1, blobs_v2):
             else: err.append(f"[{nm}]: {msg}")
     
     if len(all_parts) > 0:
+        # 🛡️ ESCUDO ANTI-DUPLICADOS: Renombra columnas idénticas para evitar InvalidIndexError
+        for idx_df in range(len(all_parts)):
+            cols = pd.Series(all_parts[idx_df].columns)
+            for dup in cols[cols.duplicated()].unique():
+                cols[cols==dup] = [f"{dup}_{i}" if i else dup for i in range(sum(cols==dup))]
+            all_parts[idx_df].columns = cols
+
         df_master = pd.concat(all_parts, ignore_index=True)
         df1 = df_master[df_master['Via'] == 1].copy()
         df2 = df_master[df_master['Via'] == 2].copy()
@@ -288,7 +295,6 @@ def main():
         
         gap_vias = st.slider("Separación Visual Vías (px)", 120, 350, 200, 10)
 
-    # --- PROCESAMIENTO ETL (EXTRACT, TRANSFORM, LOAD) ---
     def _all_blobs_internal(f_uploader, gh_key): 
         return tuple(leer(f_uploader) + st.session_state.get(gh_key, []))
 
@@ -342,7 +348,6 @@ def main():
 
     fechas = sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)]))) if not df_all.empty else []
 
-    # --- ESTRUCTURA DE TABS (DASHBOARD) ---
     tab_mapa, tab_datos, tab_planificador = st.tabs([
         "🗺️ Gemelo Digital (Histórico)", 
         "👥 Auditoría de Pasajeros", 
