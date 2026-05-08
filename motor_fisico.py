@@ -129,7 +129,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
         
     f_comp_spec = f.get('f_compresor_dwell', 1.03)
     
-    # 💡 VARIABLES DE ENERGÍA AISLADAS PARA AUDITORÍA DE REÓSTATO Y AUTOCONSUMO
     trc, aux, reg_bruta, reg_panto_push, t_horas = 0.0, 0.0, 0.0, 0.0, 0.0
     
     k_s, k_e = km_ini, km_fin
@@ -217,7 +216,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 elif estado_marcha == "COAST" and v_kmh < v_cons_kmh - 2.0: estado_marcha = "ACCEL"
                 elif estado_marcha not in ["ACCEL", "COAST", "BRAKE_STATION", "BRAKE_OVERSPEED"]: estado_marcha = "ACCEL"
 
-            f_motor, f_regen_tramo, a_net_target = 0.0, 0.0, 0.0
+            # 🚀 CÁLCULO DE LA ACELERACIÓN TEÓRICA
+            a_net_target = 0.0
             if estado_marcha == "BRAKE_STATION":
                 f_req_freno = max(0.0, masa_kg * a_freno_op - f_davis - f_pend)
                 f_regen_tramo = min(f_req_freno, f_disp_freno)
@@ -227,19 +227,31 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 f_regen_tramo = min(f_req_freno, f_disp_freno)
                 a_net_target = min((-f_regen_tramo - f_davis - f_pend) / masa_kg, -0.15)
             elif estado_marcha == "ACCEL":
-                f_motor = f_disp_trac
-                a_net_target = (f_motor - f_davis - f_pend) / masa_kg
+                a_net_target = (f_disp_trac - f_davis - f_pend) / masa_kg
             elif estado_marcha == "COAST":
                 a_net_target = (-f_davis - f_pend) / masa_kg
                 
+            # 🚀 APLICACIÓN DEL FILTRO DE CONFORT (Jerk)
             jerk_limit = jerk_limit_base
             if a_net_target > a_prev + jerk_limit: a_net = a_prev + jerk_limit
             elif a_net_target < a_prev - jerk_limit: a_net = a_prev - jerk_limit
             else: a_net = a_net_target
+            
+            # 🚀 INGENIERÍA INVERSA TERMODINÁMICA (El Fix que salva la energía)
+            # Sabemos la aceleración real. Ahora calculamos la fuerza real requerida por los motores.
+            f_traccion_requerida = (masa_kg * a_net) + f_davis + f_pend
+            
+            f_motor, f_regen_tramo = 0.0, 0.0
+            
+            if estado_marcha == "ACCEL":
+                f_motor = max(0.0, min(f_traccion_requerida, f_disp_trac))
+            elif estado_marcha in ["BRAKE_STATION", "BRAKE_OVERSPEED"]:
+                f_freno_total = -f_traccion_requerida
+                f_regen_tramo = max(0.0, min(f_freno_total, f_disp_freno))
+
             a_prev = a_net
             
-            v_new = v_ms + a_net * dt
-            dt_actual = dt
+            v_new, dt_actual = v_ms + a_net * dt, dt
             
             if v_new < 0:
                 dt_actual = v_ms / abs(a_net) if a_net < -0.001 else dt
@@ -249,6 +261,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 v_new = v_cons_kmh / 3.6
                 a_req = (v_new - v_ms) / dt_actual if dt_actual > 0 else 0
                 f_motor = max(0.0, min(masa_kg * a_req + f_davis + f_pend, f_disp_trac))
+                a_prev = a_req 
                 
             if v_new < 0.5 and dist_restante < 2.0: break
             if v_new < 0.1 and v_ms < 0.1: v_new, dt_actual = 1.0, dt
@@ -259,19 +272,13 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 if v_ms + v_new > 0: dt_actual = step_m / ((v_ms + v_new) / 2.0)
             if step_m < 0.1: step_m = 0.5 
                 
-            # --- INTEGRACIÓN DE ENERGÍA Y AUTOCONSUMO ---
-            e_trc_step = 0.0
-            e_reg_bruta_step = 0.0
-            
             if f_motor > 0: 
                 carga_pct = f_motor / max(1.0, f_disp_trac)
                 eta_din = f.get('eta_motor', 0.92) * (1.0 - 0.2 * (1.0 - max(0.1, carga_pct))**3)
-                e_trc_step = ((f_motor * step_m) / 3_600_000.0) / eta_din
-                trc += e_trc_step
+                trc += ((f_motor * step_m) / 3_600_000.0) / eta_din
                 
             if f_regen_tramo > 0 and v_kmh >= f['v_freno_min']: 
                 carga_pct = f_regen_tramo / max(1.0, f_disp_freno)
-                # El motor actuando como generador (Alternador) es súper eficiente (92%)
                 eta_din_reg = f.get('eta_motor', 0.92) * (1.0 - 0.2 * (1.0 - max(0.1, carga_pct))**3)
                 e_reg_bruta_step = ((f_regen_tramo * step_m) / 3_600_000.0) * eta_din_reg
                 reg_bruta += e_reg_bruta_step
@@ -279,27 +286,21 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             e_aux_step = (calcular_aux_dinamico(aux_nominal_u * n_uni, (t_ini_mins + t_horas * 60.0) / 60.0, pax_mid, f.get('cap_max', 398) * n_uni, estacion_anio, estado_marcha, f_comp_spec) * (dt_actual / 3600.0))
             aux += e_aux_step
             
-            # 💡 MAGIA FÍSICA (SELF-CONSUMPTION / AUTOCONSUMO)
-            if e_reg_bruta_step > 0:
+            if estado_marcha in ["BRAKE_STATION", "BRAKE_OVERSPEED"] and e_reg_bruta_step > 0:
                 if e_reg_bruta_step > e_aux_step:
-                    # El tren cubre sus propios auxiliares, y lo que SOBRA va al pantógrafo
                     reg_panto_push += (e_reg_bruta_step - e_aux_step)
-                else:
-                    # La regeneración es tan bajita que los auxiliares se la comen entera. No sale nada a la catenaria.
-                    pass
             
             t_horas += dt_actual / 3600.0
             dist_recorrida += step_m
             v_ms = v_new
 
-        # Paradas Comerciales (DWELL)
+        # Paradas Comerciales
         if i < len(paradas_km) - 2:
             dwell_h = 25.0 / 3600.0
             hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
             aux += calcular_aux_dinamico(aux_nominal_u * n_uni, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni, estacion_anio, "DWELL", f_comp_spec) * dwell_h
             t_horas += dwell_h
 
-    # El retorno ahora envía 6 valores limpios y precisos
     return trc, aux, reg_bruta, reg_panto_push, max(0.0, trc + aux - reg_bruta), t_horas
 
 def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
@@ -384,7 +385,6 @@ def precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio="prim
                     carga_pct = f_req_freno / max(1.0, f_disp_freno) if f_disp_freno > 0 else 0.0
                     eta_din_reg = f.get('eta_motor', 0.92) * (1.0 - 0.2 * (1.0 - max(0.1, carga_pct))**3)
                     
-                    # 💡 FIX ELÉCTRICO LOAD FLOW: Resta los auxiliares antes de inyectar a la vía
                     p_gen_kw_bruta = (min(f_req_freno, f_disp_freno) * v_ms) / 1000.0 * eta_din_reg
                     p_gen_kw_neta = p_gen_kw_bruta - p_aux_kw
                     
@@ -423,27 +423,17 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_re
     df_e = df_dia.copy()
     if df_e.empty: return df_e
     def _wrapper(r):
-        # Desempaquetamos los 6 valores limpios. (reg_bruta y reg_panto_push)
         trc, aux, reg_bruta, reg_panto_push, _, t_h = simular_tramo_termodinamico(
             r['tipo_tren'], r.get('doble', False), r['km_orig'], r['km_dest'], r['Via'], 
             pct_trac, use_rm, use_pend, r.get('nodos'), r.get('pax_d', {}), r.get('pax_abordo', 0), 
             None, r.get('maniobra'), estacion_anio, r.get('t_ini', 0.0), False, prevenciones
         )
-        
-        # 1. ¿Cuánto de lo que botamos a la catenaria absorbió otro tren?
         eta_red = dict_regen.get(r.name, 1.0) if use_regen else 0.0
         reg_util_panto = reg_panto_push * eta_red
-        
-        # 2. La energía que fue rechazada (Sobrevoltaje a 3600V -> Se quema)
         reostato = reg_panto_push - reg_util_panto
-        
-        # 3. La energía regenerativa útil TOTAL = Lo que me autoconsumí + Lo que vendí
         autoconsumo = reg_bruta - reg_panto_push
         reg_util_total = autoconsumo + reg_util_panto
-        
-        # 4. El medidor neto final
         neto_facturado = max(0.0, trc + aux - reg_util_total)
-        
         return pd.Series([trc, aux, reg_util_total, reostato, neto_facturado])
         
     df_e[['kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto']] = df_e.apply(_wrapper, axis=1)
