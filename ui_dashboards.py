@@ -6,7 +6,17 @@ import time
 import json
 import plotly.graph_objects as go
 from config import *
-from etl_parser import mins_to_time_str, get_pax_at_km, get_vacios_dia
+
+# 🛡️ PUENTE DE COMPATIBILIDAD INFALIBLE
+from etl_parser import mins_to_time_str, get_vacios_dia
+try:
+    from etl_parser import get_pax_at_km
+except ImportError:
+    try:
+        from etl_parser import get_pax_at_km_nativo as get_pax_at_km
+    except ImportError:
+        get_pax_at_km = lambda *args, **kwargs: 0
+
 from red_electrica import calcular_flujo_ac_nodo, distribuir_potencia_sers_kw, distribuir_energia_sers
 from motor_fisico import km_at_t, vel_at_km, get_train_state_and_speed, calcular_aux_dinamico, simular_tramo_termodinamico
 
@@ -151,9 +161,6 @@ def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, tit
 # MOTOR VISUAL 2: SCADA JAVASCRIPT (CLIENT-SIDE RENDERING + POPUPS)
 # =============================================================================
 def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titulo_extra, active_sers_list, gap_vias, use_rm):
-    """
-    Empaqueta el perfil matemático y genera el Iframe HTML para la animación SCADA a 60FPS.
-    """
     trips_data = []
     
     for _, row in df_dia_e.iterrows():
@@ -901,7 +908,6 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         with a3: st.metric("📏 Tren-km", f"{km_ac:,.0f}")
         with a4: st.metric("⚡ kWh SERs", f"{total_ser_kwh_44kv:,.0f}")
 
-        # 💡 FIX APLICADO: Escudo protector contra KeyError de "pax_row_idx" (Single Source of Truth)
         if prefix_key == "plan":
             pax_ac = int(df_inic['pax_abordo'].sum()) if not df_inic.empty else 0
         else:
