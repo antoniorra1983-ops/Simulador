@@ -79,32 +79,51 @@ def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos, t_arr=N
     elif dt_to_B <= 1.0: return "BRAKE", vel_max
     else: return "CRUISE", vel_max
 
+# =============================================================================
+# 6. AUXILIARES DINÁMICOS (Arquitectura BOTTOM-UP RESTAURADA)
+# =============================================================================
 def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", f_compresor_dwell=1.03):
+    """
+    Suma rigurosa y física de componentes sin doble contabilización.
+    Evita matemáticamente superar el 100% de la capacidad nominal.
+    """
     hora_int = int(hora_decimal) % 24
     try: perfil = getattr(config, '_AUX_HVAC_HORA', {})[estacion_anio]
     except: perfil = [0.5]*24
-    
-    frac_hvac = getattr(config, '_FRAC_HVAC', 0.7)
-    frac_base = getattr(config, '_FRAC_BASE', 0.3)
     f_hvac = perfil[hora_int]
     
     if cap_max > 0:
         ocup = min(1.0, pax_abordo / cap_max)
-        f_ocup = (1.0 + 0.05 * ocup) if estacion_anio == "verano" else (1.0 - 0.12 * ocup if estacion_anio == "invierno" else 1.0 - 0.06 * ocup)
+        if estacion_anio == "verano": f_ocup = 1.0 + 0.05 * ocup
+        elif estacion_anio == "invierno": f_ocup = 1.0 - 0.12 * ocup
+        else: f_ocup = 1.0 - 0.06 * ocup
     else: f_ocup = 1.0
+
+    # 1. Carga Base (Vital, luces, cargadores, TCMS) -> 12% del Nominal
+    p_base = aux_kw_nominal * 0.12
+    
+    # 2. Climatización (HVAC Modulado) -> Máx 45% del Nominal
+    p_clima = (aux_kw_nominal * 0.45) * f_hvac * f_ocup
+    
+    # 3. Ventilación Tracción (Reactiva y Dinámica) -> Protege los IGBTs y Motores
+    if estado_marcha in ["BRAKE", "BRAKE_STATION", "BRAKE_OVERSPEED"]:
+        p_vent = aux_kw_nominal * 0.13   # 13% en freno (máximo estrés térmico para disipar regeneración)
+    elif estado_marcha == "ACCEL":
+        p_vent = aux_kw_nominal * 0.068  # 6.8% en tracción
+    else:
+        p_vent = 0.0                     # CRUISE, COAST o DWELL (Refrigeración mínima cubierta por la base)
         
-    f_mb, f_mh = 1.0, 1.0
-    if estado_marcha == "DWELL": f_mh = f_compresor_dwell
-    elif estado_marcha in ["BRAKE", "BRAKE_STATION"]: f_mb = 1.05
-    elif estado_marcha == "ACCEL": f_mb = 0.95
-    elif estado_marcha == "COAST": f_mb = 0.90
+    # 4. Neumática y Puertas (Acumulador Discreto Virtual en Andén)
+    factor_extra_comp = max(0.0, f_compresor_dwell - 1.0)
+    if estado_marcha == "DWELL":
+        p_comp = aux_kw_nominal * factor_extra_comp
+    else:
+        p_comp = 0.0
         
-    aux_base = aux_kw_nominal * frac_base * f_mb
-    aux_hvac = aux_kw_nominal * frac_hvac * f_hvac * f_ocup * f_mh
-    return aux_base + aux_hvac
+    return p_base + p_clima + p_vent + p_comp
 
 # =============================================================================
-# 2. MOTOR CINEMÁTICO TERMODINÁMICO (V118)
+# 7. FÍSICA TERMODINÁMICA Y LOAD FLOW (V118)
 # =============================================================================
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False, prevenciones=None):
     f = getattr(config, 'FLOTA', {}).get(tipo_tren, {"tara_t": 86.1, "m_iner_t": 7.2, "p_max_kw": 720, "f_trac_max_kn": 110, "a_freno_ms2": 1.2, "v_freno_min": 3.81})
@@ -112,6 +131,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     pax_kg = getattr(config, 'PAX_KG', 75.0)
     eta_regen_neta = getattr(config, 'ETA_REGEN_NETA', 0.72)
     
+    # Lógica de Termostato para establecer el techo nominal
     if estacion_anio == "invierno": aux_nominal_u = f.get('aux_kw_heat', f.get('aux_kw', 65.16))
     else: aux_nominal_u = f.get('aux_kw_cool', f.get('aux_kw', 58.76))
         
@@ -132,7 +152,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     pax_dict = pax_dict or {}
     dt = 1.0  
     
-    # 🚀 FIX PREVENCIONES: Filtramos solo las que afectan a la vía del tren para no iterar basura
+    # Radar predictivo de prevenciones (TSR)
     prev_activas = [p for p in prevenciones if p['via'] == via_op] if prevenciones else []
 
     for i in range(len(paradas_km)-1):
@@ -150,7 +170,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
         f_freno_max_const = f.get('f_freno_max_kn', 105.0) * 1000 * n_uni
         p_freno_max_const = f.get('p_freno_max_kw', 800.0) * 1000 * n_uni 
         v_freno_min_const = f.get('v_freno_min', 3.81)
-        jerk_limit = 1.3 * dt
+        jerk_limit = f.get('jerk_ms3', 1.3) * dt
 
         pos_m, dist_recorrida, v_ms, a_prev, estado_marcha = p_ini * 1000.0, 0.0, 0.0, 0.0, "ACCEL"
         
@@ -162,11 +182,11 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             v_cons_kmh = max(5.0, vel_at_km(km_actual, via_op, use_rm))
             if v_consigna_override is not None: v_cons_kmh = min(v_cons_kmh, v_consigna_override)
             
-            # TOPERAS (Seguridad)
+            # TOPERAS (Seguridad limitación ATC)
             if via_op == 1 and km_actual >= km_total - 0.200: v_cons_kmh = min(v_cons_kmh, 10.0 if km_actual >= km_total - 0.100 else 20.0)
             elif via_op == 2 and km_actual <= 0.200: v_cons_kmh = min(v_cons_kmh, 10.0 if km_actual <= 0.100 else 20.0)
 
-            # 🚧 RADAR DE PREVENCIONES (Lookahead Predictivo Activo)
+            # 🚧 RADAR DE PREVENCIONES (Lookahead)
             if prev_activas:
                 for p in prev_activas:
                     if p['km_min'] <= km_actual <= p['km_max']:
@@ -187,7 +207,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             v_kmh = v_ms * 3.6
             f_davis = ((f.get('davis_A', 1615.0) * 2) + (f.get('davis_B', 0.0) * 2 * v_kmh) + (f.get('davis_C', 0.54) * 1.35 * (v_kmh**2))) if n_uni == 2 else (f.get('davis_A', 1615.0) + f.get('davis_B', 0.0)*v_kmh + f.get('davis_C', 0.54)*(v_kmh**2))
                 
-            # 🚀 FIX DE RENDIMIENTO: Uso del array vectorizado O(1) de la pendiente
             f_pend = 0.0
             if use_pend:
                 idx_km = int(km_actual * 1000.0)
@@ -231,25 +250,26 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             step_m = (v_ms + v_new) / 2.0 * dt_actual
             if step_m > dist_restante: step_m = dist_restante
             
-            # 🚀 ESCUDO ANTI-STALL (Evita el bucle infinito)
+            # Escudo Anti-Stall
             if v_ms < 0.1 and v_new < 0.1 and dist_restante > 0:
                 v_new = 2.0
                 step_m = dist_restante
                 dt_actual = step_m / 2.0
             
-            # 💡 ¡CORRECCIÓN CRÍTICA DE ENERGÍA! (De 3600 a 3,600,000 para pasar de Joules a kWh)
             if f_motor > 0: 
                 eta_din = f.get('eta_motor', 0.92) * (1.0 - 0.2 * (1.0 - max(0.1, f_motor / max(1.0, f_trac_max_const)))**3)
-                trc += ((f_motor * step_m) / 3600000.0) / eta_din
+                trc += ((f_motor * step_m) / 3_600_000.0) / eta_din
             if f_regen_tramo > 0 and v_kmh >= v_freno_min_const: 
-                reg += ((f_regen_tramo * step_m) / 3600000.0) * eta_regen_neta
+                reg += ((f_regen_tramo * step_m) / 3_600_000.0) * eta_regen_neta
                 
+            # 💡 CÁLCULO AUXILIAR BOTTOM-UP: Suma estricta de componentes en kW -> transformada a kWh
             aux += (calcular_aux_dinamico(aux_nominal_u * n_uni, (t_ini_mins + t_horas * 60.0) / 60.0, pax_mid, f.get('cap_max', 398) * n_uni, estacion_anio, estado_marcha, f_comp_spec) * (dt_actual / 3600.0))
+            
             t_horas += dt_actual / 3600.0
             dist_recorrida += step_m
             v_ms = v_new
 
-        # Paradas Comerciales
+        # Paradas Comerciales (DWELL)
         if i < len(paradas_km) - 2:
             dwell_h = 25.0 / 3600.0
             hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
