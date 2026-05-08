@@ -55,7 +55,6 @@ def leer_github(url):
             return nm, r.read()
     except Exception as e: return None, str(e)
 
-# Agrupamos el procesamiento para usar Caché Eficiente
 def build_thdr_v71(blobs_v1, blobs_v2):
     all_parts, err = [], []
     for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
@@ -88,9 +87,9 @@ def build_pax_v71(blobs_v1, blobs_v2):
     if len(parts) > 0: return pd.concat(parts, ignore_index=True), err
     return pd.DataFrame(), err
 
-# 🚀 FIX DE RENDIMIENTO: Caché robusto y único para lectura
+# 🚀 FIX DE RENDIMIENTO: Aislamos la firma de THDR y Pasajeros
 @st.cache_data(show_spinner="Consolidando Viajes y Sincronizando Pasajeros...")
-def procesar_datos_completos(_b1, _b2, _bx1, _bx2, data_sig):
+def procesar_datos_completos(_b1, _b2, _bx1, _bx2, data_sig_pesada):
     df1, df2, err_t = build_thdr_v71(_b1, _b2)
     df_px, err_p = build_pax_v71(_bx1, _bx2)
     
@@ -119,8 +118,19 @@ def procesar_datos_completos(_b1, _b2, _bx1, _bx2, data_sig):
         
     return df_all, df_px, err_t, err_p
 
+# 🚀 NUEVO: Función ultra-rápida exclusiva para Prevenciones
+@st.cache_data(show_spinner="Cargando Prevenciones de Vía...")
+def procesar_prevenciones_cached(blobs_prev):
+    p_list = []
+    for nm, data in blobs_prev:
+        try:
+            p = cargar_prevenciones(data, nm)
+            if p: p_list.extend(p)
+        except: pass
+    return p_list
+
 @st.cache_data(show_spinner="Simulando Física y Termodinámica de la Red...")
-def simular_dia_historico_cached(_df_dia, pct_trac, use_pend, use_rm, use_regen, tipo_regen, estacion_anio, _prevenciones, data_sig):
+def simular_dia_historico_cached(_df_dia, pct_trac, use_pend, use_rm, use_regen, tipo_regen, estacion_anio, _prevenciones, data_sig_fisica):
     dict_regen = calcular_receptividad_por_headway(_df_dia) if use_regen and "Probabilístico" in tipo_regen else (precalcular_red_electrica_v111(_df_dia, pct_trac, use_rm, estacion_anio) if use_regen else {})
     try:
         return calcular_termodinamica_flota_v111(_df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=_prevenciones)
@@ -128,7 +138,7 @@ def simular_dia_historico_cached(_df_dia, pct_trac, use_pend, use_rm, use_regen,
         return calcular_termodinamica_flota_v111(_df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio)
 
 @st.cache_data(show_spinner="Integrando física y demanda de pasajeros...")
-def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, data_sig):
+def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig):
     viajes_completos = []
     perfiles_por_servicio = {}
     perfiles_por_via = {}
@@ -253,8 +263,7 @@ def main():
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
-        # 🚨 LA CAUSA DE LA LENTITUD: Aquí había un st.cache_data.clear()
-        # Ha sido ELIMINADO para que los cambios en sliders sean hiper-rápidos.
+        st.cache_data.clear()
 
     with st.sidebar:
         st.header("📂 Archivos Base")
@@ -346,19 +355,18 @@ def main():
     bx2 = _all_blobs_internal(f_px2, "gh_blobs_px2")
     b_prev = _all_blobs_internal(f_prev, "gh_blobs_prev")
     
-    file_signature = ""
-    for b in [b1, b2, bx1, bx2, b_prev]:
+    # 🚀 FIX DE RENDIMIENTO MÁXIMO: Firmas Desacopladas
+    # La firma pesada ahora SOLO observa los Excel gigantes.
+    sig_thdr_pax = ""
+    for b in [b1, b2, bx1, bx2]:
         for nm, data in b:
-            file_signature += f"{nm}_{len(data)}|"
+            sig_thdr_pax += f"{nm}_{len(data)}|"
 
-    df_all, df_px, err_t, err_p = procesar_datos_completos(b1, b2, bx1, bx2, file_signature)
+    # 1. Procesamiento Pesado (Solo corre si cambian los THDR o Pasajeros)
+    df_all, df_px, err_t, err_p = procesar_datos_completos(b1, b2, bx1, bx2, sig_thdr_pax)
     
-    prevenciones_list = []
-    for nm, data in b_prev:
-        try:
-            prevs = cargar_prevenciones(data, nm)
-            if prevs: prevenciones_list.extend(prevs)
-        except: pass
+    # 2. Procesamiento Ligero (Las Prevenciones se procesan al instante)
+    prevenciones_list = procesar_prevenciones_cached(b_prev)
 
     with st.sidebar:
         if err_t:
@@ -383,8 +391,9 @@ def main():
             fecha_sel = st.selectbox("📅 Fecha Operativa (THDR)", fechas, key="fs_hist")
             df_dia = df_all[df_all['Fecha_str']==fecha_sel].copy()
             
-            # Ejecución protegida de Física (Ultra rápida en Caché)
-            df_dia_e = simular_dia_historico_cached(df_dia, pct_trac, use_pend, use_rm, use_regen, tipo_regen, estacion_anio, prevenciones_list, file_signature + fecha_sel)
+            # El motor físico se recarga rápido combinando las dos firmas
+            sig_fisica = sig_thdr_pax + str(len(prevenciones_list)) + fecha_sel
+            df_dia_e = simular_dia_historico_cached(df_dia, pct_trac, use_pend, use_rm, use_regen, tipo_regen, estacion_anio, prevenciones_list, sig_fisica)
             
             try:
                 render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, use_rm, use_pend, estacion_anio, "mapa", gap_vias, pax_dia_total=0)
@@ -504,9 +513,9 @@ def main():
                 df_plan_edit = st.data_editor(st.session_state['df_plan'], num_rows="dynamic", use_container_width=True)
             
             elif modo_plan == "Planilla Maestra (Subir CSV/Excel)":
-                f_pl = st.file_uploader("📂 Sube tu Planilla Maestra (.csv, .xlsx)", type=['xlsx','csv'])
-                if f_pl:
-                    df_temp, msg = parsear_planilla_maestra(f_pl.read(), f_pl.name)
+                archivo_planilla = st.file_uploader("📂 Sube tu Planilla Maestra (.csv, .xlsx, .xls)", type=['csv', 'xlsx', 'xls'])
+                if archivo_planilla:
+                    df_temp, msg = parsear_planilla_maestra(archivo_planilla.getvalue(), archivo_planilla.name)
                     if df_temp.empty: 
                         st.error(f"Error procesando: {msg}")
                     else:
@@ -532,7 +541,7 @@ def main():
                 if st.button("⚡ Simular Tramo", use_container_width=True):
                     if sb_orig != sb_dest:
                         idx_o, idx_d = est_safe.index(sb_orig), est_safe.index(sb_dest)
-                        try: km_acum_safe = getattr(config, 'KM_ACUM', [])
+                        try: km_acum_safe = getattr(config, 'KM_ACUM', [0.0, 43.13])
                         except NameError: km_acum_safe = [0.0, 43.13]
                         if not km_acum_safe: km_acum_safe = [0.0, 43.13]
                         
@@ -571,55 +580,57 @@ def main():
                         except Exception as e:
                             st.error(f"Simulación Física Completada: Tracción {trc_sb:.1f} kWh. (Red Eléctrica no conectada en GUI. Error: {e})")
 
-        if modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"]:
-            if st.button("🚀 Ejecutar Gemelo Digital del Planificador", use_container_width=True, type="primary"):
-                st.session_state['simulacion_plan_lista'] = False
-                with st.spinner("Decodificando Malla e inyectando al Motor Cinemático Termodinámico..."):
-                    if modo_plan == "Matriz Sintética":
-                        df_sintetico_list = []
-                        try: est_safe = getattr(config, 'ESTACIONES', [])
-                        except NameError: est_safe = ['Puerto', 'Limache']
-                        try: km_acum_safe = getattr(config, 'KM_ACUM', [])
-                        except NameError: km_acum_safe = [0.0, 43.13]
-                        try: ec_safe = getattr(config, 'EC', [])
-                        except NameError: ec_safe = ['PU', 'LI']
+        if modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"] and st.button("🚀 Ejecutar Gemelo Digital del Planificador", use_container_width=True, type="primary"):
+            st.session_state['simulacion_plan_lista'] = False
+            with st.spinner("Decodificando Malla e inyectando al Motor Cinemático Termodinámico..."):
+                if modo_plan == "Matriz Sintética":
+                    df_sintetico_list = []
+                    try: est_safe = getattr(config, 'ESTACIONES', [])
+                    except NameError: est_safe = ['Puerto', 'Limache']
+                    try: km_acum_safe = getattr(config, 'KM_ACUM', [])
+                    except NameError: km_acum_safe = [0.0, 43.13]
+                    try: ec_safe = getattr(config, 'EC', [])
+                    except NameError: ec_safe = ['PU', 'LI']
+                    
+                    for idx, row in df_plan_edit.iterrows():
+                        if row['Cantidad'] <= 0 or row['Origen'] == row['Destino']: continue
+                        try:
+                            i_o, i_d = est_safe.index(row['Origen']), est_safe.index(row['Destino'])
+                            via = 1 if i_o < i_d else 2
+                            nodos_sint = [(0.0, km_acum_safe[i]) for i in (range(i_o, i_d + 1) if via==1 else range(i_o, i_d - 1, -1))]
+                            k_o, k_d = km_acum_safe[i_o], km_acum_safe[i_d]
+                            svc_t = f"{ec_safe[i_o]}-{ec_safe[i_d]}"
+                            interval = (1350 - 360) / row['Cantidad']
+                            
+                            for i in range(int(row['Cantidad'])):
+                                df_sintetico_list.append({
+                                    '_id': f"SINT_{idx}_{i}", 't_ini': 360 + i * interval, 'Via': via, 
+                                    'km_orig': k_o, 'km_dest': k_d, 'nodos': nodos_sint, 
+                                    'tipo_tren': row['Flota'], 'doble': row['Configuración'] == "Doble", 
+                                    'num_servicio': f"VIRT_{idx}_{i}", 'maniobra': None, 'svc_type': svc_t
+                                })
+                        except: pass
+                    df_sint = pd.DataFrame(df_sintetico_list)
+                else:
+                    if 'temp_df_plan' not in st.session_state: st.stop()
+                    df_sint = st.session_state['temp_df_plan'].copy().sort_values('t_ini')
+                    
+                    asignaciones = {}
+                    for _, r in st.session_state['temp_flota_edit'].iterrows():
+                        asignaciones[r['Ruta']] = ['XT-100']*int(r.get('XT-100', 0)) + ['XT-M']*int(r.get('XT-M', 0)) + ['SFE']*int(r.get('SFE', 0))
                         
-                        for idx, row in df_plan_edit.iterrows():
-                            if row['Cantidad'] <= 0 or row['Origen'] == row['Destino']: continue
-                            try:
-                                i_o, i_d = est_safe.index(row['Origen']), est_safe.index(row['Destino'])
-                                via = 1 if i_o < i_d else 2
-                                nodos_sint = [(0.0, km_acum_safe[i]) for i in (range(i_o, i_d + 1) if via==1 else range(i_o, i_d - 1, -1))]
-                                k_o, k_d = km_acum_safe[i_o], km_acum_safe[i_d]
-                                svc_t = f"{ec_safe[i_o]}-{ec_safe[i_d]}"
-                                interval = (1350 - 360) / row['Cantidad']
-                                
-                                for i in range(int(row['Cantidad'])):
-                                    df_sintetico_list.append({
-                                        '_id': f"SINT_{idx}_{i}", 't_ini': 360 + i * interval, 'Via': via, 
-                                        'km_orig': k_o, 'km_dest': k_d, 'nodos': nodos_sint, 
-                                        'tipo_tren': row['Flota'], 'doble': row['Configuración'] == "Doble", 
-                                        'num_servicio': f"VIRT_{idx}_{i}", 'maniobra': None, 'svc_type': svc_t
-                                    })
-                            except: pass
-                        df_sint = pd.DataFrame(df_sintetico_list)
-                    else:
-                        if 'temp_df_plan' not in st.session_state: st.stop()
-                        df_sint = st.session_state['temp_df_plan'].copy().sort_values('t_ini')
-                        asignaciones = {}
-                        for _, r in st.session_state['temp_flota_edit'].iterrows():
-                            asignaciones[r['Ruta']] = ['XT-100']*int(r.get('XT-100', 0)) + ['XT-M']*int(r.get('XT-M', 0)) + ['SFE']*int(r.get('SFE', 0))
-                        def asignar_tren(ruta):
-                            if ruta in asignaciones and len(asignaciones[ruta]) > 0: return asignaciones[ruta].pop(0)
-                            return 'XT-100'
-                        df_sint['tipo_tren'] = df_sint['svc_type'].apply(asignar_tren)
+                    def asignar_tren(ruta):
+                        if ruta in asignaciones and len(asignaciones[ruta]) > 0: return asignaciones[ruta].pop(0)
+                        return 'XT-100'
+                        
+                    df_sint['tipo_tren'] = df_sint['svc_type'].apply(asignar_tren)
 
-                    if df_sint.empty: st.stop()
-                    st.session_state['raw_plan_df'] = df_sint
-                    st.session_state['simulacion_plan_lista'] = True
+                if df_sint.empty: st.stop()
+                st.session_state['raw_plan_df'] = df_sint
+                st.session_state['simulacion_plan_lista'] = True
 
         if st.session_state.get('simulacion_plan_lista', False) and 'raw_plan_df' in st.session_state:
-            plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature
+            plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + sig_thdr_pax
             df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig)
             st.divider()
             try:
