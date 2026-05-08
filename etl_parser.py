@@ -118,7 +118,9 @@ def clean_pax_number(x):
     except: return 0
 
 def clasificar_dia(d_str):
-    feriados = getattr(config, 'feriados_2026', [])
+    try: feriados = getattr(config, 'feriados_2026', [])
+    except NameError: feriados = []
+    
     try:
         d = datetime.strptime(d_str, '%Y-%m-%d')
         if d_str in feriados or d.weekday() == 6: return 'Domingo/Festivo'
@@ -133,20 +135,26 @@ def make_unique(df):
     return df
 
 def _col_to_est_idx(col):
-    estaciones = getattr(config, 'ESTACIONES', ['Puerto','Bellavista','Francia','Baron','Portales','Recreo','Miramar','Viña del Mar','Hospital','Chorrillos','El Salto','Valencia','Quilpue','El Sol','El Belloto','Las Americas','La Concepcion','Villa Alemana','Sargento Aldea','Peñablanca','Limache'])
+    try: estaciones = getattr(config, 'ESTACIONES', [])
+    except NameError: return None
+    if not estaciones: return None
+        
     cu = re.sub(r'[^a-z0-9]','', str(col).lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
-    if 'americas' in cu: return estaciones.index('Las Americas')
-    if 'vina' in cu: return estaciones.index('Viña del Mar')
-    if 'aldea' in cu: return estaciones.index('Sargento Aldea')
-    if 'belloto' in cu: return estaciones.index('El Belloto')
+    if 'americas' in cu: return estaciones.index('Las Americas') if 'Las Americas' in estaciones else None
+    if 'vina' in cu: return estaciones.index('Viña del Mar') if 'Viña del Mar' in estaciones else None
+    if 'aldea' in cu: return estaciones.index('Sargento Aldea') if 'Sargento Aldea' in estaciones else None
+    if 'belloto' in cu: return estaciones.index('El Belloto') if 'El Belloto' in estaciones else None
+    
     for i, est in enumerate(estaciones):
         e_norm = re.sub(r'[^a-z0-9]','', est.lower())
         if e_norm in cu: return i
     return None
 
 def calc_tren_km_real_general(row):
-    km_acum = getattr(config, 'KM_ACUM', [0.0, 43.13])
-    if len(km_acum) < 20: km_acum = [0.0]*21 # Fallback
+    try: km_acum = getattr(config, 'KM_ACUM', [])
+    except NameError: return 0.0
+    if not km_acum: return 0.0
+    
     k_s, k_e = min(row['km_orig'], row['km_dest']), max(row['km_orig'], row['km_dest'])
     man = row.get('maniobra')
     if man in ['CORTE_BTO','ACOPLE_BTO','CORTE_PU_SA_BTO']:
@@ -161,8 +169,11 @@ def calc_tren_km_real_general(row):
 # 3. CRUCE INTELIGENTE DE PASAJEROS (MASA DINÁMICA POR ESTACIÓN)
 # =============================================================================
 def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0):
-    km_acum = getattr(config, 'KM_ACUM', [])
-    pax_cols = getattr(config, 'PAX_COLS', [])
+    try: km_acum = getattr(config, 'KM_ACUM', [])
+    except: km_acum = []
+    try: pax_cols = getattr(config, 'PAX_COLS', [])
+    except: pax_cols = []
+    
     if not pax_d or not isinstance(pax_d, dict): return pax_max_fallback
     if sum(pax_d.values()) == 0 and pax_max_fallback > 0: return pax_max_fallback
     
@@ -184,7 +195,13 @@ def get_pax_at_km(pax_d, km_pos, via, pax_max_fallback=0):
     return get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback)
 
 def match_pax(row, df_pax):
-    pax_cols = getattr(config, 'PAX_COLS', ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM'])
+    """
+    🛡️ MATCH A PRUEBA DE FALLAS: Cruza los pasajeros asegurando que, si la fecha falla, 
+    usa la hora y el número de tren de todas maneras.
+    """
+    try: pax_cols = getattr(config, 'PAX_COLS', ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM'])
+    except: pax_cols = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
+    
     EMPTY = ({c: 0 for c in pax_cols}, 0, '--:--:--', 'No Detectado', -1)
     if df_pax.empty: return EMPTY
     
@@ -195,20 +212,23 @@ def match_pax(row, df_pax):
     sub = df_pax[df_pax['Via'] == via].copy()
     if sub.empty: return EMPTY
     
-    fecha_thdr = row.get('Fecha_str')
+    fecha_thdr = str(row.get('Fecha_str', '')).strip()
+    
+    # 💡 Filtrado suave: Si la fecha coincide aisla los datos. Si NO coincide, ignora la fecha y busca en todo el archivo.
     if 'Fecha_s' in sub.columns and fecha_thdr and fecha_thdr != '2026-01-01':
-        sub_f = sub[sub['Fecha_s'] == fecha_thdr]
-        if not sub_f.empty: sub = sub_f
+        sub_fecha = sub[sub['Fecha_s'].astype(str).str.strip() == fecha_thdr]
+        if not sub_fecha.empty: 
+            sub = sub_fecha
 
     # 1. Búsqueda Fuerte (Por Número de Tren/Servicio ID)
     if nro_viaje:
         sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key) if 'Nro_THDR' in sub.columns else ''
         match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
         if not match_exacto.empty:
-            best = match_exacto.iloc[0]
-            return {c: int(best.get(c, 0)) for c in pax_cols}, int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR', '')), best.name
+            best_match = match_exacto.iloc[0]
+            return {c: int(best_match.get(c, 0)) for c in pax_cols}, int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
 
-    # 2. Búsqueda Débil (Por Sincronización Horaria)
+    # 2. Búsqueda Débil (Por Sincronización Horaria con 15 minutos de tolerancia)
     if pd.notna(t_i) and 't_ini_p' in sub.columns:
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x)-float(t_i)), 1440-abs(float(x)-float(t_i))) if pd.notna(x) else 9999)
         best_match = sub.loc[sub['diff'].idxmin()]
@@ -221,10 +241,14 @@ def match_pax(row, df_pax):
 # 4. EXTRACCIÓN DE ARCHIVOS (PARSERS A PRUEBA DE FALLOS)
 # =============================================================================
 def procesar_thdr(data, fname, via_param=1):
-    km_acum = getattr(config, 'KM_ACUM', [])
-    ec = getattr(config, 'EC', [])
-    km_total = getattr(config, 'KM_TOTAL', 43.13)
-    if not km_acum: return pd.DataFrame(), "Falta KM_ACUM en config.py"
+    try: km_acum = getattr(config, 'KM_ACUM', [])
+    except: km_acum = []
+    try: ec = getattr(config, 'EC', [])
+    except: ec = []
+    try: km_total = getattr(config, 'KM_TOTAL', 43.13)
+    except: km_total = 43.13
+    
+    if not km_acum: return pd.DataFrame(), "Error de config KM_ACUM"
 
     try:
         if fname.lower().endswith('.csv'):
@@ -234,7 +258,7 @@ def procesar_thdr(data, fname, via_param=1):
             eng = "openpyxl" if fname.lower().endswith(".xlsx") else "xlrd"
             raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
 
-        if raw is None or raw.empty or raw.shape[0] < 6: return pd.DataFrame(), "Archivo demasiado corto o vacío."
+        if raw is None or raw.empty or raw.shape[0] < 6: return pd.DataFrame(), "El archivo está vacío o es muy corto."
         
         fecha_str = extraer_fecha_segura(raw, fname)
         
@@ -255,7 +279,7 @@ def procesar_thdr(data, fname, via_param=1):
         df = make_unique(df)
         df = df.dropna(how='all').reset_index(drop=True)
 
-        if df.empty: return pd.DataFrame(), "Sin filas de datos tras la cabecera."
+        if df.empty: return pd.DataFrame(), "El archivo no contiene filas de datos después de la cabecera."
 
         for col in df.columns:
             if any(k in str(col).upper() for k in ['LLEGADA','SALIDA','HORA']):
@@ -263,14 +287,23 @@ def procesar_thdr(data, fname, via_param=1):
                 except: pass
 
         est_cols = {c: _col_to_est_idx(c) for c in df.columns if '_min' in str(c).lower() and 'program' not in str(c).lower() and _col_to_est_idx(c) is not None}
-        if not est_cols: return pd.DataFrame(), "No se detectaron columnas de estaciones."
+        
+        if not est_cols: return pd.DataFrame(), "No se detectaron columnas de estaciones válidas."
 
-        df['t_ini'] = df.apply(lambda row: min([row.get(c, np.nan) for c in est_cols.keys() if pd.notna(row.get(c))] or [np.nan]), axis=1)
-        df['t_fin'] = df.apply(lambda row: max([row.get(c, np.nan) for c in est_cols.keys() if pd.notna(row.get(c))] or [np.nan]), axis=1)
+        def _safe_min(row):
+            vals = [row.get(c) for c in est_cols.keys() if pd.notna(row.get(c))]
+            return min(vals) if vals else np.nan
+            
+        def _safe_max(row):
+            vals = [row.get(c) for c in est_cols.keys() if pd.notna(row.get(c))]
+            return max(vals) if vals else np.nan
+
+        df['t_ini'] = df.apply(_safe_min, axis=1)
+        df['t_fin'] = df.apply(_safe_max, axis=1)
 
         c_m1 = next((c for c in df.columns if 'motriz' in str(c).lower() and '1' in str(c).lower()), None)
         c_m2 = next((c for c in df.columns if 'motriz' in str(c).lower() and '2' in str(c).lower()), None)
-        serv_col = next((c for c in df.columns if str(c).strip().upper() in ('TREN', 'SERVICIO', 'VIAJE', 'NRO')), None)
+        serv_col = next((c for c in df.columns if str(c).strip().upper() in ('TREN', 'SERVICIO', 'VIAJE')), None)
 
         def _get_fleet_info(r):
             val_t = str(r.get(c_m1, '')) if c_m1 else str(r.get(serv_col, ''))
@@ -290,7 +323,8 @@ def procesar_thdr(data, fname, via_param=1):
 
         df[['km_orig', 'km_dest']] = df.apply(_get_real_orig_dest, axis=1)
         df = df.dropna(subset=['t_ini'])
-        if df.empty: return pd.DataFrame(), "Los viajes fueron descartados por falta de tiempos."
+        
+        if df.empty: return pd.DataFrame(), "Todos los viajes fueron descartados por falta de tiempos."
         
         def _extract_nodos(row):
             nodos_temp = [(row.get(col), km_acum[e_idx]) for col, e_idx in est_cols.items() if pd.notna(row.get(col)) and row.get(col) > 0]
@@ -307,13 +341,13 @@ def procesar_thdr(data, fname, via_param=1):
         
         return df, "ok"
     except Exception as e: 
-        return pd.DataFrame(), str(e)
+        import traceback
+        return pd.DataFrame(), f"Error fatal de lectura: {str(e)}"
 
 def cargar_pax(data, fname, via_param=1):
-    """
-    Extracción Dinámica de Pasajeros. Resuelve el problema de las cabeceras sucias.
-    """
-    pax_cols = getattr(config, 'PAX_COLS', ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM'])
+    try: pax_cols = getattr(config, 'PAX_COLS', ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM'])
+    except: pax_cols = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
+    
     try:
         if fname.lower().endswith('.csv'):
             full = pd.read_csv(BytesIO(data), dtype=str, header=None) 
@@ -323,7 +357,6 @@ def cargar_pax(data, fname, via_param=1):
             
         if full is None or full.empty: return pd.DataFrame()
         
-        # 🛡️ Búsqueda Inteligente de Cabecera (Evita el error de "Fila 9" rígida)
         header_idx = -1
         for i in range(min(30, len(full))):
             row_str = " ".join([str(x).upper() for x in full.iloc[i].values if pd.notna(x)])
@@ -351,9 +384,22 @@ def cargar_pax(data, fname, via_param=1):
             if c_idx < full.shape[1]: 
                 df[col_name] = full.iloc[header_idx + 1:, c_idx].values
                 
-        df['Fecha_s'] = extraer_fecha_segura(full, fname)
-        df['Nro_THDR'] = df['Nro_THDR_raw'].apply(clean_primary_key) if 'Nro_THDR_raw' in df.columns else ''
-        df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins) if 'Hora Origen' in df.columns else None
+        fecha_global = extraer_fecha_segura(full, fname)
+        if full.shape[1] > 3:
+            df['Fecha_Excel_Raw'] = full.iloc[header_idx + 1:, 3].values
+            df['Fecha_s'] = df['Fecha_Excel_Raw'].apply(parse_excel_date).fillna(fecha_global).replace('', fecha_global).ffill()
+        else:
+            df['Fecha_s'] = fecha_global
+                
+        for col in ['Hora Origen', 'Nro_THDR_raw', 'Tren']:
+            if col not in df.columns: df[col] = ''
+        if 'CargaMax' not in df.columns: df['CargaMax'] = '0'
+        for c in pax_cols:
+            if c not in df.columns: df[c] = '0'
+
+        df['Nro_THDR'] = df['Nro_THDR_raw'].apply(clean_primary_key)
+        df['Tren_Clean'] = df['Tren'].apply(clean_id)
+        df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
         df['Via'] = via_param
         df = df.dropna(subset=['t_ini_p'])
         
@@ -364,37 +410,21 @@ def cargar_pax(data, fname, via_param=1):
     except Exception as e: return pd.DataFrame()
 
 def cargar_prevenciones(data, fname):
-    """
-    Extracción Robusta de TSR. Soluciona los errores humanos (comas, letras, orden inverso).
-    """
     try:
-        if fname.lower().endswith('.csv'):
-            df = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8')
-        else:
-            eng = "openpyxl" if fname.lower().endswith(".xlsx") else "xlrd"
-            df = pd.read_excel(BytesIO(data), header=None, engine=eng)
-            
+        df = pd.read_csv(BytesIO(data)) if fname.lower().endswith('.csv') else pd.read_excel(BytesIO(data))
         prevs = []
-        for i in range(len(df)):
-            row = [str(x) for x in df.iloc[i].values if pd.notna(x)]
-            if len(row) >= 3:
-                try:
-                    # 🛡️ Escudo de Texto: Ignora las filas de título buscando solo dígitos
-                    v1 = float(re.search(r'\d+(\.\d+)?', row[0].replace(',', '.')).group())
-                    v2 = float(re.search(r'\d+(\.\d+)?', row[1].replace(',', '.')).group())
-                    v_kmh = float(re.search(r'\d+', row[2]).group())
-                    via = int(re.search(r'\d+', row[3]).group()) if len(row) > 3 else 1
-                    
-                    # 🛡️ Anti-Inversión: Obliga a que el Km Mínimo siempre sea el inicio real
-                    prevs.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': v_kmh, 'via': via})
-                except: pass
+        for _, r in df.iterrows():
+            try:
+                v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
+                m = re.search(r'\d+', str(r.iloc[2]))
+                v_kmh = float(m.group(0)) if m else 30.0
+                via = int(r.iloc[3]) if len(r) > 3 else 1
+                prevs.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': v_kmh, 'via': via})
+            except: pass
         return prevs
-    except Exception as e: return []
+    except: return []
 
-# =============================================================================
-# 5. FUNCIONES STUBS Y CALCULO DWELL
-# =============================================================================
 def calcular_dwell(df1, df2): return df1, df2
-def get_vacios_dia(df_dia): return []
 def get_perfiles_pax(df_px): return {}
+def get_vacios_dia(df_dia): return []
 def parsear_planilla_maestra(data, fname): return pd.DataFrame(), "ok"
