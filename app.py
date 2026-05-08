@@ -1,12 +1,15 @@
 import streamlit as st
+
+# =============================================================================
+# 0. CONFIGURACIÓN DE PÁGINA (DEBE SER LA PRIMERA LÍNEA EN STREAMLIT CLOUD)
+# =============================================================================
+st.set_page_config(page_title="Simulador MERVAL V134", layout="wide", page_icon="🗺️")
+
 import pandas as pd
 import numpy as np
 import time
 from io import BytesIO
 from datetime import datetime, date, timedelta
-
-# Configuración de página de Streamlit (Siempre debe ir arriba)
-st.set_page_config(page_title="Simulador MERVAL V134", layout="wide", page_icon="🗺️")
 
 # Importación segura de configuración para entorno Cloud
 try:
@@ -14,32 +17,57 @@ try:
 except ImportError:
     pass
 
-# Importación de módulos internos del sistema MERVAL con escudo anti-caídas
-try:
-    from etl_parser import (
-        procesar_thdr, calcular_dwell, cargar_pax, match_pax, 
-        get_perfiles_pax, parsear_planilla_maestra, 
-        calc_tren_km_real_general, clean_id, mins_to_time_str, clasificar_dia,
-        cargar_prevenciones, get_vacios_dia
-    )
-except ImportError as e:
-    st.error(f"⚠️ Error cargando el módulo de datos (etl_parser): {e}")
+import etl_parser
 
+# 🛡️ ESCUDO ANTI-CAÍDAS: PUENTE DE COMPATIBILIDAD PARA LA INTERFAZ
+# Si ui_dashboards.py busca el nombre antiguo de la función de pasajeros, la asignamos dinámicamente.
+if not hasattr(etl_parser, 'get_pax_at_km') and hasattr(etl_parser, 'get_pax_at_km_nativo'):
+    etl_parser.get_pax_at_km = etl_parser.get_pax_at_km_nativo
+if not hasattr(etl_parser, 'get_pax_at_km_nativo') and hasattr(etl_parser, 'get_pax_at_km'):
+    etl_parser.get_pax_at_km_nativo = etl_parser.get_pax_at_km
+
+from etl_parser import (
+    procesar_thdr, calcular_dwell, cargar_pax, match_pax, 
+    get_perfiles_pax, parsear_planilla_maestra, 
+    calc_tren_km_real_general, clean_id, mins_to_time_str, clasificar_dia,
+    cargar_prevenciones, get_vacios_dia
+)
+
+# Importación defensiva del Motor Físico
 try:
     from motor_fisico import (
         calcular_termodinamica_flota_v111, calcular_receptividad_por_headway, 
         precalcular_red_electrica_v111,
         km_at_t, vel_at_km, get_train_state_and_speed, simular_tramo_termodinamico
     )
-except ImportError as e:
-    st.error(f"⚠️ Error cargando el motor físico (motor_fisico): {e}")
+except Exception as e:
+    st.error(f"⚠️ Error cargando motor_fisico.py: {e}")
+    calcular_termodinamica_flota_v111 = lambda *args, **kwargs: pd.DataFrame()
+    calcular_receptividad_por_headway = lambda *args, **kwargs: {}
+    precalcular_red_electrica_v111 = lambda *args, **kwargs: {}
+    km_at_t = lambda *args, **kwargs: 0.0
+    vel_at_km = lambda *args, **kwargs: 0.0
+    get_train_state_and_speed = lambda *args, **kwargs: ("CRUISE", 0.0)
+    simular_tramo_termodinamico = lambda *args, **kwargs: (0,0,0,0,0,0)
 
-# Carga condicional de módulos visuales y eléctricos
+# 🛑 IMPORTACIÓN DIRECTA DE MÓDULOS GRÁFICOS (SIN SILENCIADOR)
+# Si falla, creamos funciones vacías de respaldo para que la app no colapse con NameError.
 try:
     from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112, draw_diagram
+except Exception as e:
+    st.error(f"🚨 Falla crítica cargando la interfaz visual (ui_dashboards.py): {e}")
+    def render_gemelo_digital(*args, **kwargs):
+        st.error("El mapa SCADA no puede cargar debido al error en ui_dashboards.py mencionado arriba.")
+    def render_dashboard_energia_v112(*args, **kwargs):
+        pass
+    def draw_diagram(*args, **kwargs):
+        pass
+
+try:
     from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
 except ImportError:
-    pass
+    distribuir_energia_sers = lambda *args, **kwargs: {}
+    calcular_flujo_ac_nodo = lambda *args, **kwargs: {'P_loss_kw': 0.0}
 
 # =============================================================================
 # 1. FUNCIONES DE SOPORTE PARA CARGA DE ARCHIVOS (PIPELINE ETL)
@@ -71,7 +99,6 @@ def build_thdr_v71(blobs_v1, blobs_v2):
             else: err.append(f"[{nm}]: {msg}")
     
     if len(all_parts) > 0:
-        # 🛡️ ESCUDO ANTI-CAÍDAS: Evita el InvalidIndexError forzando columnas únicas antes del concat
         for idx_df in range(len(all_parts)):
             cols = pd.Series(all_parts[idx_df].columns)
             for dup in cols[cols.duplicated()].unique():
@@ -107,16 +134,13 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
     perfiles_por_servicio = {}
     perfiles_por_via = {}
     
-    # Extracción segura de constantes desde config.py
-    try:
-        pax_cols_list = getattr(config, 'PAX_COLS', ['PUE'])
-        flota_dict = getattr(config, 'FLOTA', {})
-    except:
-        pax_cols_list = ['PUE']
-        flota_dict = {}
+    try: pax_cols_list = config.PAX_COLS
+    except: pax_cols_list = ['PUE']
+        
+    try: flota_dict = config.FLOTA
+    except: flota_dict = {}
     
     if not df_px_filtered.empty:
-        # Generar perfiles estadísticos por vía
         for via in [1, 2]:
             sub_via = df_px_filtered[df_px_filtered['Via'] == via]
             if not sub_via.empty:
@@ -124,8 +148,7 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
                 if 'CargaMax' in sub_via.columns:
                     pd_dict['CargaMax_Promedio'] = int(round(sub_via['CargaMax'].mean()))
                 perfiles_por_via[via] = pd_dict
-        
-        # Generar perfiles específicos por número de servicio histórico
+                
         if 'Tren_Clean' in df_px_filtered.columns:
             for tren, group in df_px_filtered.groupby('Tren_Clean'):
                 if str(tren).strip() == '': continue
@@ -145,7 +168,6 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
         f_tipo = flota_dict.get(r['tipo_tren'], {})
         cap_m = f_tipo.get('cap_max', 398) * (2 if r['doble'] else 1)
         
-        # Match inteligente de pasajeros
         if perfiles_por_servicio and num_srv in perfiles_por_servicio:
             perfil_srv = perfiles_por_servicio[num_srv]
             pax_calculado = perfil_srv.get('CargaMax_Promedio', 0)
@@ -162,7 +184,6 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
                         pax_calculado = int(round(best_group['CargaMax'].mean()))
                     pax_arr_viaje = {c: int(round(best_group[c].mean())) for c in pax_cols_list if c in best_group.columns}
                 else:
-                    # Modelación Gaussiana para demanda en valle/punta
                     pax_dict_dinamico = perfiles_por_via.get(via_tren, {})
                     pax_abordo_base = pax_dict_dinamico.get('CargaMax_Promedio', pax_promedio_viaje)
                     f_gauss = 0.2 + 0.8 * np.exp(-0.5 * ((t_ini_tren - 450)/60)**2) + 0.8 * np.exp(-0.5 * ((t_ini_tren - 1080)/90)**2)
@@ -210,13 +231,11 @@ def procesar_planificador_reactivo(df_sint, df_px_filtered, estacion_anio_plan, 
     df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=prevenciones)
     return df_sint_final, df_sint_e
 
-
 # =============================================================================
 # 3. APLICACIÓN PRINCIPAL (MAIN ORCHESTRATOR)
 # =============================================================================
 def main():
     def reset_plan_state():
-        """Limpia el caché de simulación si cambian los parámetros físicos."""
         keys_to_clear = [
             'plan_ready', 'plan_sint_final', 'plan_sint_e',
             'simulacion_plan_lista', 'raw_plan_df', 'plan_res', 'plan_res_e'
@@ -307,7 +326,6 @@ def main():
         
         gap_vias = st.slider("Separación Visual Vías (px)", 120, 350, 200, 10)
 
-    # --- PROCESAMIENTO ETL (EXTRACT, TRANSFORM, LOAD) ---
     def _all_blobs_internal(f_uploader, gh_key): 
         return tuple(leer(f_uploader) + st.session_state.get(gh_key, []))
 
@@ -327,7 +345,6 @@ def main():
     df1, df2, err_t = build_thdr_v71(b1, b2)
     df_px, err_p = build_pax_v71(bx1, bx2)
     
-    # 🚨 PANELES DE SEGURIDAD (Muestra errores de lectura ocultos en la barra lateral)
     with st.sidebar:
         if err_t:
             with st.expander(f"⚠️ {len(err_t)} Errores de Lectura THDR"):
@@ -362,7 +379,6 @@ def main():
 
     fechas = sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)]))) if not df_all.empty else []
 
-    # --- ESTRUCTURA DE TABS (DASHBOARD) ---
     tab_mapa, tab_datos, tab_planificador = st.tabs([
         "🗺️ Gemelo Digital (Histórico)", 
         "👥 Auditoría de Pasajeros", 
@@ -370,28 +386,24 @@ def main():
     ])
     
     with tab_mapa:
-        if df_all.empty or len(fechas) == 0: 
-            st.warning("⚠️ Sin datos operativos. Por favor, cargue archivos THDR válidos en la barra lateral.")
+        if df_all.empty: 
+            st.warning("⚠️ Sin datos operativos. Por favor, cargue archivos THDR en la barra lateral.")
         else:
             fecha_sel = st.selectbox("📅 Fecha Operativa (THDR)", fechas, key="fs_hist")
             df_dia = df_all[df_all['Fecha_str']==fecha_sel].copy()
             
-            # 🚀 ESCUDO DE RENDIMIENTO: Cacha el cálculo pesado para evitar carga infinita en animaciones
-            @st.cache_data(show_spinner="Simulando termodinámica de red...")
-            def _correr_fisica_dia(_df, _pct_trac, _use_pend, _use_rm, _use_regen, _tipo_regen, _estacion, _prevs):
-                _dict_regen = calcular_receptividad_por_headway(_df) if _use_regen and "Probabilístico" in _tipo_regen else (precalcular_red_electrica_v111(_df, _pct_trac, _use_rm, _estacion) if _use_regen else {})
-                return calcular_termodinamica_flota_v111(_df, _pct_trac, _use_pend, _use_rm, _use_regen, _dict_regen, _estacion, prevenciones=_prevs)
-
-            if not df_dia.empty:
-                df_dia_e = _correr_fisica_dia(df_dia, pct_trac, use_pend, use_rm, use_regen, tipo_regen, estacion_anio, prevenciones_list)
-                
-                try:
-                    render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, use_rm, use_pend, estacion_anio, "mapa", gap_vias, pax_dia_total=0)
-                    render_dashboard_energia_v112(df_dia_e, active_sers, fecha_sel, st.session_state.get('sl_ui_mapa', 480.0))
-                except Exception as e:
-                    st.error(f"Falla de Renderizado Visual: Asegúrate de tener los módulos UI integrados. Error: {e}")
-            else:
-                st.warning("⚠️ El día seleccionado no tiene viajes válidos.")
+            dict_regen = calcular_receptividad_por_headway(df_dia) if use_regen and "Probabilístico" in tipo_regen else (precalcular_red_electrica_v111(df_dia, pct_trac, use_rm, estacion_anio) if use_regen else {})
+            
+            try:
+                df_dia_e = calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=prevenciones_list)
+            except TypeError:
+                df_dia_e = calcular_termodinamica_flota_v111(df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio)
+            
+            try:
+                render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, use_rm, use_pend, estacion_anio, "mapa", gap_vias, pax_dia_total=0)
+                render_dashboard_energia_v112(df_dia_e, active_sers, fecha_sel, st.session_state.get('sl_ui_mapa', 480.0))
+            except Exception as e:
+                st.error(f"Falla de Renderizado Visual: Asegúrate de tener los módulos UI integrados. Error: {e}")
 
     with tab_datos:
         st.subheader("📋 Auditoría de Carga de Pasajeros")
@@ -461,7 +473,6 @@ def main():
 
     with tab_planificador:
         st.subheader("🔮 Proyección de Malla y Capex Operativo")
-        st.markdown("El algoritmo ruteará los trenes de la Planilla Maestra o Sintética basándose en el N° de Servicio y calculará los tiempos usando Física Pura. **Inyecta la masa dinámica promedio del tipo de día seleccionado.**")
         
         col_p1, col_p2 = st.columns([1, 2])
         with col_p1:
@@ -546,7 +557,6 @@ def main():
                                     None, estacion_anio_plan, 480.0, es_vacio=False, prevenciones=prevenciones_list
                                 )
                             except TypeError:
-                                # Fallback si el motor antiguo no toma prevenciones
                                 trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb = simular_tramo_termodinamico(
                                     sb_flota, False, km_o, km_d, via_sb, pct_trac, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
                                     None, estacion_anio_plan, 480.0
@@ -569,7 +579,7 @@ def main():
                             c_sb2.metric("⚡ Energía Neta (SEAT)", f"{seat_sb:.1f} kWh")
                             c_sb3.metric("💡 IDE del Tramo (SEAT)", f"{ide_sb:.3f} kWh/km")
                         except Exception as e:
-                            st.error(f"Simulación Física Completada: Tracción {trc_sb:.1f} kWh. (Red Eléctrica no conectada: {e})")
+                            st.error(f"Simulación Física Completada: Tracción {trc_sb:.1f} kWh. (Red Eléctrica no conectada en GUI. Error: {e})")
 
         if modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"]:
             if st.button("🚀 Ejecutar Gemelo Digital del Planificador", use_container_width=True, type="primary"):
@@ -579,7 +589,7 @@ def main():
                         df_sintetico_list = []
                         try: est_safe = getattr(config, 'ESTACIONES', [])
                         except NameError: est_safe = ['Puerto', 'Limache']
-                        try: km_acum_safe = getattr(config, 'KM_ACUM', [])
+                        try: km_acum_safe = getattr(config, 'KM_ACUM', [0.0, 43.13])
                         except NameError: km_acum_safe = [0.0, 43.13]
                         try: ec_safe = getattr(config, 'EC', [])
                         except NameError: ec_safe = ['PU', 'LI']
