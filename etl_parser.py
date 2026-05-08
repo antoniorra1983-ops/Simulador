@@ -67,8 +67,9 @@ def parse_time_to_mins(val):
         return h * 60.0 + m_min + s_sec
     try:
         f = float(sv)
-        if f < 1.0: return f * 1440.0
-        if f < 2400.0: return (int(f // 100) * 60.0) + (f % 100)
+        if np.isinf(f) or pd.isna(f): return None
+        if f < 1.0: return (f * 1440.0) % 1440.0
+        if f < 2400.0: return ((int(f // 100) * 60.0) + (f % 100)) % 1440.0
     except: pass
     return None
 
@@ -181,16 +182,14 @@ def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0):
     if sum(pax_d.values()) == 0 and pax_max_fallback > 0: return pax_max_fallback
     pax_val = 0
     if via == 1:
-        for i in range(N_EST):
+        for i in range(len(KM_ACUM)):
             if km_pos >= KM_ACUM[i]:
-                val = pax_d.get(PAX_COLS[i])
-                if val is not None: pax_val = val
+                if i < len(PAX_COLS): pax_val = pax_d.get(PAX_COLS[i], pax_val)
             else: break
     else:
-        for i in range(N_EST - 1, -1, -1):
+        for i in range(len(KM_ACUM) - 1, -1, -1):
             if km_pos <= KM_ACUM[i]:
-                val = pax_d.get(PAX_COLS[i])
-                if val is not None: pax_val = val
+                if i < len(PAX_COLS): pax_val = pax_d.get(PAX_COLS[i], pax_val)
             else: break
     return int(pax_val)
 
@@ -483,8 +482,8 @@ def match_pax(row, df_pax):
         sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
         match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
         if not match_exacto.empty:
-            best_match = match_exacto.iloc[0]
-            return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
+            best = match_exacto.iloc[0]
+            return {c: _to_int(best.get(c, 0)) for c in PAX_COLS}, _to_int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR', '')), best.name
 
     if pd.notna(t_i):
         best_match = sub.loc[sub['diff'].idxmin()]
