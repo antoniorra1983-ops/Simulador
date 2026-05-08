@@ -53,14 +53,12 @@ except Exception as e:
 # 🛑 IMPORTACIÓN DIRECTA DE MÓDULOS GRÁFICOS (SIN SILENCIADOR)
 # Si falla, creamos funciones vacías de respaldo para que la app no colapse con NameError.
 try:
-    from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112, draw_diagram
+    from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 except Exception as e:
     st.error(f"🚨 Falla crítica cargando la interfaz visual (ui_dashboards.py): {e}")
     def render_gemelo_digital(*args, **kwargs):
         st.error("El mapa SCADA no puede cargar debido al error en ui_dashboards.py mencionado arriba.")
     def render_dashboard_energia_v112(*args, **kwargs):
-        pass
-    def draw_diagram(*args, **kwargs):
         pass
 
 try:
