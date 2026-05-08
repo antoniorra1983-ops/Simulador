@@ -5,6 +5,12 @@ import unicodedata
 from io import BytesIO
 from datetime import datetime, date, timedelta
 
+# 🛡️ ESCUDOS DE SEGURIDAD (Para evitar NameErrors si config.py no carga)
+PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
+KM_ACUM_DEFAULT = [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13]
+EST_DEFAULT = ['Puerto','Bellavista','Francia','Baron','Portales','Recreo','Miramar','Viña del Mar','Hospital','Chorrillos','El Salto','Valencia','Quilpue','El Sol','El Belloto','Las Americas','La Concepcion','Villa Alemana','Sargento Aldea','Peñablanca','Limache']
+EC_DEFAULT = ['PU','BE','FR','BA','PO','RE','MI','VM','HO','CH','ES','VAL','QU','SO','EB','AM','CO','VL','SA','PE','LI']
+
 try:
     import config
 except ImportError:
@@ -128,6 +134,7 @@ def clasificar_dia(d_str):
     except: return 'Laboral'
 
 def make_unique(df):
+    if df.empty: return df
     cols = pd.Series(df.columns)
     for dup in cols[cols.duplicated()].unique(): 
         cols[cols==dup] = [f"{dup}_{i}" if i else dup for i in range(sum(cols==dup))]
@@ -135,10 +142,9 @@ def make_unique(df):
     return df
 
 def _col_to_est_idx(col):
-    try: estaciones = getattr(config, 'ESTACIONES', [])
-    except NameError: return None
-    if not estaciones: return None
-        
+    try: estaciones = getattr(config, 'ESTACIONES', EST_DEFAULT)
+    except NameError: estaciones = EST_DEFAULT
+    
     cu = re.sub(r'[^a-z0-9]','', str(col).lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
     if 'americas' in cu: return estaciones.index('Las Americas') if 'Las Americas' in estaciones else None
     if 'vina' in cu: return estaciones.index('Viña del Mar') if 'Viña del Mar' in estaciones else None
@@ -151,9 +157,8 @@ def _col_to_est_idx(col):
     return None
 
 def calc_tren_km_real_general(row):
-    try: km_acum = getattr(config, 'KM_ACUM', [])
-    except NameError: return 0.0
-    if not km_acum: return 0.0
+    try: km_acum = getattr(config, 'KM_ACUM', KM_ACUM_DEFAULT)
+    except NameError: km_acum = KM_ACUM_DEFAULT
     
     k_s, k_e = min(row['km_orig'], row['km_dest']), max(row['km_orig'], row['km_dest'])
     man = row.get('maniobra')
@@ -169,11 +174,13 @@ def calc_tren_km_real_general(row):
 # 3. CRUCE INTELIGENTE DE PASAJEROS (MASA DINÁMICA POR ESTACIÓN)
 # =============================================================================
 def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0):
-    try: km_acum = getattr(config, 'KM_ACUM', [])
-    except: km_acum = []
-    try: pax_cols = getattr(config, 'PAX_COLS', [])
-    except: pax_cols = []
-    
+    try: 
+        km_acum = getattr(config, 'KM_ACUM', KM_ACUM_DEFAULT)
+        pax_cols = getattr(config, 'PAX_COLS', PAX_COLS_DEFAULT)
+    except: 
+        km_acum = KM_ACUM_DEFAULT
+        pax_cols = PAX_COLS_DEFAULT
+        
     if not pax_d or not isinstance(pax_d, dict): return pax_max_fallback
     if sum(pax_d.values()) == 0 and pax_max_fallback > 0: return pax_max_fallback
     
@@ -191,7 +198,7 @@ def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0):
     return int(pax_val)
 
 def get_pax_at_km(pax_d, km_pos, via, pax_max_fallback=0):
-    """Puente de compatibilidad para evitar ImportErrors gráficos"""
+    """Puente de compatibilidad para evitar ImportErrors en UI"""
     return get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback)
 
 def match_pax(row, df_pax):
@@ -199,12 +206,16 @@ def match_pax(row, df_pax):
     🛡️ MATCH A PRUEBA DE FALLAS: Cruza los pasajeros asegurando que, si la fecha falla, 
     usa la hora y el número de tren de todas maneras.
     """
-    try: pax_cols = getattr(config, 'PAX_COLS', ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM'])
-    except: pax_cols = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
+    try: pax_cols = getattr(config, 'PAX_COLS', PAX_COLS_DEFAULT)
+    except: pax_cols = PAX_COLS_DEFAULT
     
     EMPTY = ({c: 0 for c in pax_cols}, 0, '--:--:--', 'No Detectado', -1)
-    if df_pax.empty: return EMPTY
+    if df_pax is None or df_pax.empty: return EMPTY
     
+    def _to_int(v):
+        try: return int(float(v)) if pd.notna(v) else 0
+        except: return 0
+
     t_i = row.get('t_ini')
     via = row.get('Via', 1)
     nro_viaje = clean_primary_key(row.get('num_servicio', row.get('nro_viaje', '')))
@@ -226,14 +237,15 @@ def match_pax(row, df_pax):
         match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
         if not match_exacto.empty:
             best_match = match_exacto.iloc[0]
-            return {c: int(best_match.get(c, 0)) for c in pax_cols}, int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
+            return {c: _to_int(best_match.get(c, 0)) for c in pax_cols}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
 
     # 2. Búsqueda Débil (Por Sincronización Horaria con 15 minutos de tolerancia)
     if pd.notna(t_i) and 't_ini_p' in sub.columns:
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x)-float(t_i)), 1440-abs(float(x)-float(t_i))) if pd.notna(x) else 9999)
-        best_match = sub.loc[sub['diff'].idxmin()]
-        if best_match['diff'] <= 15:
-            return {c: int(best_match.get(c, 0)) for c in pax_cols}, int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
+        idx_min = sub['diff'].idxmin()
+        if pd.notna(idx_min) and sub.loc[idx_min, 'diff'] <= 15:
+            best_match = sub.loc[idx_min]
+            return {c: _to_int(best_match.get(c, 0)) for c in pax_cols}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
     
     return EMPTY
 
@@ -241,10 +253,10 @@ def match_pax(row, df_pax):
 # 4. EXTRACCIÓN DE ARCHIVOS (PARSERS A PRUEBA DE FALLOS)
 # =============================================================================
 def procesar_thdr(data, fname, via_param=1):
-    try: km_acum = getattr(config, 'KM_ACUM', [])
-    except: km_acum = []
-    try: ec = getattr(config, 'EC', [])
-    except: ec = []
+    try: km_acum = getattr(config, 'KM_ACUM', KM_ACUM_DEFAULT)
+    except: km_acum = KM_ACUM_DEFAULT
+    try: ec = getattr(config, 'EC', EC_DEFAULT)
+    except: ec = EC_DEFAULT
     try: km_total = getattr(config, 'KM_TOTAL', 43.13)
     except: km_total = 43.13
     
@@ -345,8 +357,12 @@ def procesar_thdr(data, fname, via_param=1):
         return pd.DataFrame(), f"Error fatal de lectura: {str(e)}"
 
 def cargar_pax(data, fname, via_param=1):
-    try: pax_cols = getattr(config, 'PAX_COLS', ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM'])
-    except: pax_cols = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
+    """
+    🛡️ EXTRACTOR BLINDADO: Escanea cabeceras dinámicamente, extrae fechas y pasajeros 
+    inmune a formatos extraños de EFE.
+    """
+    try: pax_cols = getattr(config, 'PAX_COLS', PAX_COLS_DEFAULT)
+    except: pax_cols = PAX_COLS_DEFAULT
     
     try:
         if fname.lower().endswith('.csv'):
@@ -364,7 +380,7 @@ def cargar_pax(data, fname, via_param=1):
                 header_idx = i
                 break
                 
-        if header_idx == -1: header_idx = 9 # Fallback
+        if header_idx == -1: header_idx = 9 # Fallback EFE Standard
             
         col_mapping = {}
         for c_idx in range(full.shape[1]):
@@ -410,21 +426,28 @@ def cargar_pax(data, fname, via_param=1):
     except Exception as e: return pd.DataFrame()
 
 def cargar_prevenciones(data, fname):
+    """
+    🛡️ Lector de TSR: Limpia textos y auto-ordena los puntos kilométricos con min/max.
+    Soluciona el problema de que el motor físico ignore restricciones.
+    """
     try:
-        df = pd.read_csv(BytesIO(data)) if fname.lower().endswith('.csv') else pd.read_excel(BytesIO(data))
+        df = pd.read_csv(BytesIO(data), header=None) if fname.lower().endswith('.csv') else pd.read_excel(BytesIO(data), header=None)
         prevs = []
-        for _, r in df.iterrows():
-            try:
-                v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
-                m = re.search(r'\d+', str(r.iloc[2]))
-                v_kmh = float(m.group(0)) if m else 30.0
-                via = int(r.iloc[3]) if len(r) > 3 else 1
-                prevs.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': v_kmh, 'via': via})
-            except: pass
+        for i in range(len(df)):
+            row = [str(x) for x in df.iloc[i].values if pd.notna(x)]
+            if len(row) >= 3:
+                try:
+                    v1 = float(re.search(r'\d+(\.\d+)?', row[0].replace(',', '.')).group())
+                    v2 = float(re.search(r'\d+(\.\d+)?', row[1].replace(',', '.')).group())
+                    v_kmh = float(re.search(r'\d+', row[2]).group())
+                    via = int(re.search(r'\d+', row[3]).group()) if len(row) > 3 else 1
+                    prevs.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': v_kmh, 'via': via})
+                except: pass
         return prevs
     except: return []
 
+# Stubs para compatibilidad de importación
 def calcular_dwell(df1, df2): return df1, df2
-def get_perfiles_pax(df_px): return {}
 def get_vacios_dia(df_dia): return []
 def parsear_planilla_maestra(data, fname): return pd.DataFrame(), "ok"
+def get_perfiles_pax(df_px): return {}
