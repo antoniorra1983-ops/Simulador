@@ -212,7 +212,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                             a_necesaria = (v_ms**2 - v_obj**2) / (2 * dist_a_zona)
                             if a_necesaria > 0.4: v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
 
-            # Fricción Dinámica
+            # Fricción Dinámica (Ecuación de Davis)
             v_kmh = v_ms * 3.6
             f_davis = ((f.get('davis_A', 1615.0) * 2) + (f.get('davis_B', 0.0) * 2 * v_kmh) + (f.get('davis_C', 0.54) * 1.35 * (v_kmh**2))) if n_uni == 2 else (f.get('davis_A', 1615.0) + f.get('davis_B', 0.0)*v_kmh + f.get('davis_C', 0.54)*(v_kmh**2))
                 
@@ -235,15 +235,29 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 estado_marcha = "BRAKE_OVERSPEED"
                 a_target = -0.4
             else:
-                if estado_marcha == "BRAKE_OVERSPEED" and v_kmh <= v_cons_kmh: estado_marcha = "COAST"
-                elif estado_marcha == "COAST" and v_kmh < v_cons_kmh - 2.0: estado_marcha = "ACCEL"
-                elif estado_marcha == "ACCEL" and v_kmh >= v_cons_kmh - 0.5: estado_marcha = "COAST"
-                elif estado_marcha not in ["ACCEL", "COAST", "BRAKE_STATION", "BRAKE_OVERSPEED"]: estado_marcha = "ACCEL"
+                # 💡 ESTADO DE CRUCERO REALISTA (Evita el sobreconsumo en vía plana)
+                if estado_marcha == "BRAKE_OVERSPEED" and v_kmh <= v_cons_kmh: 
+                    estado_marcha = "CRUISE"
+                elif estado_marcha == "ACCEL" and v_kmh >= v_cons_kmh - 0.5: 
+                    estado_marcha = "CRUISE"
+                elif estado_marcha == "COAST" and v_kmh < v_cons_kmh - 2.0: 
+                    estado_marcha = "ACCEL"
+                elif estado_marcha not in ["ACCEL", "COAST", "CRUISE", "BRAKE_STATION", "BRAKE_OVERSPEED"]: 
+                    estado_marcha = "ACCEL"
 
                 if estado_marcha == "ACCEL":
                     a_target = (f_disp_trac - f_davis - f_pend) / masa_kg
                 elif estado_marcha == "CRUISE":
-                    a_target = 0.0
+                    f_req_cruise = f_davis + f_pend
+                    if f_req_cruise > 0:
+                        if f_req_cruise > f_disp_trac:
+                            estado_marcha = "ACCEL"
+                            a_target = (f_disp_trac - f_davis - f_pend) / masa_kg
+                        else:
+                            a_target = 0.0
+                    else:
+                        estado_marcha = "COAST"
+                        a_target = (-f_davis - f_pend) / masa_kg
                 else: # COAST
                     a_target = (-f_davis - f_pend) / masa_kg
                     
@@ -260,11 +274,11 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 v_new = 0.0
                 a_net = (v_new - v_ms) / dt_actual if dt_actual > 0 else 0.0
                 
-            # 🚀 FIX: EL CRUCERO REALISTA (Resuelve la subestimación de energía)
-            if estado_marcha == "ACCEL" and (v_new * 3.6 > v_cons_kmh): 
+            # 🚀 FIX MATEMÁTICO: EL RE-CÁLCULO INVERSO (Cierra la fuga de la Aceleración Fantasma)
+            if estado_marcha in ["ACCEL", "CRUISE"] and (v_new * 3.6 > v_cons_kmh): 
                 v_new = v_cons_kmh / 3.6
                 a_net = (v_new - v_ms) / dt_actual if dt_actual > 0 else 0.0
-                estado_marcha = "CRUISE"  # Mantenimiento de velocidad
+                estado_marcha = "CRUISE"  # Anclaje de velocidad
                 
             a_prev = a_net # Guarda el estado para el suavizado de Jerk
             
@@ -282,8 +296,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 dt_actual = step_m / 2.0
                 a_net = 0.0
 
-            # 🚀 FIX: INGENIERÍA INVERSA TERMODINÁMICA (Cierra la fuga de la potencia infinita)
-            # Calculamos la fuerza que el motor DEBE haber hecho para lograr esta aceleración neta
+            # 🚀 CÁLCULO DE FUERZAS ESTRICTO ACOTADO POR LA REALIDAD DEL MOTOR
             f_total_req = (masa_kg * a_net) + f_davis + f_pend
             
             f_motor = 0.0
