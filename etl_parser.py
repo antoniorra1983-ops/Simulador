@@ -228,69 +228,67 @@ def calcular_dwell(df1, df2):
     return df1, df2
 
 # =============================================================================
-# 🚀 NUEVA LÓGICA DE PASAJEROS: LECTURA POSICIONAL ESTRICTA
-# El usuario certifica que el archivo de EFE tiene estructura FIJA.
+# 🚀 NUEVA LÓGICA DE PASAJEROS: EXTRACCIÓN POSICIONAL ESTRICTA
+# Obedece a la garantía de que el formato de EFE jamás cambia de lugar.
 # =============================================================================
 def cargar_pax(data, fname, via_param=1):
     try:
-        # Se asume siempre que el encabezado real de columnas está en la Fila 10 de Excel (índice 9).
         ext = fname.lower()
         if ext.endswith('.csv'):
-            try: df_raw = pd.read_csv(BytesIO(data), header=9, sep=',', encoding='utf-8', dtype=str)
-            except: df_raw = pd.read_csv(BytesIO(data), header=9, sep=';', encoding='latin-1', dtype=str)
+            try: full = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)
+            except: full = pd.read_csv(BytesIO(data), header=None, sep=';', encoding='latin-1', dtype=str)
         else: 
             eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
-            df_raw = pd.read_excel(BytesIO(data), header=9, engine=eng, dtype=str)
+            full = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
 
-        if df_raw is None or df_raw.empty: return pd.DataFrame()
+        if full is None or full.empty: return pd.DataFrame()
 
-        df = df_raw.copy()
-        
-        # Limpiar caracteres ocultos en los nombres de las cabeceras
-        df.columns = [str(c).strip().upper().replace('\n', '').replace('\r', '') for c in df.columns]
+        # 💡 POSICIONAL ESTRICTO: Buscar la fila exacta donde arrancan los datos (Hora en Col 0)
+        start_idx = -1
+        for i in range(min(25, len(full))):
+            val = str(full.iloc[i, 0]).strip()
+            # Verifica si es formato hora "06:30", "6:30:00" o decimal de Excel
+            if re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', val):
+                start_idx = i
+                break
+            try:
+                f = float(val)
+                if 0.0 < f < 1.0: 
+                    start_idx = i
+                    break
+            except: pass
 
-        # 💡 MAPEO DIRECTO Y ESTRUCTURAL: Si el formato es fijo, vamos al grano.
-        renames = {}
-        for col in df.columns:
-            if 'HORA' in col and 'ORIG' in col: renames[col] = 'Hora Origen'
-            elif col == 'TREN' or col == 'SERVICIO': renames[col] = 'Tren'
-            elif 'THDR' in col: renames[col] = 'Nro_THDR_raw'
-            elif 'FECHA' in col: renames[col] = 'Fecha_Excel'
-            elif 'TOTAL' in col or 'BORDO' in col or 'MAX' in col or 'CARGA' in col: renames[col] = 'CargaMax'
+        if start_idx == -1:
+            start_idx = 10 # Fallback: Asume fila 11 (índice 10) estándar EFE
+
+        data_rows = full.iloc[start_idx:].copy().reset_index(drop=True)
+        df = pd.DataFrame()
+
+        # 💡 MAPEO DIRECTO POR COLUMNA (Sin leer los encabezados, ciego e infalible)
+        df['Hora Origen'] = data_rows.iloc[:, 0].values if data_rows.shape[1] > 0 else ''
+        df['Tren'] = data_rows.iloc[:, 1].values if data_rows.shape[1] > 1 else ''
+        df['Nro_THDR_raw'] = data_rows.iloc[:, 2].values if data_rows.shape[1] > 2 else ''
+
+        # Orden de estaciones: Vía 1 (PUE -> LIM), Vía 2 (LIM -> PUE)
+        est_orden = PAX_COLS if via_param == 1 else list(reversed(PAX_COLS))
+
+        # Extraer las 21 estaciones exactas (Columnas 3 a 23)
+        for i, st in enumerate(est_orden):
+            col_idx = 3 + i
+            if col_idx < data_rows.shape[1]:
+                df[st] = data_rows.iloc[:, col_idx].values
             else:
-                # Si la columna es una estación (ej. PUE, BEL...), la mapeamos directo
-                for st_code in PAX_COLS:
-                    if st_code in col or col.startswith(st_code):
-                        renames[col] = st_code
-                        break
+                df[st] = '0'
 
-        df = df.rename(columns=renames)
-
-        # 🛡️ SEGURIDAD EXTREMA: Si las columnas vienen con nombres raros, forzamos por posición
-        if 'Hora Origen' not in df.columns and len(df.columns) > 0: df = df.rename(columns={df.columns[0]: 'Hora Origen'})
-        if 'Tren' not in df.columns and len(df.columns) > 1: df = df.rename(columns={df.columns[1]: 'Tren'})
-        if 'Nro_THDR_raw' not in df.columns and len(df.columns) > 2: df = df.rename(columns={df.columns[2]: 'Nro_THDR_raw'})
-        
-        fecha_global = extraer_fecha_segura(pd.DataFrame(), fname)
-        
-        if 'Fecha_Excel' in df.columns:
-            df['Fecha_s'] = df['Fecha_Excel'].apply(parse_excel_date).fillna(fecha_global).replace('', fecha_global).ffill()
-        elif len(df.columns) > 3 and df.columns[3] not in PAX_COLS and df.columns[3] != 'CargaMax':
-            # EFE suele poner la fecha en la columna índice 3 si no tiene cabecera
-            df['Fecha_s'] = df.iloc[:, 3].apply(parse_excel_date).fillna(fecha_global).replace('', fecha_global).ffill()
+        # La columna 24 es el Total / CargaMax
+        if 24 < data_rows.shape[1]:
+            df['CargaMax'] = data_rows.iloc[:, 24].values
         else:
-            df['Fecha_s'] = fecha_global
+            df['CargaMax'] = '0'
 
-        # Asegurar existencia de columnas críticas
-        if 'Hora Origen' not in df.columns: df['Hora Origen'] = ''
-        if 'Tren' not in df.columns: df['Tren'] = ''
-        if 'Nro_THDR_raw' not in df.columns: df['Nro_THDR_raw'] = ''
-        if 'CargaMax' not in df.columns: df['CargaMax'] = '0'
-        
-        for c in PAX_COLS:
-            if c not in df.columns: df[c] = '0'
+        fecha_global = extraer_fecha_segura(full, fname)
+        df['Fecha_s'] = fecha_global
 
-        # Limpieza de datos
         df['Nro_THDR'] = df['Nro_THDR_raw'].apply(clean_primary_key)
         df['Tren_Clean'] = df['Tren'].apply(clean_id)
         df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
@@ -298,10 +296,11 @@ def cargar_pax(data, fname, via_param=1):
         
         df = df.dropna(subset=['t_ini_p'])
         if df.empty: return pd.DataFrame()
-        
+
+        # Limpieza matemática final
         for c in PAX_COLS + ['CargaMax']: 
             df[c] = df[c].apply(clean_pax_number)
-            
+
         return df
     except Exception as e: 
         return pd.DataFrame()
@@ -317,20 +316,40 @@ def build_pax_v71(blobs_v1, blobs_v2):
 def match_pax(row, df_pax):
     EMPTY = ({c: 0 for c in PAX_COLS}, 0, '--:--:--', 'No Detectado', -1)
     if df_pax.empty: return EMPTY
-    t_i, via, nro_viaje = row.get('t_ini'), row.get('Via', 1), clean_primary_key(row.get('nro_viaje', ''))
-    sub = df_pax[(df_pax['Via'] == via) & (df_pax['Fecha_s'] == row.get('Fecha_str'))].copy() if 'Fecha_s' in df_pax.columns and row.get('Fecha_str') != '2026-01-01' else df_pax[df_pax['Via'] == via].copy()
+    def _to_int(v):
+        try: return int(float(v)) if pd.notna(v) else 0
+        except: return 0
+        
+    t_i = row.get('t_ini')
+    via = row.get('via_op', row.get('Via', 1))
+    nro_viaje = clean_primary_key(row.get('nro_viaje', ''))
+    thdr_date = row.get('Fecha_str')
+    
+    sub = df_pax[df_pax['Via'] == via].copy()
     if sub.empty: return EMPTY
+    
+    # 💡 FIX MORTAL: Filtro de fecha suave. Si no cuadra el nombre del Excel, no aborta, sigue buscando.
+    if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
+        sub_date = sub[sub['Fecha_s'] == thdr_date]
+        if not sub_date.empty: 
+            sub = sub_date
 
     sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
-    if nro_viaje:
-        match_exacto = sub[sub['Nro_THDR'].apply(clean_primary_key) == nro_viaje]
+    
+    # 1. Match Exacto por Nro de Viaje (THDR)
+    if nro_viaje != '' and 'Nro_THDR' in sub.columns:
+        sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
+        match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
         if not match_exacto.empty:
             best = match_exacto.iloc[0]
-            return {c: int(best.get(c, 0)) for c in PAX_COLS}, int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR', '')), best.name
+            return {c: _to_int(best.get(c, 0)) for c in PAX_COLS}, _to_int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR', '')), best.name
 
-    if pd.notna(t_i) and sub.loc[sub['diff'].idxmin()]['diff'] <= 15:
+    # 2. Match por tiempo más cercano (Fallback de Seguridad)
+    if pd.notna(t_i):
         best_match = sub.loc[sub['diff'].idxmin()]
-        return {c: int(best_match.get(c, 0)) for c in PAX_COLS}, int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
+        if best_match['diff'] <= 15: 
+            return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
+
     return EMPTY
 
 def cargar_prevenciones(data, fname):
