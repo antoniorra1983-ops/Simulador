@@ -55,7 +55,7 @@ def leer_github(url):
             return nm, r.read()
     except Exception as e: return None, str(e)
 
-# Ya no usamos @st.cache_data aquí individualmente para evitar hashing lento. Lo agrupamos todo.
+# Agrupamos el procesamiento para usar Caché Eficiente
 def build_thdr_v71(blobs_v1, blobs_v2):
     all_parts, err = [], []
     for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
@@ -88,9 +88,7 @@ def build_pax_v71(blobs_v1, blobs_v2):
     if len(parts) > 0: return pd.concat(parts, ignore_index=True), err
     return pd.DataFrame(), err
 
-# 🚀 FIX DE RENDIMIENTO MÁXIMO: HASH EVASION
-# Prefijando las variables masivas con '_' evitamos que Streamlit intente hashear la data completa
-# cada vez que tocas un botón, lo que causaba la lentitud. Usamos 'data_sig' como llave ligera (texto).
+# 🚀 FIX DE RENDIMIENTO: Caché robusto y único para lectura
 @st.cache_data(show_spinner="Consolidando Viajes y Sincronizando Pasajeros...")
 def procesar_datos_completos(_b1, _b2, _bx1, _bx2, data_sig):
     df1, df2, err_t = build_thdr_v71(_b1, _b2)
@@ -255,33 +253,87 @@ def main():
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
-        st.cache_data.clear()
+        # 🚨 LA CAUSA DE LA LENTITUD: Aquí había un st.cache_data.clear()
+        # Ha sido ELIMINADO para que los cambios en sliders sean hiper-rápidos.
 
     with st.sidebar:
-        st.header("📂 Inyección de Datos")
-        f_v1 = st.file_uploader("THDR V1", accept_multiple_files=True, key="t1")
-        f_v2 = st.file_uploader("THDR V2", accept_multiple_files=True, key="t2")
-        f_px1 = st.file_uploader("Pasajeros V1", accept_multiple_files=True, key="px1")
-        f_px2 = st.file_uploader("Pasajeros V2", accept_multiple_files=True, key="px2")
-        f_prev = st.file_uploader("🚧 Prevenciones (.csv, .xlsx)", accept_multiple_files=True, key="prev")
+        st.header("📂 Archivos Base")
+        with st.expander("🔗 Cargar desde GitHub (Batch)", expanded=False):
+            urls_txt = st.text_area("Lista de URLs", placeholder="https://github.com/...", height=100)
+            gh_via = st.radio("Tipo manual", ["Detección Automática", "THDR V1", "THDR V2", "Pasajeros V1", "Pasajeros V2", "Prevenciones"], horizontal=False, index=0)
+            if st.button("⬇️ Descargar Todo", use_container_width=True): 
+                urls = [u.strip() for u in urls_txt.split('\n') if u.strip()]
+                if urls:
+                    success_count = 0
+                    for url in urls:
+                        with st.spinner(f"Descargando {url.split('/')[-1]}..."):
+                            nm, data_or_err = leer_github(url)
+                        if nm and isinstance(data_or_err, bytes):
+                            lnm = nm.lower()
+                            if gh_via == "THDR V1": k = "gh_blobs_v1"
+                            elif gh_via == "THDR V2": k = "gh_blobs_v2"
+                            elif gh_via == "Pasajeros V1": k = "gh_blobs_px1"
+                            elif gh_via == "Pasajeros V2": k = "gh_blobs_px2"
+                            elif gh_via == "Prevenciones": k = "gh_blobs_prev"
+                            else:
+                                if "prevencion" in lnm or "tsr" in lnm: k = "gh_blobs_prev"
+                                elif "v1" in lnm or "via1" in lnm: 
+                                    if "pax" in lnm or "pasajero" in lnm or "export" in lnm: k = "gh_blobs_px1"
+                                    else: k = "gh_blobs_v1"
+                                elif "v2" in lnm or "via2" in lnm:
+                                    if "pax" in lnm or "pasajero" in lnm or "export" in lnm: k = "gh_blobs_px2"
+                                    else: k = "gh_blobs_v2"
+                                elif "pax" in lnm or "pasajero" in lnm or "export" in lnm: k = "gh_blobs_px1"
+                                else: k = "gh_blobs_v1" 
+                            if k not in st.session_state: st.session_state[k] = []
+                            st.session_state[k].append((nm, data_or_err))
+                            success_count += 1
+                    if success_count > 0:
+                        st.success(f"✅ Se cargaron {success_count} archivos.")
+                        st.rerun()
+
+            st.divider()
+            for lbl, key in [("V1","gh_blobs_v1"),("V2","gh_blobs_v2"),("Pax V1","gh_blobs_px1"),("Pax V2","gh_blobs_px2"),("Prevenciones","gh_blobs_prev")]:
+                blobs_gh = st.session_state.get(key, [])
+                if blobs_gh:
+                    st.caption(f"GitHub {lbl}: {len(blobs_gh)} archivo(s)")
+                    if st.button(f"🗑️ Limpiar {lbl}", key=f"gh_clear_{lbl}"):
+                        st.session_state[key] = []; st.rerun()
+
+        st.subheader("Carga de Planillas Locales")
+        f_v1 = st.file_uploader("THDR Vía 1 (Puerto→Limache)", accept_multiple_files=True, key="t1")
+        f_v2 = st.file_uploader("THDR Vía 2 (Limache→Puerto)", accept_multiple_files=True, key="t2")
+        f_px1 = st.file_uploader("Pasajeros Vía 1", accept_multiple_files=True, key="px1")
+        f_px2 = st.file_uploader("Pasajeros Vía 2", accept_multiple_files=True, key="px2")
+        f_prev = st.file_uploader("🚧 Prevenciones de Vía (.csv, .xlsx)", accept_multiple_files=True, key="prev")
         
         st.divider()
-        st.subheader("⚙️ Parámetros Físicos")
-        use_rm      = st.checkbox("🚦 Velocidades RM", value=False, on_change=reset_plan_state)
+        st.subheader("⚙️ Parámetros Físicos del Escenario")
+        use_rm      = st.checkbox("🚦 Velocidades RM (Riel Mojado)", value=False, on_change=reset_plan_state)
         pct_trac    = st.slider("⚙️ % Tracción Nominal", 30, 100, 90, 5, on_change=reset_plan_state)
-        use_pend    = st.toggle("⛰️ Pendientes", value=True, on_change=reset_plan_state)
-        use_regen   = st.toggle("⚡ Regeneración", value=True, on_change=reset_plan_state)
+        use_pend    = st.toggle("⛰️ Pendientes Físicas", value=True, on_change=reset_plan_state)
+        use_regen   = st.toggle("⚡ Activar Regeneración", value=True, on_change=reset_plan_state)
         tipo_regen  = st.radio("Modelo de Regeneración", ["Físico (Load Flow)", "Probabilístico (Headway)"], on_change=reset_plan_state)
         
+        st.divider()
+        st.subheader("🌡️ Climatización y Auxiliares")
         mes_sel = st.selectbox("Mes de operación", ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"], index=3, on_change=reset_plan_state)
-        estacion_anio = {"Enero":"verano","Febrero":"verano","Marzo":"otoño","Abril":"otoño","Mayo":"otoño","Junio":"invierno","Julio":"invierno","Agosto":"invierno","Septiembre":"primavera","Octubre":"primavera","Noviembre":"primavera","Diciembre":"verano"}[mes_sel]
+        _M = {"Enero":"verano","Febrero":"verano","Marzo":"otoño","Abril":"otoño","Mayo":"otoño","Junio":"invierno","Julio":"invierno","Agosto":"invierno","Septiembre":"primavera","Octubre":"primavera","Noviembre":"primavera","Diciembre":"verano"}
+        estacion_anio = _M[mes_sel]
         
-        try: ser_data_safe = getattr(config, 'SER_DATA', SER_DATA_DEFAULT)
-        except: ser_data_safe = SER_DATA_DEFAULT
+        st.divider()
+        st.subheader("🔌 Configuración de Red")
+        
+        try: 
+            ser_data_safe = getattr(config, 'SER_DATA', [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")])
+        except: 
+            ser_data_safe = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
         
         all_ser_names = [s[1] for s in ser_data_safe]
         active_ser_names = st.multiselect("Subestaciones Activas", all_ser_names, default=all_ser_names, on_change=reset_plan_state)
-        active_sers = [s for s in ser_data_safe if s[1] in active_ser_names] or [ser_data_safe[0]]
+        active_sers = [s for s in ser_data_safe if s[1] in active_ser_names]
+        if not active_sers: 
+            active_sers = [ser_data_safe[0]]
         
         gap_vias = st.slider("Separación Visual Vías (px)", 120, 350, 200, 10)
 
@@ -294,15 +346,11 @@ def main():
     bx2 = _all_blobs_internal(f_px2, "gh_blobs_px2")
     b_prev = _all_blobs_internal(f_prev, "gh_blobs_prev")
     
-    # 🚀 LLAVE DE RENDIMIENTO EXTREMO
-    # Se genera una firma ultraligera (texto) de todos los archivos cargados. 
-    # Al ser texto, Streamlit la procesa instantáneamente sin tener que escanear megabytes de memoria.
     file_signature = ""
     for b in [b1, b2, bx1, bx2, b_prev]:
         for nm, data in b:
             file_signature += f"{nm}_{len(data)}|"
 
-    # 🚀 LECTURA DE ARCHIVOS CON CACHÉ EVASIVO
     df_all, df_px, err_t, err_p = procesar_datos_completos(b1, b2, bx1, bx2, file_signature)
     
     prevenciones_list = []
@@ -314,10 +362,10 @@ def main():
 
     with st.sidebar:
         if err_t:
-            with st.expander(f"⚠️ {len(err_t)} Errores THDR"):
+            with st.expander(f"⚠️ {len(err_t)} Errores de Lectura THDR"):
                 for e in err_t: st.caption(e)
         if err_p:
-            with st.expander(f"⚠️ {len(err_p)} Errores Pax"):
+            with st.expander(f"⚠️ {len(err_p)} Errores de Lectura Pasajeros"):
                 for e in err_p: st.caption(e)
 
     fechas = sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)]))) if not df_all.empty else []
@@ -335,8 +383,7 @@ def main():
             fecha_sel = st.selectbox("📅 Fecha Operativa (THDR)", fechas, key="fs_hist")
             df_dia = df_all[df_all['Fecha_str']==fecha_sel].copy()
             
-            # 🚀 EJECUCIÓN DEL ESCUDO DE CACHÉ DE FÍSICA (Hash Evasion)
-            # Pasamos file_signature + fecha para que se recalcule solo si cambias el día o el archivo.
+            # Ejecución protegida de Física (Ultra rápida en Caché)
             df_dia_e = simular_dia_historico_cached(df_dia, pct_trac, use_pend, use_rm, use_regen, tipo_regen, estacion_anio, prevenciones_list, file_signature + fecha_sel)
             
             try:
@@ -353,16 +400,16 @@ def main():
             df_px['Fecha_s'] = df_px['Fecha_s'].astype(str).str.strip()
             fechas_disp = sorted(list(set([x for x in df_px['Fecha_s'].dropna().unique() if x and x.lower() not in ["none", "nan", "fecha no detectada"]])))
             
-            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Si eliges varias, se promediarán)", fechas_disp, default=fechas_disp)
+            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Si eliges varias, se promediarán para suavizar el ruido estadístico)", fechas_disp, default=fechas_disp)
             
             if not fecha_sel_pax: 
-                st.info("Selecciona al menos una fecha de la lista superior para ver los datos.")
+                st.info("Selecciona al menos una fecha.")
             else:
                 df_dia_pax = df_px[df_px['Fecha_s'].isin(fecha_sel_pax)].copy()
                 df_dia_pax['t_ini_p'] = pd.to_numeric(df_dia_pax['t_ini_p'], errors='coerce')
                 
-                try: pax_cols_list = getattr(config, 'PAX_COLS', PAX_COLS_DEFAULT)
-                except: pax_cols_list = PAX_COLS_DEFAULT
+                try: pax_cols_list = getattr(config, 'PAX_COLS', [])
+                except: pax_cols_list = []
                 
                 for c in pax_cols_list + ['CargaMax']: 
                     if c in df_dia_pax.columns:
@@ -457,9 +504,9 @@ def main():
                 df_plan_edit = st.data_editor(st.session_state['df_plan'], num_rows="dynamic", use_container_width=True)
             
             elif modo_plan == "Planilla Maestra (Subir CSV/Excel)":
-                archivo_planilla = st.file_uploader("📂 Sube tu Planilla Maestra (.csv, .xlsx, .xls)", type=['csv', 'xlsx', 'xls'])
-                if archivo_planilla:
-                    df_temp, msg = parsear_planilla_maestra(archivo_planilla.getvalue(), archivo_planilla.name)
+                f_pl = st.file_uploader("📂 Sube tu Planilla Maestra (.csv, .xlsx)", type=['xlsx','csv'])
+                if f_pl:
+                    df_temp, msg = parsear_planilla_maestra(f_pl.read(), f_pl.name)
                     if df_temp.empty: 
                         st.error(f"Error procesando: {msg}")
                     else:
@@ -485,7 +532,7 @@ def main():
                 if st.button("⚡ Simular Tramo", use_container_width=True):
                     if sb_orig != sb_dest:
                         idx_o, idx_d = est_safe.index(sb_orig), est_safe.index(sb_dest)
-                        try: km_acum_safe = getattr(config, 'KM_ACUM', [0.0, 43.13])
+                        try: km_acum_safe = getattr(config, 'KM_ACUM', [])
                         except NameError: km_acum_safe = [0.0, 43.13]
                         if not km_acum_safe: km_acum_safe = [0.0, 43.13]
                         
@@ -524,54 +571,52 @@ def main():
                         except Exception as e:
                             st.error(f"Simulación Física Completada: Tracción {trc_sb:.1f} kWh. (Red Eléctrica no conectada en GUI. Error: {e})")
 
-        if modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"] and st.button("🚀 Ejecutar Gemelo Digital del Planificador", use_container_width=True, type="primary"):
-            st.session_state['simulacion_plan_lista'] = False
-            with st.spinner("Decodificando Malla e inyectando al Motor Cinemático Termodinámico..."):
-                if modo_plan == "Matriz Sintética":
-                    df_sintetico_list = []
-                    try: est_safe = getattr(config, 'ESTACIONES', [])
-                    except NameError: est_safe = ['Puerto', 'Limache']
-                    try: km_acum_safe = getattr(config, 'KM_ACUM', [])
-                    except NameError: km_acum_safe = [0.0, 43.13]
-                    try: ec_safe = getattr(config, 'EC', [])
-                    except NameError: ec_safe = ['PU', 'LI']
-                    
-                    for idx, row in df_plan_edit.iterrows():
-                        if row['Cantidad'] <= 0 or row['Origen'] == row['Destino']: continue
-                        try:
-                            i_o, i_d = est_safe.index(row['Origen']), est_safe.index(row['Destino'])
-                            via = 1 if i_o < i_d else 2
-                            nodos_sint = [(0.0, km_acum_safe[i]) for i in (range(i_o, i_d + 1) if via==1 else range(i_o, i_d - 1, -1))]
-                            k_o, k_d = km_acum_safe[i_o], km_acum_safe[i_d]
-                            svc_t = f"{ec_safe[i_o]}-{ec_safe[i_d]}"
-                            interval = (1350 - 360) / row['Cantidad']
-                            
-                            for i in range(int(row['Cantidad'])):
-                                df_sintetico_list.append({
-                                    '_id': f"SINT_{idx}_{i}", 't_ini': 360 + i * interval, 'Via': via, 
-                                    'km_orig': k_o, 'km_dest': k_d, 'nodos': nodos_sint, 
-                                    'tipo_tren': row['Flota'], 'doble': row['Configuración'] == "Doble", 
-                                    'num_servicio': f"VIRT_{idx}_{i}", 'maniobra': None, 'svc_type': svc_t
-                                })
-                        except: pass
-                    df_sint = pd.DataFrame(df_sintetico_list)
-                else:
-                    if 'temp_df_plan' not in st.session_state: st.stop()
-                    df_sint = st.session_state['temp_df_plan'].copy().sort_values('t_ini')
-                    
-                    asignaciones = {}
-                    for _, r in st.session_state['temp_flota_edit'].iterrows():
-                        asignaciones[r['Ruta']] = ['XT-100']*int(r.get('XT-100', 0)) + ['XT-M']*int(r.get('XT-M', 0)) + ['SFE']*int(r.get('SFE', 0))
+        if modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"]:
+            if st.button("🚀 Ejecutar Gemelo Digital del Planificador", use_container_width=True, type="primary"):
+                st.session_state['simulacion_plan_lista'] = False
+                with st.spinner("Decodificando Malla e inyectando al Motor Cinemático Termodinámico..."):
+                    if modo_plan == "Matriz Sintética":
+                        df_sintetico_list = []
+                        try: est_safe = getattr(config, 'ESTACIONES', [])
+                        except NameError: est_safe = ['Puerto', 'Limache']
+                        try: km_acum_safe = getattr(config, 'KM_ACUM', [])
+                        except NameError: km_acum_safe = [0.0, 43.13]
+                        try: ec_safe = getattr(config, 'EC', [])
+                        except NameError: ec_safe = ['PU', 'LI']
                         
-                    def asignar_tren(ruta):
-                        if ruta in asignaciones and len(asignaciones[ruta]) > 0: return asignaciones[ruta].pop(0)
-                        return 'XT-100'
-                        
-                    df_sint['tipo_tren'] = df_sint['svc_type'].apply(asignar_tren)
+                        for idx, row in df_plan_edit.iterrows():
+                            if row['Cantidad'] <= 0 or row['Origen'] == row['Destino']: continue
+                            try:
+                                i_o, i_d = est_safe.index(row['Origen']), est_safe.index(row['Destino'])
+                                via = 1 if i_o < i_d else 2
+                                nodos_sint = [(0.0, km_acum_safe[i]) for i in (range(i_o, i_d + 1) if via==1 else range(i_o, i_d - 1, -1))]
+                                k_o, k_d = km_acum_safe[i_o], km_acum_safe[i_d]
+                                svc_t = f"{ec_safe[i_o]}-{ec_safe[i_d]}"
+                                interval = (1350 - 360) / row['Cantidad']
+                                
+                                for i in range(int(row['Cantidad'])):
+                                    df_sintetico_list.append({
+                                        '_id': f"SINT_{idx}_{i}", 't_ini': 360 + i * interval, 'Via': via, 
+                                        'km_orig': k_o, 'km_dest': k_d, 'nodos': nodos_sint, 
+                                        'tipo_tren': row['Flota'], 'doble': row['Configuración'] == "Doble", 
+                                        'num_servicio': f"VIRT_{idx}_{i}", 'maniobra': None, 'svc_type': svc_t
+                                    })
+                            except: pass
+                        df_sint = pd.DataFrame(df_sintetico_list)
+                    else:
+                        if 'temp_df_plan' not in st.session_state: st.stop()
+                        df_sint = st.session_state['temp_df_plan'].copy().sort_values('t_ini')
+                        asignaciones = {}
+                        for _, r in st.session_state['temp_flota_edit'].iterrows():
+                            asignaciones[r['Ruta']] = ['XT-100']*int(r.get('XT-100', 0)) + ['XT-M']*int(r.get('XT-M', 0)) + ['SFE']*int(r.get('SFE', 0))
+                        def asignar_tren(ruta):
+                            if ruta in asignaciones and len(asignaciones[ruta]) > 0: return asignaciones[ruta].pop(0)
+                            return 'XT-100'
+                        df_sint['tipo_tren'] = df_sint['svc_type'].apply(asignar_tren)
 
-                if df_sint.empty: st.stop()
-                st.session_state['raw_plan_df'] = df_sint
-                st.session_state['simulacion_plan_lista'] = True
+                    if df_sint.empty: st.stop()
+                    st.session_state['raw_plan_df'] = df_sint
+                    st.session_state['simulacion_plan_lista'] = True
 
         if st.session_state.get('simulacion_plan_lista', False) and 'raw_plan_df' in st.session_state:
             plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature
