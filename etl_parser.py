@@ -144,7 +144,7 @@ def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0):
 get_pax_at_km = get_pax_at_km_nativo
 
 # =============================================================================
-# 2. PROCESAMIENTO THDR Y PLANILLAS
+# 2. PROCESAMIENTO THDR
 # =============================================================================
 
 def procesar_thdr(data, fname, via_param=1):
@@ -321,7 +321,13 @@ def procesar_thdr(data, fname, via_param=1):
         return df, "ok"
     except Exception as e: return pd.DataFrame(), str(e)
 
+
+# =============================================================================
+# 3. LECTURA Y CRUCE DE PASAJEROS (MATCH UNIVERSAL POR HORA)
+# =============================================================================
+
 def cargar_pax(data, fname, via_param=1):
+    """LECTURA NATIVA EXCEL: Asegura apuntar a la Columna 29. Cero CSV."""
     try:
         eng = "openpyxl" if fname.lower().endswith(".xlsx") else "xlrd"
         df_raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
@@ -349,6 +355,7 @@ def cargar_pax(data, fname, via_param=1):
             else:
                 df[st] = 0
             
+        # MAPEO ESTRICTO A COLUMNA 29 (AD)
         if 29 < data_rows.shape[1]:
             df['CargaMax'] = data_rows.iloc[:, 29].apply(clean_pax_number).values
         else:
@@ -359,7 +366,7 @@ def cargar_pax(data, fname, via_param=1):
         return df.dropna(subset=['t_ini_p', 'Fecha_s'])
     except Exception as e: return pd.DataFrame()
 
-# 💡 AQUI ESTÁ EL ARREGLO: Se inyectó el "Salvavidas por Horario" (Intento 3)
+# 💡 MATCH UNIVERSAL: IGNORA NOMBRES DE TREN O VIAJE, SOLO IMPORTA LA VÍA Y LA HORA
 def match_pax(row, df_pax):
     try: pax_cols_safe = PAX_COLS
     except NameError: pax_cols_safe = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
@@ -367,50 +374,92 @@ def match_pax(row, df_pax):
     EMPTY = ({c: 0 for c in pax_cols_safe}, 0, '--:--:--', 'No Detectado', -1)
     if df_pax.empty: return EMPTY
     
+    def _to_int(v):
+        try: return int(float(v)) if pd.notna(v) else 0
+        except: return 0
+        
     t_i = row.get('t_ini')
     via = row.get('via_op', row.get('Via', 1))
-    num_servicio = clean_id(row.get('num_servicio', ''))
-    thdr_date = row.get('Fecha_str')
+    thdr_date = str(row.get('Fecha_str', '')).strip()
     
     sub = df_pax[df_pax['Via'] == via].copy()
     if sub.empty: return EMPTY
-
-    # 1. Intento por Tren Exacto y Día Exacto
+    
+    # 1. FILTRO DE FECHA (Si el THDR y los Pax tienen la fecha bien, aislamos ese día)
     if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
-        sub_date = sub[sub['Fecha_s'] == thdr_date]
+        sub_date = sub[sub['Fecha_s'].astype(str).str.strip() == thdr_date]
         if not sub_date.empty:
-            match_exacto = sub_date[sub_date['Tren_Clean'] == num_servicio]
-            if not match_exacto.empty:
-                match_exacto = match_exacto.copy()
-                match_exacto['diff'] = match_exacto['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
-                best = match_exacto.loc[match_exacto['diff'].idxmin()]
-                return {c: int(best.get(c, 0)) for c in pax_cols_safe}, int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR_raw', '')), best.name
+            sub = sub_date
 
-    # 2. Intento por Tren (Ignorando la fecha si viene mala)
-    if num_servicio != '':
-        match_srv = sub[sub['Tren_Clean'] == num_servicio]
-        if not match_srv.empty:
-            match_srv = match_srv.copy()
-            match_srv['diff'] = match_srv['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
-            best_match = match_srv.loc[match_srv['diff'].idxmin()]
-            return {c: int(best_match.get(c, 0)) for c in pax_cols_safe}, int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', '')), best_match.name
-
-    # 3. 🚨 EL SALVAVIDAS: Búsqueda por Horario Cercano (Si el N° de Tren del THDR no existe o no calza en el Excel de Pasajeros)
+    # 2. MATCH UNIVERSAL POR TIEMPO (Ignorando nombres completamente)
     if pd.notna(t_i):
-        if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
-            sub_date = sub[sub['Fecha_s'] == thdr_date]
-            if not sub_date.empty:
-                sub = sub_date
-
-        sub = sub.copy()
+        # Calculamos la diferencia de tiempo entre el tren del mapa y TODOS los trenes de la planilla pax
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
+        
         if not sub.empty:
             idx_min = sub['diff'].idxmin()
-            best_time = sub.loc[idx_min]
-            if best_time['diff'] <= 20: # 20 minutos de tolerancia (Holgura EFE)
-                return {c: int(best_time.get(c, 0)) for c in pax_cols_safe}, int(best_time.get('CargaMax', 0)), mins_to_time_str(best_time.get('t_ini_p')), str(best_time.get('Nro_THDR_raw', '')), best_time.name
+            best_match = sub.loc[idx_min]
+            
+            # Tolerancia de 20 minutos EFE: Si salieron a la misma hora, ES el mismo tren.
+            if best_match['diff'] <= 20: 
+                return {c: _to_int(best_match.get(c, 0)) for c in pax_cols_safe}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
 
     return EMPTY
+
+# =============================================================================
+# 4. FUNCIONES AUXILIARES
+# =============================================================================
+
+def calcular_dwell(df1, df2):
+    if df1.empty or df2.empty: return df1, df2
+    if 'num_servicio' not in df1.columns or 'num_servicio' not in df2.columns: return df1, df2
+    for fecha in df1['Fecha_str'].unique():
+        d1 = df1[df1['Fecha_str']==fecha]
+        d2 = df2[df2['Fecha_str']==fecha]
+        if d2.empty: continue
+        for idx1, r1 in d1.iterrows():
+            s = r1.get('num_servicio')
+            if pd.isna(s) or s == '': continue
+            m = d2[(d2['num_servicio']==s) & (d2['t_ini']>r1['t_fin'])]
+            if not m.empty:
+                dw = m['t_ini'].min()-r1['t_fin']
+                if 0<dw<60: df2.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(dw,1)
+        for idx2, r2 in d2.iterrows():
+            s = r2.get('num_servicio')
+            if pd.isna(s) or s == '': continue
+            m = d1[(d1['num_servicio']==s) & (d1['t_ini']>r2['t_fin'])]
+            if not m.empty:
+                dw = m['t_ini'].min()-r2['t_fin']
+                if 0<dw<60: df1.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(dw,1)
+    return df1, df2
+
+def get_vacios_dia(df): 
+    return []
+
+def cargar_prevenciones(data, fname):
+    try:
+        raw = pd.read_csv(BytesIO(data), sep=',', encoding='latin-1')
+        if raw.shape[1] < 2: raw = pd.read_csv(BytesIO(data), sep=';', encoding='latin-1')
+        res = []
+        for _, r in raw.iterrows():
+            try:
+                v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
+                vel = float(re.search(r'\d+', str(r.iloc[2])).group())
+                res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
+            except: pass
+        return res
+    except: 
+        try:
+            raw = pd.read_excel(BytesIO(data), engine="openpyxl")
+            res = []
+            for _, r in raw.iterrows():
+                try:
+                    v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
+                    vel = float(re.search(r'\d+', str(r.iloc[2])).group())
+                    res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
+                except: pass
+            return res
+        except: return []
 
 def parsear_planilla_maestra(data, fname):
     try:
