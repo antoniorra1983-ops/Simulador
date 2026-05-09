@@ -49,12 +49,61 @@ def clasificar_dia(d_str):
     except: return 'Laboral'
 
 def extraer_fecha_segura(df_raw, fname):
+    """
+    💡 FIX V134: Lector de Fechas Robusto para Bloques Numéricos Continuos.
+    Ahora detecta archivos como "THDR_via1 020426.xls" correctamente.
+    """
+    # 1. Buscar primero patrones clásicos con separadores (ej: 02-04-2026 o 02.04.26)
     for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
         m = re.search(pat, str(fname))
         if m:
-            y, m_val, d = (int(m.group(1)), int(m.group(2)), int(m.group(3))) if len(m.group(1)) == 4 else (int(m.group(3)), int(m.group(2)), int(m.group(1)))
+            if len(m.group(1)) == 4:
+                y, m_val, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            else:
+                d, m_val, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
             if m_val > 12 and d <= 12: d, m_val = m_val, d
             if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
+
+    # 2. 🚀 FIX APLICADO: Buscar bloques de números continuos sueltos (Ej: 020426)
+    numeros_en_nombre = re.findall(r'\d+', str(fname))
+    for num in numeros_en_nombre:
+        if len(num) == 8:
+            # Prueba formato DDMMAAAA
+            d, m_val, y = int(num[0:2]), int(num[2:4]), int(num[4:8])
+            if 1 <= d <= 31 and 1 <= m_val <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m_val:02d}-{d:02d}"
+            # Prueba formato AAAAMMDD
+            y, m_val, d = int(num[0:4]), int(num[4:6]), int(num[6:8])
+            if 1 <= d <= 31 and 1 <= m_val <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m_val:02d}-{d:02d}"
+        elif len(num) == 6:
+            # Prueba formato DDMMAA (El de tu imagen: 020426)
+            d, m_val, y = int(num[0:2]), int(num[2:4]), int(num[4:6])
+            if 1 <= d <= 31 and 1 <= m_val <= 12 and 20 <= y <= 35: return f"20{y:02d}-{m_val:02d}-{d:02d}"
+            # Prueba formato AAMMDD
+            y, m_val, d = int(num[0:2]), int(num[2:4]), int(num[4:6])
+            if 1 <= d <= 31 and 1 <= m_val <= 12 and 20 <= y <= 35: return f"20{y:02d}-{m_val:02d}-{d:02d}"
+
+    # 3. Fallback: Escaneo del contenido del Excel en las primeras 50 filas
+    for i in range(min(50, len(df_raw))):
+        row_vals = [str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)]
+        row_str = ' '.join(row_vals)
+        for pat in [r'\b(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})\b', r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{4})\b']:
+            m_dt = re.search(pat, row_str)
+            if m_dt:
+                if len(m_dt.group(1)) == 4:
+                    y, m_val, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+                else:
+                    d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+                if m_val > 12 and d <= 12: d, m_val = m_val, d
+                if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
+        
+        # Intentar pescar número serial de Excel (ej. 45396)
+        for val in row_vals:
+            val_clean = val.split('.')[0]
+            if val_clean.isdigit() and 40000 <= int(val_clean) <= 60000:
+                try: return (date(1899, 12, 30) + timedelta(days=int(val_clean))).strftime('%Y-%m-%d')
+                except: pass
+
+    # Falla absoluta
     return "2026-01-01"
 
 def parse_excel_date(val):
@@ -227,9 +276,6 @@ def calcular_dwell(df1, df2):
             if not m.empty and 0 < m['t_ini'].min()-r2['t_fin'] < 60: df1.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(m['t_ini'].min()-r2['t_fin'],1)
     return df1, df2
 
-# =============================================================================
-# 🚀 LÓGICA RESTAURADA Y BLINDADA SEGÚN REGLAS DE USUARIO
-# =============================================================================
 def cargar_pax(data, fname, via_param=1):
     try:
         ext = fname.lower()
