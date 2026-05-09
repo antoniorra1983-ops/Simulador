@@ -22,14 +22,19 @@ def mins_to_time_str(mins):
 def parse_time_to_mins(val):
     if pd.isna(val): return None
     sv = str(val).strip().lower()
-    if sv in ('', 'nan'): return None
+    if sv == '' or sv == 'nan': return None
     if ' ' in sv: sv = sv.split(' ')[-1]
     m = re.search(r'(\d{1,2}):(\d{2})(?::(\d{2}))?', sv)
-    if m: return int(m.group(1)) * 60.0 + int(m.group(2)) + (int(m.group(3)) / 60.0 if m.group(3) else 0.0)
+    if m:
+        h = int(m.group(1)); m_min = int(m.group(2))
+        s_sec = int(m.group(3)) / 60.0 if m.group(3) else 0.0
+        return h * 60.0 + m_min + s_sec
     try:
         f = float(sv)
-        return f * 1440.0 if f < 1.0 else (int(f // 100) * 60.0) + (f % 100) if f < 2400.0 else None
-    except: return None
+        if f < 1.0: return f * 1440.0
+        if f < 2400.0: return (int(f // 100) * 60.0) + (f % 100)
+    except: pass
+    return None
 
 def clean_primary_key(x):
     if pd.isna(x): return ''
@@ -236,20 +241,6 @@ def procesar_thdr(data, fname, via_param=1):
         return df, "ok"
     except Exception as e: return pd.DataFrame(), str(e)
 
-def build_thdr_v71(blobs_v1, blobs_v2):
-    all_p, err = [], []
-    for blobs, via in [(blobs_v1, 1), (blobs_v2, 2)]:
-        for nm, data in blobs:
-            df, msg = procesar_thdr(data, nm, via)
-            if not df.empty: all_p.append(df)
-            else: err.append(f"[{nm}]: {msg}")
-    if all_p:
-        dm = pd.concat(all_p, ignore_index=True)
-        df1, df2 = dm[dm['Via']==1].copy(), dm[dm['Via']==2].copy()
-        if not df1.empty and not df2.empty: df1, df2 = calcular_dwell(df1, df2)
-        return df1, df2, err
-    return pd.DataFrame(), pd.DataFrame(), err
-
 def calcular_dwell(df1, df2):
     if df1.empty or df2.empty: return df1, df2
     if 'num_servicio' not in df1.columns or 'num_servicio' not in df2.columns: return df1, df2
@@ -269,25 +260,30 @@ def calcular_dwell(df1, df2):
     return df1, df2
 
 # =============================================================================
-# 🚀 EXTRACCIÓN 100% CIEGA E INFALIBLE BASADA EN TU CSV DE EFE
+# 🚀 LÓGICA DE PASAJEROS: MAPEO DINÁMICO POR NOMBRE DE COLUMNA
 # =============================================================================
 def cargar_pax(data, fname, via_param=1):
     try:
         ext = fname.lower()
+        full = None
         if ext.endswith('.csv'):
-            try: full = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)
-            except: full = pd.read_csv(BytesIO(data), header=None, sep=';', encoding='latin-1', dtype=str)
+            for enc in ['utf-8', 'latin-1', 'cp1252']:
+                for sep in [',', ';', '\t']:
+                    try:
+                        temp = pd.read_csv(BytesIO(data), header=None, sep=sep, encoding=enc, dtype=str)
+                        if temp.shape[1] > 10:  # Si logró separar las columnas correctamente
+                            full = temp
+                            break
+                    except: pass
+                if full is not None: break
         else: 
             eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
             full = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
 
         if full is None or full.empty or len(full) <= 3: return pd.DataFrame()
 
-        # REGLA 1: El título manda para el Fallback
-        name_u = fname.upper()
-        via_titulo = 1 if 'V1' in name_u or 'VIA 1' in name_u or 'VIA1' in name_u else (2 if 'V2' in name_u or 'VIA 2' in name_u or 'VIA2' in name_u else via_param)
-
-        # BUSCAR EL ENCABEZADO REAL "N° THDR" EN LA COLUMNA 0
+        # 💡 BÚSQUEDA DEL ENCABEZADO REAL "N° THDR"
+        # Escanea hasta la fila 25 buscando el encabezado principal
         start_idx = 9 
         for i in range(min(25, len(full))):
             val_a = str(full.iloc[i, 0]).strip().upper()
@@ -297,38 +293,47 @@ def cargar_pax(data, fname, via_param=1):
                 
         if start_idx >= len(full): return pd.DataFrame()
 
+        # Extraer la fila del encabezado y limpiarla
+        header_row = full.iloc[start_idx - 1].fillna('').astype(str).str.upper().str.strip()
         data_rows = full.iloc[start_idx:].copy().reset_index(drop=True)
         df = pd.DataFrame()
 
-        # 🚨 LECTURA POSICIONAL ESTRICTA BASADA EN TU ARCHIVO
-        # 0: N° THDR, 1: N° Viaje, 2: Tren, 3: Fecha, 4: Hora Origen, 5: Hora Fin, 6: Motriz 1, 7: Motriz 2
-        df['Nro_THDR_raw'] = data_rows.iloc[:, 0].astype(str).values if data_rows.shape[1] > 0 else ''
-        df['Tren']         = data_rows.iloc[:, 2].astype(str).values if data_rows.shape[1] > 2 else ''
-        df['Fecha_Excel']  = data_rows.iloc[:, 3].astype(str).values if data_rows.shape[1] > 3 else ''
-        df['Hora Origen']  = data_rows.iloc[:, 4].astype(str).values if data_rows.shape[1] > 4 else ''
+        # 🚨 MAPEO DINÁMICO POR NOMBRE DE COLUMNA (A prueba de balas)
+        # Por defecto asignamos las posiciones antiguas por si acaso, pero las sobreescribimos si las encontramos
+        col_map = {'thdr': 0, 'tren': 2, 'fecha': 3, 'hora': 4, 'cargamax': 30}
+        
+        for c, val in enumerate(header_row):
+            if 'THDR' in val: col_map['thdr'] = c
+            elif val == 'TREN' or val == 'SERVICIO': col_map['tren'] = c
+            elif 'FECHA' in val: col_map['fecha'] = c
+            elif 'ORIGEN' in val or ('HORA' in val and 'FIN' not in val): col_map['hora'] = c
+            elif 'MÁXIMA' in val or 'MAXIMA' in val or 'MAX' in val: 
+                if 'ESTACIÓN' not in val and 'ESTACION' not in val: col_map['cargamax'] = c
 
-        # 🚨 COLUMNAS 8 A 28: ESTACIONES
-        # Leemos el encabezado de la columna 8 para saber si la lista viene de PUE a LIM o de LIM a PUE
-        val_col8 = str(full.iloc[start_idx - 1, 8]).strip().upper() if full.shape[1] > 8 else ''
-        if 'PUE' in val_col8 or 'PUERTO' in val_col8:
-            est_orden = PAX_COLS
-        else:
-            est_orden = list(reversed(PAX_COLS))
+        df['Nro_THDR_raw'] = data_rows.iloc[:, col_map['thdr']].astype(str).values if col_map['thdr'] < data_rows.shape[1] else ''
+        df['Tren']         = data_rows.iloc[:, col_map['tren']].astype(str).values if col_map['tren'] < data_rows.shape[1] else ''
+        df['Fecha_Excel']  = data_rows.iloc[:, col_map['fecha']].astype(str).values if col_map['fecha'] < data_rows.shape[1] else ''
+        df['Hora Origen']  = data_rows.iloc[:, col_map['hora']].astype(str).values if col_map['hora'] < data_rows.shape[1] else ''
 
-        for i, st in enumerate(est_orden):
-            col_idx = 8 + i
-            if col_idx < data_rows.shape[1]:
-                df[st] = data_rows.iloc[:, col_idx].values
-            else:
-                df[st] = '0'
+        # 🚨 MAPEO DINÁMICO DE ESTACIONES (No importa si V1 o V2 están invertidas)
+        # El código lee "PUE" en la cabecera y lo mapea a df['PUE'], sin importar en qué columna esté.
+        for st_code in PAX_COLS:
+            found = False
+            for c, val in enumerate(header_row):
+                if st_code == val or st_code in val.split():
+                    if c < data_rows.shape[1]:
+                        df[st_code] = data_rows.iloc[:, c].values
+                        found = True
+                        break
+            if not found:
+                df[st_code] = '0'
 
-        # 🚨 COLUMNA 30: CARGA MÁXIMA
-        if 30 < data_rows.shape[1]:
-            df['CargaMax'] = data_rows.iloc[:, 30].values
+        if col_map['cargamax'] < data_rows.shape[1]:
+            df['CargaMax'] = data_rows.iloc[:, col_map['cargamax']].values
         else:
             df['CargaMax'] = '0'
 
-        # FECHA: Limpiar fecha del Excel (Columna 3) y usar nombre de archivo si falla
+        # 🚀 FIX V136: LECTOR DE FECHAS SEGURO
         fecha_global = extraer_fecha_segura(full.head(15), fname, is_thdr=False)
         df['Fecha_s'] = df['Fecha_Excel'].apply(parse_excel_date).replace('None', np.nan).replace('', np.nan).ffill().fillna(fecha_global)
 
@@ -336,7 +341,10 @@ def cargar_pax(data, fname, via_param=1):
         df['Tren_Clean'] = df['Tren'].apply(clean_id)
         df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
         
-        # VÍA: Por paridad del THDR
+        # 🚀 REGLA INQUEBRANTABLE 3: El N° THDR define la Vía (Par = V1, Impar = V2)
+        name_u = fname.upper()
+        via_titulo = 1 if 'V1' in name_u or 'VIA 1' in name_u or 'VIA1' in name_u else (2 if 'V2' in name_u or 'VIA 2' in name_u or 'VIA2' in name_u else via_param)
+
         def _determinar_via(row):
             viaje = str(row['Nro_THDR_raw'])
             nums = re.findall(r'\d+', viaje)
