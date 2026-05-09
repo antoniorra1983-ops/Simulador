@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta
 # Configuración de página de Streamlit (DEBE ser la primera instrucción)
 st.set_page_config(page_title="Simulador MERVAL V134", layout="wide", page_icon="🗺️")
 
-# 🛡️ FALLBACKS DE SEGURIDAD (Variables de respaldo si config.py falla)
+# 🛡️ FALLBACKS DE SEGURIDAD
 PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
 SER_DATA_DEFAULT = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
 
@@ -35,7 +35,7 @@ from motor_fisico import (
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 
 # =============================================================================
-# 1. FUNCIONES DE CARGA Y AGRUPACIÓN (RESTAURADAS EN APP.PY PARA SEGURIDAD)
+# 1. FUNCIONES DE CARGA Y AGRUPACIÓN
 # =============================================================================
 def leer(files): 
     return [(f.name, f.read()) for f in (files or []) if f]
@@ -52,7 +52,6 @@ def leer_github(url):
     except Exception as e: 
         return None, str(e)
 
-# 🚀 Funciones Agrupadoras: Se devuelven a app.py para evitar AttributeError
 def build_thdr_v71(blobs_v1, blobs_v2):
     all_parts, err = [], []
     for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
@@ -401,7 +400,10 @@ def main():
             df_px['Fecha_s'] = df_px['Fecha_s'].astype(str).str.strip()
             fechas_disp = sorted(list(set([x for x in df_px['Fecha_s'].dropna().unique() if x and x.lower() not in ["none", "nan", "fecha no detectada"]])))
             
-            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Si eliges varias, se promediarán para suavizar el ruido estadístico)", fechas_disp, default=fechas_disp)
+            # 💡 FIX V136: Evitar que el simulador promedie 90 días por defecto
+            default_fechas = [fechas_disp[-1]] if fechas_disp else None
+            
+            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Si eliges varias, se promediarán para suavizar el ruido estadístico)", fechas_disp, default=default_fechas)
             
             if not fecha_sel_pax: 
                 st.info("Selecciona al menos una fecha.")
