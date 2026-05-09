@@ -48,12 +48,13 @@ def clasificar_dia(d_str):
         return 'Domingo/Festivo' if d_str in feriados_2026 or d.weekday() == 6 else ('Sábado' if d.weekday() == 5 else 'Laboral')
     except: return 'Laboral'
 
-def extraer_fecha_segura(df_raw, fname):
+def extraer_fecha_segura(df_raw, fname, is_thdr=True):
     """
-    💡 Lector de Fechas Robusto (Inmune a la falta de guiones)
-    Detecta automáticamente archivos nombrados como "THDR_via1 020426.xls"
+    💡 FIX V135: Inteligencia Contextual.
+    Si is_thdr=True: Usa escáner agresivo en el nombre del archivo (para THDRs).
+    Si is_thdr=False: Ignora números sueltos del título y confía en el contenido interno (Pasajeros).
     """
-    # 1. Patrones estándar con separadores (ej: 02-04-2026 o 02.04.26)
+    # 1. Patrones estándar con separadores explícitos (sirve para ambos)
     for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
         m = re.search(pat, str(fname))
         if m:
@@ -64,25 +65,23 @@ def extraer_fecha_segura(df_raw, fname):
             if m_val > 12 and d <= 12: d, m_val = m_val, d
             if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
 
-    # 2. PATRONES CONTINUOS: Busca números pegados sin separadores (Ej: 020426)
-    numeros = re.findall(r'\d+', str(fname))
-    for num in numeros:
-        if len(num) == 8:
-            # Prueba formato DDMMAAAA
-            d, m_val, y = int(num[0:2]), int(num[2:4]), int(num[4:8])
-            if 1 <= d <= 31 and 1 <= m_val <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m_val:02d}-{d:02d}"
-            # Prueba formato AAAAMMDD
-            y, m_val, d = int(num[0:4]), int(num[4:6]), int(num[6:8])
-            if 1 <= d <= 31 and 1 <= m_val <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m_val:02d}-{d:02d}"
-        elif len(num) == 6:
-            # Prueba formato DDMMAA 
-            d, m_val, y = int(num[0:2]), int(num[2:4]), int(num[4:6])
-            if 1 <= d <= 31 and 1 <= m_val <= 12 and 20 <= y <= 35: return f"20{y:02d}-{m_val:02d}-{d:02d}"
-            # Prueba formato AAMMDD
-            y, m_val, d = int(num[0:2]), int(num[2:4]), int(num[4:6])
-            if 1 <= d <= 31 and 1 <= m_val <= 12 and 20 <= y <= 35: return f"20{y:02d}-{m_val:02d}-{d:02d}"
+    # 2. PATRONES CONTINUOS (SOLO PARA THDR)
+    # Evita que un archivo de pasajeros "Export_105642.xlsx" se lea como fecha.
+    if is_thdr:
+        numeros = re.findall(r'\d+', str(fname))
+        for num in numeros:
+            if len(num) == 8:
+                d, m_val, y = int(num[0:2]), int(num[2:4]), int(num[4:8])
+                if 1 <= d <= 31 and 1 <= m_val <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m_val:02d}-{d:02d}"
+                y, m_val, d = int(num[0:4]), int(num[4:6]), int(num[6:8])
+                if 1 <= d <= 31 and 1 <= m_val <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m_val:02d}-{d:02d}"
+            elif len(num) == 6:
+                d, m_val, y = int(num[0:2]), int(num[2:4]), int(num[4:6])
+                if 1 <= d <= 31 and 1 <= m_val <= 12 and 20 <= y <= 35: return f"20{y:02d}-{m_val:02d}-{d:02d}"
+                y, m_val, d = int(num[0:2]), int(num[2:4]), int(num[4:6])
+                if 1 <= d <= 31 and 1 <= m_val <= 12 and 20 <= y <= 35: return f"20{y:02d}-{m_val:02d}-{d:02d}"
 
-    # 3. Fallback: Escaneo del contenido del Excel (Búsqueda Estricta)
+    # 3. Fallback: Escaneo del contenido del Excel (VITAL PARA PASAJEROS)
     for i in range(min(50, len(df_raw))):
         row_str = ' '.join([str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)])
         for pat in [r'\b(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})\b', r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{4})\b']:
@@ -94,8 +93,16 @@ def extraer_fecha_segura(df_raw, fname):
                     d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
                 if m_val > 12 and d <= 12: d, m_val = m_val, d
                 if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
+        
+        # Intentar pescar número serial de Excel (ej. 45396)
+        row_vals = [str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)]
+        for val in row_vals:
+            val_clean = val.split('.')[0]
+            if val_clean.isdigit() and 40000 <= int(val_clean) <= 60000:
+                try: return (date(1899, 12, 30) + timedelta(days=int(val_clean))).strftime('%Y-%m-%d')
+                except: pass
 
-    # Falla absoluta 
+    # Falla absoluta
     return "2026-01-01"
 
 def parse_excel_date(val):
@@ -180,7 +187,9 @@ def procesar_thdr(data, fname, via_param=1):
         raw = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str) if fname.lower().endswith('.csv') else pd.read_excel(BytesIO(data), header=None, engine="openpyxl" if fname.lower().endswith(".xlsx") else "xlrd", dtype=str)
         if raw is None or raw.empty or raw.shape[0] < 6: return pd.DataFrame(), f"Archivo vacío/corto: {fname}"
         
-        fecha_str = extraer_fecha_segura(raw, fname)
+        # 🚀 THDR sí usa el escáner agresivo en el nombre del archivo
+        fecha_str = extraer_fecha_segura(raw, fname, is_thdr=True)
+        
         header_idx = next((i for i in range(min(15, len(raw))) if ('VIAJE' in str(raw.iloc[i].values).upper() or 'NRO' in str(raw.iloc[i].values).upper()) and 'SALIDA' in str(raw.iloc[i].values).upper()), 1)
         r0 = raw.iloc[header_idx - 1].copy() if header_idx > 0 else raw.iloc[0].copy()
         r0.iloc[0] = np.nan 
@@ -268,7 +277,7 @@ def calcular_dwell(df1, df2):
     return df1, df2
 
 # =============================================================================
-# 🚀 LÓGICA DE PASAJEROS: EXTRACCIÓN POSICIONAL ESTRICTA
+# 🚀 LÓGICA DE PASAJEROS: POSICIONAL ESTRICTO Y EXTRACCIÓN INTERNA
 # =============================================================================
 def cargar_pax(data, fname, via_param=1):
     try:
@@ -287,7 +296,6 @@ def cargar_pax(data, fname, via_param=1):
         via_titulo = 1 if 'V1' in name_u or 'VIA 1' in name_u or 'VIA1' in name_u else (2 if 'V2' in name_u or 'VIA 2' in name_u or 'VIA2' in name_u else via_param)
 
         # 💡 POSICIONAL ESTRICTO (Regla A10 impuesta por el usuario)
-        # La celda A10 contiene "N° THDR". En pandas (header=None), la fila 10 es el índice 9.
         start_idx = 9 
         for i in range(min(25, len(full))):
             val_hora = str(full.iloc[i, 2]).strip() if full.shape[1] > 2 else ""
@@ -304,14 +312,12 @@ def cargar_pax(data, fname, via_param=1):
         data_rows = full.iloc[start_idx:].copy().reset_index(drop=True)
         df = pd.DataFrame()
 
-        # 💡 EXTRACCIÓN CIEGA E INFALIBLE (Las columnas jamás cambian de lugar)
+        # EXTRACCIÓN CIEGA E INFALIBLE
         df['Nro_THDR_raw'] = data_rows.iloc[:, 0].values if data_rows.shape[1] > 0 else ''
         df['Tren']         = data_rows.iloc[:, 1].values if data_rows.shape[1] > 1 else ''
         df['Hora Origen']  = data_rows.iloc[:, 2].values if data_rows.shape[1] > 2 else ''
 
-        # 🚀 REPARACIÓN FATAL: EL EXCEL SIEMPRE ES IGUAL (PUE->LIM)
-        # Eliminada la estupidez de list(reversed(PAX_COLS)) para la Vía 2.
-        # Las estaciones siempre están en el mismo orden físico en el archivo EFE.
+        # El orden de las estaciones siempre es PUE->LIM en el Excel
         for i, st in enumerate(PAX_COLS):
             col_idx = 3 + i
             if col_idx < data_rows.shape[1]:
@@ -319,16 +325,15 @@ def cargar_pax(data, fname, via_param=1):
             else:
                 df[st] = '0'
 
-        # La columna 24 siempre es la carga total
         if 24 < data_rows.shape[1]:
             df['CargaMax'] = data_rows.iloc[:, 24].values
         else:
             df['CargaMax'] = '0'
 
-        # Fecha Global
-        fecha_global = extraer_fecha_segura(full, fname)
+        # 🚀 FIX V135: NO permitimos que el nombre del archivo engañe al parser
+        fecha_global = extraer_fecha_segura(full, fname, is_thdr=False)
         
-        # Fecha en columna interna por si acaso
+        # Buscar columna "FECHA" en la cabecera explícita
         date_col_idx = -1
         for c_idx in range(full.shape[1]):
             if 'FECHA' in str(full.iloc[max(0, start_idx-1), c_idx]).upper():
@@ -336,7 +341,8 @@ def cargar_pax(data, fname, via_param=1):
                 
         if date_col_idx != -1 and date_col_idx < data_rows.shape[1]:
             df['Fecha_Excel_Raw'] = data_rows.iloc[:, date_col_idx].values
-            df['Fecha_s'] = df['Fecha_Excel_Raw'].apply(parse_excel_date).fillna(fecha_global).replace('', fecha_global).ffill()
+            # 🚀 ffill() es crítico por si hay celdas combinadas en el Excel de EFE
+            df['Fecha_s'] = df['Fecha_Excel_Raw'].apply(parse_excel_date).replace('', np.nan).ffill().fillna(fecha_global)
         else:
             df['Fecha_s'] = fecha_global
 
@@ -344,7 +350,7 @@ def cargar_pax(data, fname, via_param=1):
         df['Tren_Clean'] = df['Tren'].apply(clean_id)
         df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
         
-        # 🚀 REGLA DE PARIDAD INQUEBRANTABLE: N° THDR define la Vía (Par = V1, Impar = V2)
+        # REGLA INQUEBRANTABLE 3: El N° THDR define la Vía (Par = V1, Impar = V2)
         def _determinar_via(row):
             viaje = str(row['Nro_THDR_raw'])
             nums = re.findall(r'\d+', viaje)
@@ -361,7 +367,6 @@ def cargar_pax(data, fname, via_param=1):
         df = df.dropna(subset=['t_ini_p'])
         if df.empty: return pd.DataFrame()
 
-        # Limpieza matemática final
         for c in PAX_COLS + ['CargaMax']: 
             df[c] = df[c].apply(clean_pax_number)
 
@@ -392,9 +397,7 @@ def match_pax(row, df_pax):
     sub = df_pax[df_pax['Via'] == via].copy()
     if sub.empty: return EMPTY
     
-    # 💡 REPARACIÓN FATAL: Relajación del Filtro de Fecha.
-    # Si las fechas del Excel no cuadran (o el pax quedó en 2026-01-01), NO abortamos. 
-    # Continuamos buscando al tren por N° de THDR o por Hora.
+    # Filtro Suave de Fecha
     if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
         sub_date = sub[sub['Fecha_s'] == thdr_date]
         if not sub_date.empty: 
