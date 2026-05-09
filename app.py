@@ -37,8 +37,9 @@ from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 # =============================================================================
 # 1. FUNCIONES DE CARGA Y AGRUPACIÓN
 # =============================================================================
+# 💡 FIX APLICADO: f.getvalue() previene que el archivo se vacíe al subir otros en Streamlit
 def leer(files): 
-    return [(f.name, f.read()) for f in (files or []) if f]
+    return [(f.name, f.getvalue()) for f in (files or []) if f]
 
 def leer_github(url):
     try:
@@ -402,7 +403,7 @@ def main():
             
             default_fechas = [fechas_disp[-1]] if fechas_disp else None
             
-            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Suma Cruda Exacta)", fechas_disp, default=default_fechas)
+            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Suma pura de los datos crudos)", fechas_disp, default=default_fechas)
             
             if not fecha_sel_pax: 
                 st.info("Selecciona al menos una fecha.")
@@ -417,13 +418,16 @@ def main():
                     if c in df_dia_pax.columns:
                         df_dia_pax[c] = pd.to_numeric(df_dia_pax[c], errors='coerce').fillna(0)
                 
-                # 💡 AQUÍ ESTÁ EL ARREGLO: Se extirpó el bloque que promediaba (groupby.agg('mean'))
-                # Ahora los datos se mantienen crudos y se suman en el acumulado global.
+                # 💡 FIX APLICADO: Ya NO promediamos nada al seleccionar varios días. Se suma la realidad.
                 df_dia_pax.rename(columns={'Fecha_s': 'Fecha', 'Nro_THDR_raw': 'N° THDR Pax', 'Tren_Clean': 'Servicio'}, inplace=True)
                 for c in pax_cols_list + ['CargaMax']: 
                     if c in df_dia_pax.columns: df_dia_pax[c] = df_dia_pax[c].astype(int)
 
-                df_dia_pax = df_dia_pax.sort_values(by=['Fecha', 'Via', 't_ini_p'])
+                if 'Fecha' in df_dia_pax.columns:
+                    df_dia_pax = df_dia_pax.sort_values(by=['Fecha', 'Via', 't_ini_p'])
+                else:
+                    df_dia_pax = df_dia_pax.sort_values(by=['Via', 't_ini_p'])
+                    
                 df_dia_pax['Hora Origen'] = df_dia_pax['t_ini_p'].apply(mins_to_time_str)
                 df_dia_pax.rename(columns={'CargaMax': 'Total a Bordo'}, inplace=True)
                 
