@@ -49,22 +49,17 @@ def clasificar_dia(d_str):
     except: return 'Laboral'
 
 def extraer_fecha_segura(df_raw, fname, is_thdr=True):
-    """
-    💡 FIX DEFINITIVO: Lector de Fechas Inquebrantable.
-    Nunca más confundirá un recuento de pasajeros con una fecha serial.
-    """
-    # 1. Patrones estándar con separadores (ej: 02-04-2026 o 02.04.26)
-    for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
+    for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{2,4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
         m = re.search(pat, str(fname))
         if m:
             if len(m.group(1)) == 4:
                 y, m_val, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
             else:
                 d, m_val, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if y < 100: y += 2000
             if m_val > 12 and d <= 12: d, m_val = m_val, d
             if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
 
-    # 2. Patrones continuos en el NOMBRE DEL ARCHIVO (Solo si es THDR para evitar falsos positivos)
     if is_thdr:
         numeros = re.findall(r'\d+', str(fname))
         for num in numeros:
@@ -79,23 +74,20 @@ def extraer_fecha_segura(df_raw, fname, is_thdr=True):
                 y, m_val, d = int(num[0:2]), int(num[2:4]), int(num[4:6])
                 if 1 <= d <= 31 and 1 <= m_val <= 12 and 20 <= y <= 35: return f"20{y:02d}-{m_val:02d}-{d:02d}"
 
-    # 3. Escaneo del Excel INTERNO (VITAL para archivo de Pasajeros)
     if df_raw is not None and not df_raw.empty:
         for i in range(min(15, len(df_raw))):
             row_str = ' '.join([str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)])
-            
-            # Buscar explícitamente DD/MM/YYYY
-            for pat in [r'\b(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})\b', r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{4})\b']:
+            for pat in [r'\b(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})\b', r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{2,4})\b']:
                 m_dt = re.search(pat, row_str)
                 if m_dt:
                     if len(m_dt.group(1)) == 4:
                         y, m_val, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
                     else:
                         d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+                        if y < 100: y += 2000
                     if m_val > 12 and d <= 12: d, m_val = m_val, d
                     if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
             
-            # Solo si la palabra FECHA o DATE está en la fila, intentamos leer números seriales de Excel
             if 'FECHA' in row_str.upper() or 'DATE' in row_str.upper():
                 row_vals = [str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)]
                 for val in row_vals:
@@ -104,7 +96,6 @@ def extraer_fecha_segura(df_raw, fname, is_thdr=True):
                         try: return (date(1899, 12, 30) + timedelta(days=int(val_clean))).strftime('%Y-%m-%d')
                         except: pass
 
-    # Falla absoluta de respaldo
     return "2026-01-01"
 
 def parse_excel_date(val):
@@ -189,7 +180,6 @@ def procesar_thdr(data, fname, via_param=1):
         raw = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str) if fname.lower().endswith('.csv') else pd.read_excel(BytesIO(data), header=None, engine="openpyxl" if fname.lower().endswith(".xlsx") else "xlrd", dtype=str)
         if raw is None or raw.empty or raw.shape[0] < 6: return pd.DataFrame(), f"Archivo vacío/corto: {fname}"
         
-        # El THDR sí permite escaneo agresivo en el nombre
         fecha_str = extraer_fecha_segura(raw, fname, is_thdr=True)
         
         header_idx = next((i for i in range(min(15, len(raw))) if ('VIAJE' in str(raw.iloc[i].values).upper() or 'NRO' in str(raw.iloc[i].values).upper()) and 'SALIDA' in str(raw.iloc[i].values).upper()), 1)
@@ -279,7 +269,7 @@ def calcular_dwell(df1, df2):
     return df1, df2
 
 # =============================================================================
-# 🚀 LÓGICA DE PASAJEROS: POSICIONAL ESTRICTO BLINDADO
+# 🚀 EXTRACCIÓN 100% CIEGA E INFALIBLE BASADA EN TU CSV DE EFE
 # =============================================================================
 def cargar_pax(data, fname, via_param=1):
     try:
@@ -291,54 +281,66 @@ def cargar_pax(data, fname, via_param=1):
             eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
             full = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
 
-        if full is None or full.empty or len(full) <= 10: return pd.DataFrame()
+        if full is None or full.empty or len(full) <= 3: return pd.DataFrame()
 
         # REGLA 1: El título manda para el Fallback
         name_u = fname.upper()
         via_titulo = 1 if 'V1' in name_u or 'VIA 1' in name_u or 'VIA1' in name_u else (2 if 'V2' in name_u or 'VIA 2' in name_u or 'VIA2' in name_u else via_param)
 
-        # 💡 REGLA A10 (Fila 11 de datos reales)
-        start_idx = 10 
+        # BUSCAR EL ENCABEZADO REAL "N° THDR" EN LA COLUMNA 0
+        start_idx = 9 
+        for i in range(min(25, len(full))):
+            val_a = str(full.iloc[i, 0]).strip().upper()
+            if 'THDR' in val_a:
+                start_idx = i + 1 
+                break
+                
+        if start_idx >= len(full): return pd.DataFrame()
 
         data_rows = full.iloc[start_idx:].copy().reset_index(drop=True)
         df = pd.DataFrame()
 
-        # 💡 EXTRACCIÓN CIEGA E INFALIBLE
-        # Columna 0: N° THDR, Columna 1: Tren, Columna 2: Hora
+        # 🚨 LECTURA POSICIONAL ESTRICTA BASADA EN TU ARCHIVO
+        # 0: N° THDR, 1: N° Viaje, 2: Tren, 3: Fecha, 4: Hora Origen, 5: Hora Fin, 6: Motriz 1, 7: Motriz 2
         df['Nro_THDR_raw'] = data_rows.iloc[:, 0].astype(str).values if data_rows.shape[1] > 0 else ''
-        df['Tren']         = data_rows.iloc[:, 1].astype(str).values if data_rows.shape[1] > 1 else ''
-        df['Hora Origen']  = data_rows.iloc[:, 2].astype(str).values if data_rows.shape[1] > 2 else ''
+        df['Tren']         = data_rows.iloc[:, 2].astype(str).values if data_rows.shape[1] > 2 else ''
+        df['Fecha_Excel']  = data_rows.iloc[:, 3].astype(str).values if data_rows.shape[1] > 3 else ''
+        df['Hora Origen']  = data_rows.iloc[:, 4].astype(str).values if data_rows.shape[1] > 4 else ''
 
-        # El orden de las estaciones SIEMPRE es PUE->LIM en el Excel de EFE
-        for i, st in enumerate(PAX_COLS):
-            col_idx = 3 + i
+        # 🚨 COLUMNAS 8 A 28: ESTACIONES
+        # Leemos el encabezado de la columna 8 para saber si la lista viene de PUE a LIM o de LIM a PUE
+        val_col8 = str(full.iloc[start_idx - 1, 8]).strip().upper() if full.shape[1] > 8 else ''
+        if 'PUE' in val_col8 or 'PUERTO' in val_col8:
+            est_orden = PAX_COLS
+        else:
+            est_orden = list(reversed(PAX_COLS))
+
+        for i, st in enumerate(est_orden):
+            col_idx = 8 + i
             if col_idx < data_rows.shape[1]:
                 df[st] = data_rows.iloc[:, col_idx].values
             else:
                 df[st] = '0'
 
-        # La columna 24 siempre es la carga total
-        if 24 < data_rows.shape[1]:
-            df['CargaMax'] = data_rows.iloc[:, 24].values
+        # 🚨 COLUMNA 30: CARGA MÁXIMA
+        if 30 < data_rows.shape[1]:
+            df['CargaMax'] = data_rows.iloc[:, 30].values
         else:
             df['CargaMax'] = '0'
 
-        # 🚀 FIX V135: NO permitimos que la Columna 3 (Pasajeros PUE) sobreescriba la fecha
-        # Obligamos a usar la extracción segura del encabezado o el título
+        # FECHA: Limpiar fecha del Excel (Columna 3) y usar nombre de archivo si falla
         fecha_global = extraer_fecha_segura(full.head(15), fname, is_thdr=False)
-        df['Fecha_s'] = fecha_global
+        df['Fecha_s'] = df['Fecha_Excel'].apply(parse_excel_date).replace('None', np.nan).replace('', np.nan).ffill().fillna(fecha_global)
 
         df['Nro_THDR'] = df['Nro_THDR_raw'].apply(clean_primary_key)
         df['Tren_Clean'] = df['Tren'].apply(clean_id)
         df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
         
-        # 🚀 REGLA INQUEBRANTABLE 3: El N° THDR define la Vía (Par = V1, Impar = V2)
-        # NUNCA USAR EL ID DEL TREN PARA ADIVINAR LA VÍA.
+        # VÍA: Por paridad del THDR
         def _determinar_via(row):
             viaje = str(row['Nro_THDR_raw'])
             nums = re.findall(r'\d+', viaje)
             if nums: return 1 if int(nums[0]) % 2 == 0 else 2
-            # Fallback estricto al nombre del archivo
             return via_titulo
             
         df['Via'] = df.apply(_determinar_via, axis=1)
@@ -346,7 +348,6 @@ def cargar_pax(data, fname, via_param=1):
         df = df.dropna(subset=['t_ini_p'])
         if df.empty: return pd.DataFrame()
 
-        # Limpieza matemática final
         for c in PAX_COLS + ['CargaMax']: 
             df[c] = df[c].apply(clean_pax_number)
 
@@ -377,8 +378,6 @@ def match_pax(row, df_pax):
     sub = df_pax[df_pax['Via'] == via].copy()
     if sub.empty: return EMPTY
     
-    # 💡 Filtro Suave de Fecha: Si la fecha del Excel Pax falló y es 2026-01-01, 
-    # NO destruye la búsqueda. Continúa buscando por Horario o N° THDR.
     if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
         sub_date = sub[sub['Fecha_s'] == thdr_date]
         if not sub_date.empty: 
@@ -386,7 +385,6 @@ def match_pax(row, df_pax):
 
     sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
     
-    # Intento 1: Exacto por Nro Viaje (THDR)
     if nro_viaje != '' and 'Nro_THDR' in sub.columns:
         sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
         match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
@@ -394,7 +392,6 @@ def match_pax(row, df_pax):
             best_exact = match_exacto.iloc[0]
             return {c: _to_int(best_exact.get(c, 0)) for c in PAX_COLS}, _to_int(best_exact.get('CargaMax', 0)), mins_to_time_str(best_exact.get('t_ini_p')), str(best_exact.get('Nro_THDR', '')), best_exact.name
 
-    # Intento 2: Fallback por Horario Cercano
     if pd.notna(t_i):
         best_match = sub.loc[sub['diff'].idxmin()]
         if best_match['diff'] <= 15: 
