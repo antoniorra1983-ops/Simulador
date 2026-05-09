@@ -4,7 +4,17 @@ import re
 import unicodedata
 from io import BytesIO
 from datetime import datetime, date, timedelta
-from config import *
+
+# =============================================================================
+# CONSTANTES BLINDADAS (Protección contra fallos de caché en Streamlit Cloud)
+# =============================================================================
+ESTACIONES_SAFE = ['Puerto','Bellavista','Francia','Baron','Portales','Recreo','Miramar','Viña del Mar','Hospital','Chorrillos','El Salto','Valencia','Quilpue','El Sol','El Belloto','Las Americas','La Concepcion','Villa Alemana','Sargento Aldea','Peñablanca','Limache']
+EC_SAFE = ['PU','BE','FR','BA','PO','RE','MI','VM','HO','CH','ES','VAL','QU','SO','EB','AM','CO','VL','SA','PE','LI']
+PAX_COLS_SAFE = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
+KM_ACUM_SAFE = [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13]
+KM_TOTAL_SAFE = 43.13
+N_EST_SAFE = 21
+FERIADOS_SAFE = ['2026-01-01', '2026-04-03', '2026-04-04', '2026-05-01', '2026-05-21', '2026-06-21', '2026-07-16', '2026-08-15', '2026-09-18', '2026-09-19', '2026-10-12', '2026-10-31', '2026-12-08', '2026-12-25']
 
 # =============================================================================
 # 1. UTILIDADES Y PARSEOS BÁSICOS
@@ -64,9 +74,7 @@ def clean_pax_number(x):
 def clasificar_dia(d_str):
     try:
         d = datetime.strptime(d_str, '%Y-%m-%d')
-        try: feriados = feriados_2026
-        except NameError: feriados = []
-        if d_str in feriados or d.weekday() == 6: return 'Domingo/Festivo'
+        if d_str in FERIADOS_SAFE or d.weekday() == 6: return 'Domingo/Festivo'
         if d.weekday() == 5: return 'Sábado'
         return 'Laboral'
     except: return 'Laboral'
@@ -89,28 +97,23 @@ def extraer_fecha_segura(df_raw, fname):
 
 def _col_to_est_idx(col):
     cu = re.sub(r'[^a-z0-9]','', str(col).lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
-    try: estaciones_lista = ESTACIONES
-    except NameError: return None
-    for i, est in enumerate(estaciones_lista):
+    for i, est in enumerate(ESTACIONES_SAFE):
         ne = re.sub(r'[^a-z0-9]','', est.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
         if ne in cu: return i
     return None
 
 def calc_tren_km_real_general(row):
-    try: km_acum_safe = KM_ACUM
-    except NameError: km_acum_safe = [0.0] * 21
     k_s, k_e = min(row['km_orig'], row['km_dest']), max(row['km_orig'], row['km_dest'])
     man = row.get('maniobra')
     if man in ['CORTE_BTO','ACOPLE_BTO','CORTE_PU_SA_BTO']:
-        km_man = km_acum_safe[14]
+        km_man = KM_ACUM_SAFE[14]
         if k_s <= km_man <= k_e: return abs(km_man-k_s)*2.0 + abs(k_e-km_man)*1.0
     elif man in ['CORTE_SA','ACOPLE_SA']:
-        km_man = km_acum_safe[18]
+        km_man = KM_ACUM_SAFE[18]
         if k_s <= km_man <= k_e: return abs(km_man-k_s)*2.0 + abs(k_e-km_man)*1.0
     return abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0)
 
 def make_unique(df):
-    if df.empty: return df
     cols = pd.Series(df.columns)
     for dup in cols[cols.duplicated()].unique(): 
         cols[cols==dup] = [f"{dup}_{i}" if i else dup for i in range(sum(cols==dup))]
@@ -121,22 +124,17 @@ def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0):
     if not pax_d or not isinstance(pax_d, dict): return pax_max_fallback
     if sum(pax_d.values()) == 0 and pax_max_fallback > 0: return pax_max_fallback
     pax_val = 0
-    try:
-        n_est_safe = N_EST
-        km_acum_safe = KM_ACUM
-        pax_cols_safe = PAX_COLS
-    except NameError: return pax_max_fallback
 
     if via == 1:
-        for i in range(n_est_safe):
-            if km_pos >= km_acum_safe[i]:
-                val = pax_d.get(pax_cols_safe[i])
+        for i in range(N_EST_SAFE):
+            if km_pos >= KM_ACUM_SAFE[i]:
+                val = pax_d.get(PAX_COLS_SAFE[i])
                 if val is not None: pax_val = val
             else: break
     else:
-        for i in range(n_est_safe - 1, -1, -1):
-            if km_pos <= km_acum_safe[i]:
-                val = pax_d.get(pax_cols_safe[i])
+        for i in range(N_EST_SAFE - 1, -1, -1):
+            if km_pos <= KM_ACUM_SAFE[i]:
+                val = pax_d.get(PAX_COLS_SAFE[i])
                 if val is not None: pax_val = val
             else: break
     return int(pax_val)
@@ -250,25 +248,23 @@ def procesar_thdr(data, fname, via_param=1):
                 if pd.notna(val) and val > 0:
                     valid_est.append(e_idx)
             if not valid_est:
-                return pd.Series([0.0 if via_param == 1 else KM_TOTAL, KM_TOTAL if via_param == 1 else 0.0])
+                return pd.Series([0.0 if via_param == 1 else KM_TOTAL_SAFE, KM_TOTAL_SAFE if via_param == 1 else 0.0])
             
             if via_param == 1:
-                return pd.Series([KM_ACUM[min(valid_est)], KM_ACUM[max(valid_est)]])
+                return pd.Series([KM_ACUM_SAFE[min(valid_est)], KM_ACUM_SAFE[max(valid_est)]])
             else:
-                return pd.Series([KM_ACUM[max(valid_est)], KM_ACUM[min(valid_est)]])
+                return pd.Series([KM_ACUM_SAFE[max(valid_est)], KM_ACUM_SAFE[min(valid_est)]])
 
         df[['km_orig', 'km_dest']] = df.apply(_get_real_orig_dest, axis=1)
         df = df.dropna(subset=['t_ini'])
         
         df['km_viaje'] = abs(df['km_dest'] - df['km_orig'])
-        try: ec_safe = EC
-        except NameError: ec_safe = ['PU'] * 21
-        df['svc_type'] = df.apply(lambda r: f"{ec_safe[KM_ACUM.index(r['km_orig'])]}-{ec_safe[KM_ACUM.index(r['km_dest'])]}", axis=1)
+        df['svc_type'] = df.apply(lambda r: f"{EC_SAFE[KM_ACUM_SAFE.index(r['km_orig'])]}-{EC_SAFE[KM_ACUM_SAFE.index(r['km_dest'])]}", axis=1)
 
         def calc_dwell_dynamic(row):
             try:
-                idx_orig = int(np.argmin([abs(row['km_orig'] - k) for k in KM_ACUM]))
-                idx_dest = int(np.argmin([abs(row['km_dest'] - k) for k in KM_ACUM]))
+                idx_orig = int(np.argmin([abs(row['km_orig'] - k) for k in KM_ACUM_SAFE]))
+                idx_dest = int(np.argmin([abs(row['km_dest'] - k) for k in KM_ACUM_SAFE]))
                 n_stops = max(0, abs(idx_dest - idx_orig) - 1)
                 return round(n_stops * (8.0 / 19.0), 3)
             except: return 8.0 
@@ -281,7 +277,7 @@ def procesar_thdr(data, fname, via_param=1):
             for col, e_idx in est_cols.items():
                 val = _safe_get(row, col)
                 if pd.notna(val) and val > 0:
-                    nodos_temp.append((val, KM_ACUM[e_idx]))
+                    nodos_temp.append((val, KM_ACUM_SAFE[e_idx]))
             
             nodos_validos = [n for n in nodos_temp if pd.notna(n[0])]
             nodos_validos.sort(key=lambda x: (x[1], x[0]))
@@ -327,51 +323,90 @@ def procesar_thdr(data, fname, via_param=1):
 # =============================================================================
 
 def cargar_pax(data, fname, via_param=1):
-    """LECTURA NATIVA EXCEL: Asegura apuntar a la Columna 29. Cero CSV."""
+    """LECTURA NATIVA EXCEL CON ESCÁNER INTELIGENTE: Busca la cabecera real sin importar la columna"""
     try:
-        eng = "openpyxl" if fname.lower().endswith(".xlsx") else "xlrd"
-        df_raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
+        eng = "xlrd" if fname.lower().endswith(".xls") else "openpyxl"
+        full = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
+        if full is None or full.empty or len(full) <= 10: return pd.DataFrame()
+        
+        header_idx = -1
+        for r in range(min(20, len(full))):
+            row_str = ' '.join(full.iloc[r].fillna('').astype(str).str.upper())
+            if ('PUE' in row_str or 'PUERTO' in row_str) and ('LIM' in row_str or 'LIMACHE' in row_str) or 'TOTAL' in row_str:
+                header_idx = r
+                break
+        
+        if header_idx == -1:
+            header_idx = 9
 
-        if df_raw.shape[1] < 10: return pd.DataFrame()
+        EXACT_MAP = {'PUE':'PUE','PUERTO':'PUE', 'BEL':'BEL','BELLAVISTA':'BEL', 'FRA':'FRA', 'BAR':'BAR','BARON':'BAR', 'POR':'POR','PORTALES':'POR', 'REC':'REC','RECREO':'REC', 'MIR':'MIR','MIRAMAR':'MIR', 'VIN':'VIN','VINA DEL MAR':'VIN','VIÑA DEL MAR':'VIN', 'HOS':'HOS','HOSPITAL':'HOS', 'CHO':'CHO','CHORRILLOS':'CHO', 'SLT':'SLT','SALTO':'SLT','EL SALTO':'SLT', 'VAL':'VAL','VALENCIA':'VAL', 'QUI':'QUI','QUILPUE':'QUI','QUILPUÉ':'QUI', 'SOL':'SOL','EL SOL':'SOL', 'BTO':'BTO','EL BELLOTO':'BTO','BELLOTO':'BTO', 'AME':'AME','LAS AMERICAS':'AME','AMERICAS':'AME', 'CON':'CON','LA CONCEPCION':'CON','CONCEPCION':'CON', 'VAM':'VAM','VILLA ALEMANA':'VAM','ALEMANA':'VAM', 'SGA':'SGA','SARGENTO ALDEA':'SGA','ALDEA':'SGA', 'PEN':'PEN','PENABLANCA':'PEN','PEÑABLANCA':'PEN','PENA BLANCA':'PEN', 'LIM':'LIM','LIMACHE':'LIM'}
+        
+        col_mapping = {}
+        keys_sorted = sorted(EXACT_MAP.keys(), key=len, reverse=True)
+        
+        for c_idx in range(full.shape[1]):
+            vals = [str(full.iloc[r, c_idx]).strip().upper() for r in range(max(0, header_idx-2), header_idx+1)]
+            combo = " ".join(vals)
+            combo_norm = unicodedata.normalize('NFD', combo).encode('ascii', 'ignore').decode().replace('.', '').replace(':', '')
+
+            mapped = False
+            for k in keys_sorted:
+                if k == vals[-1] or k == vals[-2] or f" {k} " in f" {combo_norm} " or f"_{k}_" in f"_{combo_norm}_":
+                    col_mapping[col_mapping.get(c_idx, '')] = EXACT_MAP[k] 
+                    col_mapping[c_idx] = EXACT_MAP[k]
+                    mapped = True
+                    break
             
-        data_rows = df_raw.iloc[10:].copy().reset_index(drop=True)
+            if mapped: continue
+            
+            if ('HORA' in combo_norm or 'SALIDA' in combo_norm or 'PARTIDA' in combo_norm) and 'Hora Origen' not in col_mapping.values(): 
+                col_mapping[c_idx] = 'Hora Origen'
+            elif 'THDR' in combo_norm and 'Nro_THDR_raw' not in col_mapping.values(): 
+                col_mapping[c_idx] = 'Nro_THDR_raw'
+            elif ('TREN' in combo_norm or 'SERVICIO' in combo_norm) and 'Tren' not in col_mapping.values(): 
+                col_mapping[c_idx] = 'Tren'
+            elif 'FECHA' in combo_norm and 'Fecha_s_raw' not in col_mapping.values():
+                col_mapping[c_idx] = 'Fecha_s_raw'
+            elif 'CargaMax' not in col_mapping.values():
+                if any(w in combo_norm for w in ['TOTAL', 'BORDO', 'CARGA', 'PASAJERO']) and not any(exc in combo_norm for exc in ['THDR', 'TREN', 'HORA', 'VIA', 'FECHA']):
+                    col_mapping[c_idx] = 'CargaMax'
+
+        data_rows = full.iloc[header_idx + 1:].copy()
         df = pd.DataFrame()
-        df['Nro_THDR_raw'] = data_rows.iloc[:, 0].values
-        df['Tren_Clean']   = data_rows.iloc[:, 2].apply(clean_id).values
-        df['Fecha_s']      = data_rows.iloc[:, 3].apply(parse_excel_date).fillna(extraer_fecha_segura(df_raw, fname)).values
-        df['Hora Origen']  = data_rows.iloc[:, 4].values
+        for c_idx, col_name in col_mapping.items():
+            if isinstance(c_idx, int) and c_idx < full.shape[1]: 
+                df[col_name] = data_rows.iloc[:, c_idx].values
+                
+        fecha_global = extraer_fecha_segura(full, fname)
         
-        header_row = df_raw.iloc[9].fillna('').astype(str).str.upper().values
-        is_pue = 'PUE' in header_row[8] or 'PUERTO' in header_row[8]
-        
-        try: pax_cols_safe = PAX_COLS
-        except NameError: pax_cols_safe = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
-            
-        orden_est = pax_cols_safe if is_pue else list(reversed(pax_cols_safe))
-        
-        for i, st in enumerate(orden_est):
-            if 8 + i < data_rows.shape[1]:
-                df[st] = data_rows.iloc[:, 8 + i].apply(clean_pax_number).values
-            else:
-                df[st] = 0
-            
-        # MAPEO ESTRICTO A COLUMNA 29 (AD)
-        if 29 < data_rows.shape[1]:
-            df['CargaMax'] = data_rows.iloc[:, 29].apply(clean_pax_number).values
+        if 'Fecha_s_raw' in df.columns:
+            df['Fecha_s'] = df['Fecha_s_raw'].apply(parse_excel_date).fillna(fecha_global).replace('', fecha_global).ffill()
         else:
-            df['CargaMax'] = 0
+            df['Fecha_s'] = fecha_global
+                
+        for col in ['Hora Origen', 'Nro_THDR_raw', 'Tren', 'CargaMax']:
+            if col not in df.columns: df[col] = ''
         
+        for c in PAX_COLS_SAFE:
+            if c not in df.columns: df[c] = '0'
+
+        df['Nro_THDR'] = df['Nro_THDR_raw'].apply(clean_primary_key)
+        df['Tren_Clean'] = df['Tren'].apply(clean_id)
         df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
         df['Via'] = via_param
-        return df.dropna(subset=['t_ini_p', 'Fecha_s'])
-    except Exception as e: return pd.DataFrame()
-
-# 💡 MATCH UNIVERSAL: IGNORA NOMBRES DE TREN O VIAJE, SOLO IMPORTA LA VÍA Y LA HORA
-def match_pax(row, df_pax):
-    try: pax_cols_safe = PAX_COLS
-    except NameError: pax_cols_safe = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
+        df = df.dropna(subset=['t_ini_p'])
         
-    EMPTY = ({c: 0 for c in pax_cols_safe}, 0, '--:--:--', 'No Detectado', -1)
+        if df.empty: return pd.DataFrame()
+        
+        for c in PAX_COLS_SAFE + ['CargaMax']: 
+            df[c] = df[c].apply(lambda x: int(re.sub(r'[^\d]', '', str(x).replace('.', '').replace(',', '')) or 0))
+        return df
+    except Exception as e: 
+        return pd.DataFrame()
+
+
+def match_pax(row, df_pax):
+    EMPTY = ({c: 0 for c in PAX_COLS_SAFE}, 0, '--:--:--', 'No Detectado', -1)
     if df_pax.empty: return EMPTY
     
     def _to_int(v):
@@ -385,24 +420,21 @@ def match_pax(row, df_pax):
     sub = df_pax[df_pax['Via'] == via].copy()
     if sub.empty: return EMPTY
     
-    # 1. FILTRO DE FECHA (Si el THDR y los Pax tienen la fecha bien, aislamos ese día)
     if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
         sub_date = sub[sub['Fecha_s'].astype(str).str.strip() == thdr_date]
         if not sub_date.empty:
             sub = sub_date
 
-    # 2. MATCH UNIVERSAL POR TIEMPO (Ignorando nombres completamente)
+    # MATCH UNIVERSAL POR TIEMPO (Ignorando nombres completamente, tolerancia 60 mins)
     if pd.notna(t_i):
-        # Calculamos la diferencia de tiempo entre el tren del mapa y TODOS los trenes de la planilla pax
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
         
         if not sub.empty:
             idx_min = sub['diff'].idxmin()
             best_match = sub.loc[idx_min]
             
-            # Tolerancia de 20 minutos EFE: Si salieron a la misma hora, ES el mismo tren.
-            if best_match['diff'] <= 20: 
-                return {c: _to_int(best_match.get(c, 0)) for c in pax_cols_safe}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
+            if best_match['diff'] <= 60: 
+                return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS_SAFE}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
 
     return EMPTY
 
@@ -524,19 +556,19 @@ def parsear_planilla_maestra(data, fname):
 
                         via = 1 if viaje_num % 2 == 0 else 2
                         if via == 1:
-                            km_orig = KM_ACUM[0] 
-                            if servicio_num >= 600: km_dest = KM_ACUM[20] 
-                            elif 400 <= servicio_num < 600: km_dest = KM_ACUM[18] 
-                            else: km_dest = KM_ACUM[14] 
+                            km_orig = KM_ACUM_SAFE[0] 
+                            if servicio_num >= 600: km_dest = KM_ACUM_SAFE[20] 
+                            elif 400 <= servicio_num < 600: km_dest = KM_ACUM_SAFE[18] 
+                            else: km_dest = KM_ACUM_SAFE[14] 
                         else:
-                            km_dest = KM_ACUM[0] 
-                            if servicio_num >= 600: km_orig = KM_ACUM[20] 
-                            elif 400 <= servicio_num < 600: km_orig = KM_ACUM[18] 
-                            elif 200 <= servicio_num < 400: km_orig = KM_ACUM[14] 
-                            else: km_orig = KM_ACUM[14] 
+                            km_dest = KM_ACUM_SAFE[0] 
+                            if servicio_num >= 600: km_orig = KM_ACUM_SAFE[20] 
+                            elif 400 <= servicio_num < 600: km_orig = KM_ACUM_SAFE[18] 
+                            elif 200 <= servicio_num < 400: km_orig = KM_ACUM_SAFE[14] 
+                            else: km_orig = KM_ACUM_SAFE[14] 
                             
-                        ruta = f"{EC[KM_ACUM.index(km_orig)]}-{EC[KM_ACUM.index(km_dest)]}"
-                        nodos_via = [(0.0, k) for k in (KM_ACUM[KM_ACUM.index(km_orig):KM_ACUM.index(km_dest)+1] if via==1 else KM_ACUM[KM_ACUM.index(km_dest):KM_ACUM.index(km_orig)+1][::-1])]
+                        ruta = f"{EC_SAFE[KM_ACUM_SAFE.index(km_orig)]}-{EC_SAFE[KM_ACUM_SAFE.index(km_dest)]}"
+                        nodos_via = [(0.0, k) for k in (KM_ACUM_SAFE[KM_ACUM_SAFE.index(km_orig):KM_ACUM_SAFE.index(km_dest)+1] if via==1 else KM_ACUM_SAFE[KM_ACUM_SAFE.index(km_dest):KM_ACUM_SAFE.index(km_orig)+1][::-1])]
                         
                         viajes.append({
                             '_id': f"PLAN_{servicio_num}_{int(t_ini)}", 't_ini': t_ini, 'Via': via,
@@ -589,20 +621,20 @@ def parsear_planilla_maestra(data, fname):
                             else: via = 1 if viaje_num % 2 == 0 else 2
                             
                             if via == 1:
-                                km_orig = KM_ACUM[0] 
-                                if servicio_num >= 600: km_dest = KM_ACUM[20] 
-                                elif 400 <= servicio_num < 600: km_dest = KM_ACUM[18] 
-                                elif 200 <= servicio_num < 400: km_dest = KM_ACUM[14] 
-                                else: km_dest = KM_ACUM[14] 
+                                km_orig = KM_ACUM_SAFE[0] 
+                                if servicio_num >= 600: km_dest = KM_ACUM_SAFE[20] 
+                                elif 400 <= servicio_num < 600: km_dest = KM_ACUM_SAFE[18] 
+                                elif 200 <= servicio_num < 400: km_dest = KM_ACUM_SAFE[14] 
+                                else: km_dest = KM_ACUM_SAFE[14] 
                             else:
-                                km_dest = KM_ACUM[0] 
-                                if servicio_num >= 600: km_orig = KM_ACUM[20] 
-                                elif 400 <= servicio_num < 600: km_orig = KM_ACUM[18] 
-                                elif 200 <= servicio_num < 400: km_orig = KM_ACUM[14] 
-                                else: km_orig = KM_ACUM[14] 
+                                km_dest = KM_ACUM_SAFE[0] 
+                                if servicio_num >= 600: km_orig = KM_ACUM_SAFE[20] 
+                                elif 400 <= servicio_num < 600: km_orig = KM_ACUM_SAFE[18] 
+                                elif 200 <= servicio_num < 400: km_orig = KM_ACUM_SAFE[14] 
+                                else: km_orig = KM_ACUM_SAFE[14] 
                                 
-                            ruta = f"{EC[KM_ACUM.index(km_orig)]}-{EC[KM_ACUM.index(km_dest)]}"
-                            nodos_via = [(0.0, k) for k in (KM_ACUM[KM_ACUM.index(km_orig):KM_ACUM.index(km_dest)+1] if via==1 else KM_ACUM[KM_ACUM.index(km_dest):KM_ACUM.index(km_orig)+1][::-1])]
+                            ruta = f"{EC_SAFE[KM_ACUM_SAFE.index(km_orig)]}-{EC_SAFE[KM_ACUM_SAFE.index(km_dest)]}"
+                            nodos_via = [(0.0, k) for k in (KM_ACUM_SAFE[KM_ACUM_SAFE.index(km_orig):KM_ACUM_SAFE.index(km_dest)+1] if via==1 else KM_ACUM_SAFE[KM_ACUM_SAFE.index(km_dest):KM_ACUM_SAFE.index(km_orig)+1][::-1])]
                             viajes.append({'_id': f"PLAN_{servicio_num}_{int(t_ini)}", 't_ini': t_ini, 'Via': via, 'km_orig': km_orig, 'km_dest': km_dest, 'nodos': nodos_via, 'tipo_tren': 'XT-100', 'doble': es_doble, 'num_servicio': str(servicio_num), 'svc_type': ruta, 'maniobra': None})
                             
         df_viajes = pd.DataFrame(viajes)
