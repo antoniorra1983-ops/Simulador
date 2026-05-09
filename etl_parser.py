@@ -7,12 +7,10 @@ from datetime import datetime, date, timedelta
 from config import *
 
 def mins_to_time_str(mins):
-    if pd.isna(mins): return '--:--:--'
+    if pd.isna(mins) or np.isinf(mins): return '--:--:--'
     try:
         m_val = float(mins)
-        while m_val >= 1440: m_val -= 1440
-        while m_val < 0: m_val += 1440
-        h, m = int(m_val // 60), int(m_val % 60)
+        h, m = int((m_val // 60) % 24), int(m_val % 60)
         s = int(round((m_val * 60) % 60))
         if s == 60: s, m = 0, m + 1
         if m == 60: m, h = 0, h + 1
@@ -22,24 +20,24 @@ def mins_to_time_str(mins):
 def parse_time_to_mins(val):
     if pd.isna(val): return None
     sv = str(val).strip().lower()
-    if sv == '' or sv == 'nan': return None
-    if ' ' in sv: sv = sv.split(' ')[-1]
+    if sv in ('', 'nan', 'none'): return None
     m = re.search(r'(\d{1,2}):(\d{2})(?::(\d{2}))?', sv)
-    if m:
-        h = int(m.group(1)); m_min = int(m.group(2))
-        s_sec = int(m.group(3)) / 60.0 if m.group(3) else 0.0
-        return h * 60.0 + m_min + s_sec
+    if m: return int(m.group(1)) * 60.0 + int(m.group(2)) + (int(m.group(3)) / 60.0 if m.group(3) else 0.0)
     try:
         f = float(sv)
-        if f < 1.0: return f * 1440.0
-        if f < 2400.0: return (int(f // 100) * 60.0) + (f % 100)
-    except: pass
-    return None
+        return f * 1440.0 if f < 1.0 else (int(f // 100) * 60.0) + (f % 100) if f < 2400.0 else None
+    except: return None
 
-def clean_primary_key(x):
-    if pd.isna(x): return ''
-    s = re.sub(r'[^A-Z0-9]', '', re.sub(r'\.0+$', '', str(x).strip().upper()))
-    return s.lstrip('0') if s not in ['NAN', ''] else ''
+def parse_excel_date(val):
+    if pd.isna(val): return None
+    if isinstance(val, (datetime, pd.Timestamp)): return val.strftime('%Y-%m-%d')
+    v_str = str(val).strip()
+    m_dt = re.search(r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b', v_str)
+    if m_dt:
+        d, m, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+        if y < 100: y += 2000
+        return f"{y:04d}-{m:02d}-{d:02d}"
+    return None
 
 def clean_id(x):
     try:
@@ -47,400 +45,330 @@ def clean_id(x):
         return str(int(nums[0])) if nums else str(x).strip().upper()
     except: return str(x).strip().upper()
 
-def clasificar_dia(d_str):
-    try:
-        d = datetime.strptime(d_str, '%Y-%m-%d')
-        return 'Domingo/Festivo' if d_str in feriados_2026 or d.weekday() == 6 else ('Sábado' if d.weekday() == 5 else 'Laboral')
-    except: return 'Laboral'
-
-def extraer_fecha_segura(df_raw, fname, is_thdr=True):
-    for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{2,4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
-        m = re.search(pat, str(fname))
-        if m:
-            if len(m.group(1)) == 4:
-                y, m_val, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            else:
-                d, m_val, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                if y < 100: y += 2000
-            if m_val > 12 and d <= 12: d, m_val = m_val, d
-            if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
-
-    if is_thdr:
-        numeros = re.findall(r'\d+', str(fname))
-        for num in numeros:
-            if len(num) == 8:
-                d, m_val, y = int(num[0:2]), int(num[2:4]), int(num[4:8])
-                if 1 <= d <= 31 and 1 <= m_val <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m_val:02d}-{d:02d}"
-                y, m_val, d = int(num[0:4]), int(num[4:6]), int(num[6:8])
-                if 1 <= d <= 31 and 1 <= m_val <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m_val:02d}-{d:02d}"
-            elif len(num) == 6:
-                d, m_val, y = int(num[0:2]), int(num[2:4]), int(num[4:6])
-                if 1 <= d <= 31 and 1 <= m_val <= 12 and 20 <= y <= 35: return f"20{y:02d}-{m_val:02d}-{d:02d}"
-                y, m_val, d = int(num[0:2]), int(num[2:4]), int(num[4:6])
-                if 1 <= d <= 31 and 1 <= m_val <= 12 and 20 <= y <= 35: return f"20{y:02d}-{m_val:02d}-{d:02d}"
-
-    if df_raw is not None and not df_raw.empty:
-        for i in range(min(15, len(df_raw))):
-            row_str = ' '.join([str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)])
-            for pat in [r'\b(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})\b', r'\b(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{2,4})\b']:
-                m_dt = re.search(pat, row_str)
-                if m_dt:
-                    if len(m_dt.group(1)) == 4:
-                        y, m_val, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
-                    else:
-                        d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
-                        if y < 100: y += 2000
-                    if m_val > 12 and d <= 12: d, m_val = m_val, d
-                    if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
-            
-            if 'FECHA' in row_str.upper() or 'DATE' in row_str.upper():
-                row_vals = [str(x).strip() for x in df_raw.iloc[i].values if pd.notna(x)]
-                for val in row_vals:
-                    val_clean = val.split('.')[0]
-                    if val_clean.isdigit() and 40000 <= int(val_clean) <= 60000:
-                        try: return (date(1899, 12, 30) + timedelta(days=int(val_clean))).strftime('%Y-%m-%d')
-                        except: pass
-
-    return "2026-01-01"
-
-def parse_excel_date(val):
-    if pd.isna(val): return None
-    if isinstance(val, (datetime, pd.Timestamp)): return val.strftime('%Y-%m-%d')
-    v_str = re.sub(r'\.0+$', '', str(val).strip()).split(' ')[0]
-    if not v_str or v_str.lower() in ['nan', 'none', 'fecha', 'date', 'nat']: return None
-    
-    if v_str.isdigit():
-        v_int = int(v_str)
-        if 40000 <= v_int <= 60000:
-            try: return (date(1899, 12, 30) + timedelta(days=v_int)).strftime('%Y-%m-%d')
-            except: pass
-        elif len(v_str) in [5, 6]:
-            s_pad = v_str.zfill(6)
-            try:
-                d, m_val, y = int(s_pad[0:2]), int(s_pad[2:4]), int(s_pad[4:6])
-                if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{2000+y if y<100 else y:04d}-{m_val:02d}-{d:02d}"
-            except: pass
-            
-    for pat in [r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b', r'\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b']:
-        m_dt = re.search(pat, v_str)
-        if m_dt:
-            if len(m_dt.group(1)) == 4: 
-                y, m_val, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
-            else: 
-                d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
-            if m_val > 12 and d <= 12: d, m_val = m_val, d
-            if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
-    return None
-
 def clean_pax_number(x):
     if pd.isna(x): return 0
-    s = re.sub(r'[^\d]', '', re.sub(r'\.0+$', '', str(x).strip().lower()).replace('.', '').replace(',', ''))
-    try: return int(s) if s and s != 'nan' else 0
-    except: return 0
+    s = re.sub(r'[^\d]', '', str(x).split('.')[0])
+    return int(s) if s else 0
 
-_EST_NORM = sorted({re.sub(r'[^a-z0-9]','', e.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n')): i for i, e in enumerate(ESTACIONES)}.items(), key=lambda x: -len(x[0]))
+def extraer_fecha_segura(df_raw, fname):
+    numeros = re.findall(r'\d+', str(fname))
+    for num in numeros:
+        if len(num) == 6:
+            d, m, y = int(num[0:2]), int(num[2:4]), int(num[4:6])
+            if 1 <= d <= 31 and 1 <= m <= 12: return f"20{y:02d}-{m:02d}-{d:02d}"
+        if len(num) == 8:
+            d, m, y = int(num[0:2]), int(num[2:4]), int(num[4:8])
+            if 1 <= d <= 31 and 1 <= m <= 12: return f"{y:04d}-{m:02d}-{d:02d}"
+    if df_raw is not None:
+        for i in range(min(10, len(df_raw))):
+            for val in df_raw.iloc[i].values:
+                dt = parse_excel_date(val)
+                if dt: return dt
+    return "2026-01-01"
+
 def _col_to_est_idx(col):
-    cu = re.sub(r'[^a-z0-9]','', col.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
-    if 'americas' in cu: return ESTACIONES.index('Las Americas')
-    if 'vina' in cu: return ESTACIONES.index('Viña del Mar')
-    if 'aldea' in cu: return ESTACIONES.index('Sargento Aldea')
-    if 'belloto' in cu: return ESTACIONES.index('El Belloto')
-    for nk, idx in _EST_NORM:
-        if nk in cu: return idx
+    cu = re.sub(r'[^a-z0-9]','', str(col).lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
+    for i, est in enumerate(ESTACIONES):
+        ne = re.sub(r'[^a-z0-9]','', est.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
+        if ne in cu: return i
     return None
 
 def calc_tren_km_real_general(row):
-    k_s,k_e = min(row['km_orig'],row['km_dest']), max(row['km_orig'],row['km_dest'])
-    man = row.get('maniobra')
-    if man in ['CORTE_BTO','ACOPLE_BTO','CORTE_PU_SA_BTO']: return abs(KM_ACUM[14]-k_s)*2.0 + abs(k_e-KM_ACUM[14])*1.0 if k_s <= KM_ACUM[14] <= k_e else abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0)
-    elif man in ['CORTE_SA','ACOPLE_SA']: return abs(KM_ACUM[18]-k_s)*2.0 + abs(k_e-KM_ACUM[18])*1.0 if k_s <= KM_ACUM[18] <= k_e else abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0)
+    k_s, k_e = min(row['km_orig'], row['km_dest']), max(row['km_orig'], row['km_dest'])
     return abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0)
-
-def make_unique(df):
-    cols = pd.Series(df.columns)
-    for dup in cols[cols.duplicated()].unique(): cols[cols==dup] = [f"{dup}_{i}" if i else dup for i in range(sum(cols==dup))]
-    df.columns = cols
-    return df
-
-def get_pax_at_km(pax_d, km_pos, via, pax_max_fallback=0):
-    if not pax_d or not isinstance(pax_d, dict): return pax_max_fallback
-    if sum(pax_d.values()) == 0 and pax_max_fallback > 0: return pax_max_fallback
-    pax_val = 0
-    if via == 1:
-        for i in range(N_EST):
-            if km_pos >= KM_ACUM[i]:
-                val = pax_d.get(PAX_COLS[i])
-                if val is not None: pax_val = val
-            else: break
-    else:
-        for i in range(N_EST - 1, -1, -1):
-            if km_pos <= KM_ACUM[i]:
-                val = pax_d.get(PAX_COLS[i])
-                if val is not None: pax_val = val
-            else: break
-    return int(pax_val)
 
 def procesar_thdr(data, fname, via_param=1):
     try:
-        raw = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str) if fname.lower().endswith('.csv') else pd.read_excel(BytesIO(data), header=None, engine="openpyxl" if fname.lower().endswith(".xlsx") else "xlrd", dtype=str)
-        if raw is None or raw.empty or raw.shape[0] < 6: return pd.DataFrame(), f"Archivo vacío/corto: {fname}"
+        eng = "openpyxl" if fname.lower().endswith('.xlsx') else "xlrd"
+        raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
         
-        fecha_str = extraer_fecha_segura(raw, fname, is_thdr=True)
+        if raw is None or raw.empty: return pd.DataFrame(), f"Archivo vacío: {fname}"
+        fecha_str = extraer_fecha_segura(raw, fname)
         
-        header_idx = next((i for i in range(min(15, len(raw))) if ('VIAJE' in str(raw.iloc[i].values).upper() or 'NRO' in str(raw.iloc[i].values).upper()) and 'SALIDA' in str(raw.iloc[i].values).upper()), 1)
-        r0 = raw.iloc[header_idx - 1].copy() if header_idx > 0 else raw.iloc[0].copy()
-        r0.iloc[0] = np.nan 
-        cols = [f"{str(s).strip()}_{str(t).strip()}" if str(s).strip() and str(s).strip().lower() != 'nan' and str(t).strip() else str(t).strip() or str(s).strip() for s, t in zip(r0.ffill().astype(str), raw.iloc[header_idx].fillna('').astype(str))]
+        header_idx = 1
+        for i in range(min(15, len(raw))):
+            line = ' '.join([str(x).upper() for x in raw.iloc[i].values if pd.notna(x)])
+            if 'SALIDA' in line or 'HORA' in line or 'LLEGADA' in line:
+                header_idx = i; break
         
-        df = raw.iloc[header_idx + 1:].copy().reset_index(drop=True)
-        df.columns = cols[:len(df.columns)] + [f"_C{j}" for j in range(len(df.columns) - len(cols))]
-        df = df.dropna(how='all').reset_index(drop=True)
-
-        for col in df.columns:
-            if any(k in str(col).upper() for k in ['LLEGADA','SALIDA','HORA']):
-                try: df[f"{col}_min"] = df[col].apply(parse_time_to_mins)
-                except: pass
-
-        est_cols = {c: _col_to_est_idx(c) for c in df.columns if '_min' in str(c).lower() and 'program' not in str(c).lower()}
-        df['t_ini'] = df.apply(lambda row: min([row.get(c, np.nan) for c in est_cols.keys() if pd.notna(row.get(c, np.nan))] or [np.nan]), axis=1)
-        df['t_fin'] = df.apply(lambda row: max([row.get(c, np.nan) for c in est_cols.keys() if pd.notna(row.get(c, np.nan))] or [np.nan]), axis=1)
-
-        c_m1, c_m2, tren_col = next((c for c in df.columns if 'motriz' in str(c).lower() and '1' in str(c).lower()), None), next((c for c in df.columns if 'motriz' in str(c).lower() and '2' in str(c).lower()), None), next((c for c in df.columns if str(c).strip().upper() in ('TREN', 'SERVICIO')), None)
-
-        def _get_fleet_info(r):
-            n1, n2, n_tren = (int(re.search(r'(\d+)', str(r.get(c, ''))).group(1)) if re.search(r'(\d+)', str(r.get(c, ''))) else None for c in [c_m1, c_m2, tren_col])
-            n_eval = n1 or n2 or n_tren
-            tipo = "SFE" if n_eval and n_eval >= 36 else ("XT-M" if n_eval and 28 <= n_eval <= 35 else "XT-100")
-            motriz_str = f"{n1}+{n2}" if n1 and n2 else str(n_eval or "")
-            return pd.Series([motriz_str, tipo])
-            
-        df[['motriz_num', 'tipo_tren']] = df.apply(_get_fleet_info, axis=1)
-        df['doble'] = (df['Unidad'].fillna('S') == 'M') if 'Unidad' in df.columns else (df[c_m2].apply(lambda x: pd.notna(x) and str(x).strip() not in ('0','0.0','','nan')) if c_m2 else False)
+        df = raw.iloc[header_idx+1:].copy().reset_index(drop=True)
+        df.columns = [f"Col_{i}" for i in range(df.shape[1])]
+        df = df.dropna(how='all')
+        
+        df['num_servicio'] = df.iloc[:, 0].apply(clean_id)
+        times = []
+        for i in range(5, df.shape[1]):
+            col_data = df.iloc[:, i].apply(parse_time_to_mins)
+            if col_data.notna().any(): times.append(col_data)
+        
+        df['t_ini'] = pd.concat(times, axis=1).min(axis=1)
+        df['t_fin'] = pd.concat(times, axis=1).max(axis=1)
         df['Via'], df['Fecha_str'] = via_param, fecha_str
-
-        def _get_real_orig_dest(row):
-            valid_est = [e_idx for col, e_idx in est_cols.items() if pd.notna(row.get(col, np.nan)) and row.get(col) > 0]
-            if not valid_est: return pd.Series([0.0 if via_param == 1 else KM_TOTAL, KM_TOTAL if via_param == 1 else 0.0])
-            return pd.Series([KM_ACUM[min(valid_est)], KM_ACUM[max(valid_est)]]) if via_param == 1 else pd.Series([KM_ACUM[max(valid_est)], KM_ACUM[min(valid_est)]])
-
-        df[['km_orig', 'km_dest']] = df.apply(_get_real_orig_dest, axis=1)
-        df = df.dropna(subset=['t_ini'])
-        df['km_viaje'] = abs(df['km_dest'] - df['km_orig'])
-        df['svc_type'] = df.apply(lambda r: f"{EC[KM_ACUM.index(r['km_orig'])]}-{EC[KM_ACUM.index(r['km_dest'])]}", axis=1)
         
-        def _extract_nodos(row):
-            nodos_temp = [(row.get(col), KM_ACUM[e_idx]) for col, e_idx in est_cols.items() if pd.notna(row.get(col, np.nan)) and row.get(col) > 0]
-            seen_km = set()
-            return sorted([(t, k) for t, k in sorted([n for n in nodos_temp], key=lambda x: (x[1], x[0])) if not (k in seen_km or seen_km.add(k))], key=lambda x: x[0])
+        def get_tipo(srv):
+            try:
+                n = int(srv)
+                if n >= 36 and n < 200: return "SFE"
+                if 28 <= n <= 35: return "XT-M"
+                return "XT-100"
+            except: return "XT-100"
+        
+        df['tipo_tren'] = df['num_servicio'].apply(get_tipo)
+        df['doble'] = False 
+        df['km_orig'] = 0.0 if via_param == 1 else KM_TOTAL
+        df['km_dest'] = KM_TOTAL if via_param == 1 else 0.0
+        
+        def _get_nodos(r):
+            n = []
+            for i in range(5, df.shape[1]):
+                val = parse_time_to_mins(r[f"Col_{i}"])
+                if pd.notna(val) and val > 0: n.append((val, KM_ACUM[min(i-5, 20)]))
+            return sorted(n, key=lambda x: x[0]) if len(n) > 1 else None
             
-        df['nodos'] = df.apply(_extract_nodos, axis=1)
-        viaje_col = next((c for c in df.columns if 'VIAJE' in str(c).upper() or 'NRO' in str(c).upper()), None)
-        df['num_servicio'] = df[tren_col].apply(clean_primary_key) if tren_col else (df[viaje_col].apply(clean_primary_key) if viaje_col else '')
+        df['nodos'] = df.apply(_get_nodos, axis=1)
         df['_id'] = df['Fecha_str'] + "_" + df['num_servicio'] + "_" + df['t_ini'].astype(str)
-        df['t_fin'] = df['t_fin'].fillna(df['t_ini'] + df['km_viaje'] / 35.0 * 60.0)
-        return df, "ok"
+        return df.dropna(subset=['t_ini']), "ok"
     except Exception as e: return pd.DataFrame(), str(e)
 
-def calcular_dwell(df1, df2):
-    if df1.empty or df2.empty: return df1, df2
-    if 'num_servicio' not in df1.columns or 'num_servicio' not in df2.columns: return df1, df2
-    for fecha in df1['Fecha_str'].unique():
-        d1, d2 = df1[df1['Fecha_str']==fecha], df2[df2['Fecha_str']==fecha]
-        if d2.empty: continue
-        for idx1, r1 in d1.iterrows():
-            s = r1.get('num_servicio')
-            if pd.isna(s) or s == '': continue
-            m = d2[(d2['num_servicio']==s) & (d2['t_ini']>r1['t_fin'])]
-            if not m.empty and 0 < m['t_ini'].min()-r1['t_fin'] < 60: df2.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(m['t_ini'].min()-r1['t_fin'],1)
-        for idx2, r2 in d2.iterrows():
-            s = r2.get('num_servicio')
-            if pd.isna(s) or s == '': continue
-            m = d1[(d1['num_servicio']==s) & (d1['t_ini']>r2['t_fin'])]
-            if not m.empty and 0 < m['t_ini'].min()-r2['t_fin'] < 60: df1.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(m['t_ini'].min()-r2['t_fin'],1)
-    return df1, df2
-
 def cargar_pax(data, fname, via_param=1):
+    """MAPEADO RÍGIDO NATIVO EXCEL: FILA 11. COL 3 FECHA, COL 4 HORA, COL 29 TOTAL A BORDO"""
     try:
-        ext = fname.lower()
-        full = None
-        if ext.endswith('.csv'):
-            for enc in ['utf-8', 'latin-1', 'cp1252']:
-                for sep in [',', ';', '\t']:
-                    try:
-                        temp = pd.read_csv(BytesIO(data), header=None, sep=sep, encoding=enc, dtype=str)
-                        if temp.shape[1] > 10: 
-                            full = temp
-                            break
-                    except: pass
-                if full is not None: break
-        else: 
-            eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
-            full = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
-
-        if full is None or full.empty or len(full) <= 3: return pd.DataFrame()
-
-        start_idx = 9 
-        for i in range(min(25, len(full))):
-            val_a = str(full.iloc[i, 0]).strip().upper()
-            if 'THDR' in val_a:
-                start_idx = i + 1 
-                break
-                
-        if start_idx >= len(full): return pd.DataFrame()
-
-        data_rows = full.iloc[start_idx:].copy().reset_index(drop=True)
-        df = pd.DataFrame()
-
-        # EXTRACCIÓN ESTRICTA (Basada en CSV de EFE)
-        # 0: N° THDR, 1: N° Viaje, 2: Tren, 3: Fecha, 4: Hora Origen
-        df['Nro_THDR_raw'] = data_rows.iloc[:, 0].astype(str).values if data_rows.shape[1] > 0 else ''
-        df['Tren']         = data_rows.iloc[:, 2].astype(str).values if data_rows.shape[1] > 2 else ''
-        df['Fecha_Excel']  = data_rows.iloc[:, 3].astype(str).values if data_rows.shape[1] > 3 else ''
-        df['Hora Origen']  = data_rows.iloc[:, 4].astype(str).values if data_rows.shape[1] > 4 else ''
-
-        val_col8 = str(full.iloc[start_idx - 1, 8]).strip().upper() if full.shape[1] > 8 else ''
-        if 'PUE' in val_col8 or 'PUERTO' in val_col8:
-            est_orden = PAX_COLS
-        else:
-            est_orden = list(reversed(PAX_COLS))
-
-        # Estaciones: Columna 8 a 28
-        for i, st in enumerate(est_orden):
-            col_idx = 8 + i
-            if col_idx < data_rows.shape[1]:
-                df[st] = data_rows.iloc[:, col_idx].values
-            else:
-                df[st] = '0'
-
-        # TOTAL A BORDO es estrictamente la Columna 29. CargaMax sirve de variable en la UI.
-        if 29 < data_rows.shape[1]:
-            df['CargaMax'] = data_rows.iloc[:, 29].values
-        else:
-            df['CargaMax'] = '0'
-
-        fecha_global = extraer_fecha_segura(full.head(15), fname, is_thdr=False)
-        df['Fecha_s'] = df['Fecha_Excel'].apply(parse_excel_date).replace('None', np.nan).replace('', np.nan).ffill().fillna(fecha_global)
-
-        df['Nro_THDR'] = df['Nro_THDR_raw'].apply(clean_primary_key)
-        df['Tren_Clean'] = df['Tren'].apply(clean_id)
-        df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
+        eng = "xlrd" if fname.lower().endswith(".xls") else "openpyxl"
+        df_raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
         
-        name_u = fname.upper()
-        via_titulo = 1 if 'V1' in name_u or 'VIA 1' in name_u or 'VIA1' in name_u else (2 if 'V2' in name_u or 'VIA 2' in name_u or 'VIA2' in name_u else via_param)
-
-        def _determinar_via(row):
-            viaje = str(row['Nro_THDR_raw'])
-            nums = re.findall(r'\d+', viaje)
-            if nums: return 1 if int(nums[0]) % 2 == 0 else 2
-            return via_titulo
+        if df_raw.shape[1] < 10: return pd.DataFrame()
             
-        df['Via'] = df.apply(_determinar_via, axis=1)
+        data_rows = df_raw.iloc[10:].copy().reset_index(drop=True)
         
-        df = df.dropna(subset=['t_ini_p'])
-        if df.empty: return pd.DataFrame()
-
-        for c in PAX_COLS + ['CargaMax']: 
-            df[c] = df[c].apply(clean_pax_number)
-
-        return df
-    except Exception as e: 
-        return pd.DataFrame()
-
-def build_pax_v71(blobs_v1, blobs_v2):
-    parts, err = [], []
-    for blobs, via in [(blobs_v1, 1), (blobs_v2, 2)]:
-        for nm, data in blobs:
-            try: parts.append(cargar_pax(data, nm, via))
-            except Exception as e: err.append(f"[{nm}]: {e}")
-    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(), err
+        df = pd.DataFrame()
+        df['Nro_THDR_raw'] = data_rows.iloc[:, 0].values
+        df['Tren_Clean']   = data_rows.iloc[:, 2].apply(clean_id).values
+        df['Fecha_s']      = data_rows.iloc[:, 3].apply(parse_excel_date).values
+        df['Hora Origen']  = data_rows.iloc[:, 4].values
+        
+        # Mapeo de estaciones según la cabecera real (Fila 10 / Índice 9)
+        header_row = df_raw.iloc[9].fillna('').astype(str).str.upper().values
+        is_pue_start = 'PUE' in header_row[8] or 'PUERTO' in header_row[8]
+        orden_est = PAX_COLS if is_pue_start else list(reversed(PAX_COLS))
+        
+        for i, st in enumerate(orden_est):
+            if 8 + i < data_rows.shape[1]:
+                df[st] = data_rows.iloc[:, 8 + i].apply(clean_pax_number).values
+            else:
+                df[st] = 0
+            
+        # DATO SAGRADO: TOTAL A BORDO (Columna 29 / AD)
+        if data_rows.shape[1] > 29:
+            df['CargaMax'] = data_rows.iloc[:, 29].apply(clean_pax_number).values
+        else:
+            df['CargaMax'] = 0
+        
+        df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
+        df['Via'] = via_param
+        
+        # Si la fecha oficial está vacía en algunas filas, usar la general del archivo
+        fecha_fallback = extraer_fecha_segura(df_raw, fname)
+        df['Fecha_s'] = df['Fecha_s'].fillna(fecha_fallback).replace('None', fecha_fallback)
+        
+        return df.dropna(subset=['t_ini_p', 'Fecha_s'])
+    except Exception as e: return pd.DataFrame()
 
 def match_pax(row, df_pax):
     EMPTY = ({c: 0 for c in PAX_COLS}, 0, '--:--:--', 'No Detectado', -1)
     if df_pax.empty: return EMPTY
-    def _to_int(v):
-        try: return int(float(v)) if pd.notna(v) else 0
-        except: return 0
-        
+    
+    tren_row = clean_id(row.get('num_servicio', ''))
+    fecha_row = row.get('Fecha_str', '')
     t_i = row.get('t_ini')
-    via = row.get('via_op', row.get('Via', 1))
     
-    num_servicio = clean_primary_key(row.get('num_servicio', ''))
-    thdr_date = row.get('Fecha_str')
+    # Prioridad 1: Match Exacto por ID Tren y Fecha
+    match = df_pax[(df_pax['Tren_Clean'] == tren_row) & (df_pax['Fecha_s'] == fecha_row)]
     
-    sub = df_pax[df_pax['Via'] == via].copy()
-    if sub.empty: return EMPTY
-    
-    if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
-        sub_date = sub[sub['Fecha_s'] == thdr_date]
-        if not sub_date.empty: 
-            sub = sub_date
-
-    sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
-    
-    # Intento 1: Cruce de Tren Exacto
-    if num_servicio != '':
-        match_exacto = pd.DataFrame()
-        if 'Tren_Clean' in sub.columns:
-            match_exacto = sub[sub['Tren_Clean'] == num_servicio]
+    # Prioridad 2: Si el THDR tiene fecha rota (2026-01-01), buscar el tren en todo el archivo
+    if match.empty and fecha_row == "2026-01-01":
+        match = df_pax[df_pax['Tren_Clean'] == tren_row]
             
-        # Intento 2 (Fallback fuerte): Cruce por N° THDR Secuencial si el Tren_Clean no funcionó
-        if match_exacto.empty and 'Nro_THDR' in sub.columns:
-            sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
-            match_exacto = sub[sub['Nro_THDR_cmp'] == num_servicio]
-            
-        if not match_exacto.empty:
-            best_exact = match_exacto.loc[match_exacto['diff'].idxmin()]
-            return {c: _to_int(best_exact.get(c, 0)) for c in PAX_COLS}, _to_int(best_exact.get('CargaMax', 0)), mins_to_time_str(best_exact.get('t_ini_p')), str(best_exact.get('Tren', '')), best_exact.name
-
-    # Intento 3 (Fallback Suave): Horario Cercano
-    if pd.notna(t_i):
-        best_match = sub.loc[sub['diff'].idxmin()]
-        if best_match['diff'] <= 15: 
-            return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Tren', '')), best_match.name
-
+    if not match.empty:
+        match = match.copy()
+        match['diff'] = abs(match['t_ini_p'] - t_i)
+        best = match.loc[match['diff'].idxmin()]
+        return {c: int(best[c]) for c in PAX_COLS}, int(best['CargaMax']), mins_to_time_str(best['t_ini_p']), str(best.get('Nro_THDR_raw', '')), best.name
+    
     return EMPTY
 
 def cargar_prevenciones(data, fname):
     try:
-        df = pd.read_excel(BytesIO(data), header=None, engine="openpyxl" if fname.lower().endswith(".xlsx") else "xlrd")
-        prevs = []
-        for i in range(len(df)):
-            row = [str(x) for x in df.iloc[i].values]
-            if len(row) >= 3:
+        raw = pd.read_csv(BytesIO(data), sep=',', encoding='latin-1')
+        if raw.shape[1] < 2: raw = pd.read_csv(BytesIO(data), sep=';', encoding='latin-1')
+        res = []
+        for _, r in raw.iterrows():
+            try:
+                v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
+                vel = float(re.search(r'\d+', str(r.iloc[2])).group())
+                res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
+            except: pass
+        return res
+    except: 
+        try:
+            raw = pd.read_excel(BytesIO(data), engine="openpyxl")
+            res = []
+            for _, r in raw.iterrows():
                 try:
-                    v1, v2 = float(row[0].replace(',','.')), float(row[1].replace(',','.'))
-                    v_kmh = float(re.search(r'\d+', row[2]).group())
-                    prevs.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': v_kmh, 'via': int(row[3]) if len(row)>3 else 1})
+                    v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
+                    vel = float(re.search(r'\d+', str(r.iloc[2])).group())
+                    res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
                 except: pass
-        return prevs
-    except: return []
+            return res
+        except: return []
+
+def get_vacios_dia(df): return []
+def calcular_dwell(df1, df2): return df1, df2
 
 def parsear_planilla_maestra(data, fname):
     try:
-        dfs = pd.read_excel(BytesIO(data), header=None, engine="xlrd" if fname.lower().endswith(".xls") else "openpyxl", dtype=str, sheet_name=None) if not fname.lower().endswith('.csv') else {"CSV": pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)}
+        ext = fname.lower()
+        dfs = {}
+        if ext.endswith('.csv'):
+            try: raw = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)
+            except: raw = pd.read_csv(BytesIO(data), header=None, sep=';', encoding='latin-1', dtype=str)
+            dfs["CSV"] = raw
+        else:
+            eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
+            dfs = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str, sheet_name=None)
+            
         viajes = []
         for sheet_name, df in dfs.items():
-            header_idx = next((i for i in range(min(20, len(df))) if ('VIAJE' in ' '.join(df.iloc[i].fillna('').astype(str).str.upper()) or 'N°' in ' '.join(df.iloc[i].fillna('').astype(str).str.upper())) and ('PARTIDA' in ' '.join(df.iloc[i].fillna('').astype(str).str.upper()) or 'HORA' in ' '.join(df.iloc[i].fillna('').astype(str).str.upper()))), -1)
+            header_idx = -1
+            for i in range(min(20, len(df))):
+                row_str = ' '.join(df.iloc[i].fillna('').astype(str).str.upper())
+                if ('VIAJE' in row_str or 'N°' in row_str or 'N ' in row_str) and ('SERVICIO' in row_str or 'TREN' in row_str) and ('HR PARTIDA' in row_str or 'HORA' in row_str or 'PARTIDA' in row_str or 'SALIDA' in row_str):
+                    header_idx = i
+                    break
+                    
             if header_idx != -1:
                 headers = df.iloc[header_idx].fillna('').astype(str).str.upper()
-                v_cols = [c for c, v in enumerate(headers) if 'VIAJE' in v or v in ('N°', 'N')]
-                s_cols = [c for c, v in enumerate(headers) if 'SERV' in v or 'TREN' in v]
-                h_cols = [c for c, v in enumerate(headers) if 'HORA' in v or 'PARTIDA' in v or 'SALIDA' in v]
-                c_cols = [c for c, v in enumerate(headers) if 'CONF' in v or 'TIPO' in v or 'UNIDAD' in v]
-                pairs = [(vc, next((sc for sc in s_cols if sc > vc and sc - vc <= 2), None), next((hc for hc in h_cols if hc > next((sc for sc in s_cols if sc > vc and sc - vc <= 2), -99) and hc - next((sc for sc in s_cols if sc > vc and sc - vc <= 2), -99) <= 3), None), next((cc for cc in c_cols if cc > next((sc for sc in s_cols if sc > vc and sc - vc <= 2), -99) and cc - next((sc for sc in s_cols if sc > vc and sc - vc <= 2), -99) <= 6), None)) for vc in v_cols if next((sc for sc in s_cols if sc > vc and sc - vc <= 2), None) and next((hc for hc in h_cols if hc > next((sc for sc in s_cols if sc > vc and sc - vc <= 2), -99) and hc - next((sc for sc in s_cols if sc > vc and sc - vc <= 2), -99) <= 3), None)]
+                viaje_cols = [c for c, val in enumerate(headers) if 'VIAJE' in val or val == 'N°' or val == 'N']
+                srv_cols = [c for c, val in enumerate(headers) if 'SERV' in val or 'TREN' in val]
+                hora_cols = [c for c, val in enumerate(headers) if 'HR PARTIDA' in val or 'HORA' in val or 'PARTIDA' in val or 'SALIDA' in val]
+                config_cols = [c for c, val in enumerate(headers) if 'CONF' in val or 'TIPO' in val or 'FORMA' in val or 'UNIDAD' in val or 'OBS' in val]
+
+                pairs = []
+                for vc in viaje_cols:
+                    sc_cands = [sc for sc in srv_cols if sc > vc and sc - vc <= 2]
+                    if sc_cands:
+                        sc = sc_cands[0]
+                        hc_cands = [hc for hc in hora_cols if hc > sc and hc - sc <= 3]
+                        if hc_cands:
+                            hc = hc_cands[0]
+                            cc_cands = [cc for cc in config_cols if cc > sc and cc - sc <= 6]
+                            pairs.append((vc, sc, hc, cc_cands[0] if cc_cands else None))
+
                 for i in range(header_idx + 1, len(df)):
                     row = df.iloc[i]
-                    for cv, cs, ch, cc in pairs:
-                        if pd.isna(row.get(ch)) or pd.isna(row.get(cs)) or pd.isna(row.get(cv)): continue
-                        m_v, m_s = re.search(r'(\d+)', str(row[cv])), re.search(r'(\d{3,4})', str(row[cs]))
-                        if not m_v or not m_s or not re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', str(row[ch]).strip()): continue
-                        t_ini = parse_time_to_mins(str(row[ch]).strip())
-                        if t_ini is None: continue
-                        via = 1 if int(m_v.group(1)) % 2 == 0 else 2
-                        km_orig, km_dest = (KM_ACUM[0], KM_ACUM[20] if int(m_s.group(1)) >= 600 else KM_ACUM[18] if 400 <= int(m_s.group(1)) < 600 else KM_ACUM[14]) if via == 1 else (KM_ACUM[20] if int(m_s.group(1)) >= 600 else KM_ACUM[18] if 400 <= int(m_s.group(1)) < 600 else KM_ACUM[14], KM_ACUM[0])
-                        viajes.append({'_id': f"PLAN_{int(m_s.group(1))}_{int(t_ini)}", 't_ini': t_ini, 'Via': via, 'km_orig': km_orig, 'km_dest': km_dest, 'nodos': [(0.0, k) for k in (KM_ACUM[KM_ACUM.index(km_orig):KM_ACUM.index(km_dest)+1] if via==1 else KM_ACUM[KM_ACUM.index(km_dest):KM_ACUM.index(km_orig)+1][::-1])], 'tipo_tren': 'XT-100', 'doble': 'MÚLT' in str(row[cc]).upper() or 'MULT' in str(row[cc]).upper() or 'DOB' in str(row[cc]).upper() or '2' in str(row[cc]).upper() if cc is not None and pd.notna(row.get(cc)) else False, 'num_servicio': str(int(m_s.group(1))), 'svc_type': f"{EC[KM_ACUM.index(km_orig)]}-{EC[KM_ACUM.index(km_dest)]}", 'maniobra': None})
-        df_viajes = pd.DataFrame(viajes)
-        return df_viajes.drop_duplicates(subset=['_id']) if not df_viajes.empty else df_viajes, "ok"
-    except Exception as e: return pd.DataFrame(), str(e)
+                    for col_viaje, col_srv, col_hora, col_config in pairs:
+                        if pd.isna(row.get(col_hora)) or pd.isna(row.get(col_srv)) or pd.isna(row.get(col_viaje)): continue
+                        hora_str = str(row[col_hora]).strip()
+                        srv_str = str(row[col_srv]).strip()
+                        viaje_str = str(row[col_viaje]).strip()
+                        config_str = str(row[col_config]).strip().upper() if col_config is not None and pd.notna(row.get(col_config)) else ''
 
-def get_vacios_dia(df): return []
+                        m_viaje = re.search(r'(\d+)', viaje_str)
+                        m_srv = re.search(r'(\d{3,4})', srv_str)
+                        if not m_viaje or not m_srv or not re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', hora_str): continue
+                        
+                        viaje_num = int(m_viaje.group(1))
+                        servicio_num = int(m_srv.group(1))
+                        t_ini = parse_time_to_mins(hora_str)
+                        if t_ini is None: continue
+
+                        es_doble = False
+                        if 'MÚLT' in config_str or 'MULT' in config_str or 'DOB' in config_str or '2' in config_str:
+                            es_doble = True
+
+                        via = 1 if viaje_num % 2 == 0 else 2
+                        if via == 1:
+                            km_orig = KM_ACUM[0] 
+                            if servicio_num >= 600: km_dest = KM_ACUM[20] 
+                            elif 400 <= servicio_num < 600: km_dest = KM_ACUM[18] 
+                            else: km_dest = KM_ACUM[14] 
+                        else:
+                            km_dest = KM_ACUM[0] 
+                            if servicio_num >= 600: km_orig = KM_ACUM[20] 
+                            elif 400 <= servicio_num < 600: km_orig = KM_ACUM[18] 
+                            elif 200 <= servicio_num < 400: km_orig = KM_ACUM[14] 
+                            else: km_orig = KM_ACUM[14] 
+                            
+                        ruta = f"{EC[KM_ACUM.index(km_orig)]}-{EC[KM_ACUM.index(km_dest)]}"
+                        nodos_via = [(0.0, k) for k in (KM_ACUM[KM_ACUM.index(km_orig):KM_ACUM.index(km_dest)+1] if via==1 else KM_ACUM[KM_ACUM.index(km_dest):KM_ACUM.index(km_orig)+1][::-1])]
+                        
+                        viajes.append({
+                            '_id': f"PLAN_{servicio_num}_{int(t_ini)}", 't_ini': t_ini, 'Via': via,
+                            'km_orig': km_orig, 'km_dest': km_dest, 'nodos': nodos_via,
+                            'tipo_tren': 'XT-100', 'doble': es_doble, 'num_servicio': str(servicio_num), 'svc_type': ruta,
+                            'maniobra': None
+                        })
+            else:
+                for i in range(len(df)):
+                    row_vals = df.iloc[i].fillna('').astype(str).tolist()
+                    for c_idx, val in enumerate(row_vals):
+                        val = val.strip()
+                        if re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', val):
+                            t_ini = parse_time_to_mins(val)
+                            if t_ini is None: continue
+                            
+                            servicio_num, sc_idx = None, -1
+                            for offset in range(1, 5):
+                                if c_idx - offset >= 0:
+                                    check_val = row_vals[c_idx - offset].strip()
+                                    if check_val.isdigit() and 200 <= int(check_val) <= 1999:
+                                        servicio_num = int(check_val)
+                                        sc_idx = c_idx - offset
+                                        break
+                            
+                            viaje_num = None
+                            if sc_idx != -1:
+                                for offset in range(1, 3):
+                                    if sc_idx - offset >= 0:
+                                        check_val = row_vals[sc_idx - offset].strip()
+                                        if check_val.isdigit() and 1 <= int(check_val) <= 300:
+                                            viaje_num = int(check_val)
+                                            break
+                                        
+                            if servicio_num is None: continue
+
+                            es_doble = False
+                            for offset_unidad in range(1, 3):
+                                if c_idx + offset_unidad < len(row_vals):
+                                    val_unidad = row_vals[c_idx + offset_unidad].strip().upper()
+                                    if 'MÚLT' in val_unidad or 'MULT' in val_unidad or 'DOB' in val_unidad or '2' in val_unidad:
+                                        es_doble = True
+                                        break
+
+                            if viaje_num is None:
+                                sheet_upper = str(sheet_name).upper()
+                                if 'V1' in sheet_upper or 'VIA 1' in sheet_upper: via = 1
+                                elif 'V2' in sheet_upper or 'VIA 2' in sheet_upper: via = 2
+                                else: via = 1 if servicio_num % 2 == 0 else 2
+                            else: via = 1 if viaje_num % 2 == 0 else 2
+                            
+                            if via == 1:
+                                km_orig = KM_ACUM[0] 
+                                if servicio_num >= 600: km_dest = KM_ACUM[20] 
+                                elif 400 <= servicio_num < 600: km_dest = KM_ACUM[18] 
+                                elif 200 <= servicio_num < 400: km_dest = KM_ACUM[14] 
+                                else: km_dest = KM_ACUM[14] 
+                            else:
+                                km_dest = KM_ACUM[0] 
+                                if servicio_num >= 600: km_orig = KM_ACUM[20] 
+                                elif 400 <= servicio_num < 600: km_orig = KM_ACUM[18] 
+                                elif 200 <= servicio_num < 400: km_orig = KM_ACUM[14] 
+                                else: km_orig = KM_ACUM[14] 
+                                
+                            ruta = f"{EC[KM_ACUM.index(km_orig)]}-{EC[KM_ACUM.index(km_dest)]}"
+                            nodos_via = [(0.0, k) for k in (KM_ACUM[KM_ACUM.index(km_orig):KM_ACUM.index(km_dest)+1] if via==1 else KM_ACUM[KM_ACUM.index(km_dest):KM_ACUM.index(km_orig)+1][::-1])]
+                            viajes.append({'_id': f"PLAN_{servicio_num}_{int(t_ini)}", 't_ini': t_ini, 'Via': via, 'km_orig': km_orig, 'km_dest': km_dest, 'nodos': nodos_via, 'tipo_tren': 'XT-100', 'doble': es_doble, 'num_servicio': str(servicio_num), 'svc_type': ruta, 'maniobra': None})
+                            
+        df_viajes = pd.DataFrame(viajes)
+        if not df_viajes.empty: df_viajes = df_viajes.drop_duplicates(subset=['_id'])
+        return df_viajes, "ok"
+    except Exception as e: return pd.DataFrame(), str(e)
