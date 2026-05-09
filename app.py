@@ -402,7 +402,7 @@ def main():
             
             default_fechas = [fechas_disp[-1]] if fechas_disp else None
             
-            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Suma pura y dura de los datos crudos)", fechas_disp, default=default_fechas)
+            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Suma Cruda Exacta)", fechas_disp, default=default_fechas)
             
             if not fecha_sel_pax: 
                 st.info("Selecciona al menos una fecha.")
@@ -417,19 +417,20 @@ def main():
                     if c in df_dia_pax.columns:
                         df_dia_pax[c] = pd.to_numeric(df_dia_pax[c], errors='coerce').fillna(0)
                 
-                # 💡 AQUÍ ESTÁ EL ARREGLO: Se extirpó el bloque que promediaba (groupby.agg)
+                # 💡 AQUÍ ESTÁ EL ARREGLO: Se extirpó el bloque que promediaba (groupby.agg('mean'))
+                # Ahora los datos se mantienen crudos y se suman en el acumulado global.
                 df_dia_pax.rename(columns={'Fecha_s': 'Fecha', 'Nro_THDR_raw': 'N° THDR Pax', 'Tren_Clean': 'Servicio'}, inplace=True)
                 for c in pax_cols_list + ['CargaMax']: 
                     if c in df_dia_pax.columns: df_dia_pax[c] = df_dia_pax[c].astype(int)
 
-                df_dia_pax = df_dia_pax.sort_values(by=['Via', 't_ini_p'])
+                df_dia_pax = df_dia_pax.sort_values(by=['Fecha', 'Via', 't_ini_p'])
                 df_dia_pax['Hora Origen'] = df_dia_pax['t_ini_p'].apply(mins_to_time_str)
                 df_dia_pax.rename(columns={'CargaMax': 'Total a Bordo'}, inplace=True)
                 
                 t_v1 = df_dia_pax[df_dia_pax['Via']==1]['Total a Bordo'].sum() if 'Total a Bordo' in df_dia_pax.columns else 0
                 t_v2 = df_dia_pax[df_dia_pax['Via']==2]['Total a Bordo'].sum() if 'Total a Bordo' in df_dia_pax.columns else 0
                 
-                st.markdown(f"### 📊 Resumen de Pasajeros {'(ACUMULADO TOTAL)' if len(fecha_sel_pax) > 1 else ''}")
+                st.markdown(f"### 📊 Resumen Real de Pasajeros {'(ACUMULADO TOTAL)' if len(fecha_sel_pax) > 1 else ''}")
                 cc1, cc2, cc3 = st.columns(3)
                 cc1.metric("Total Pasajeros V1", f"{int(t_v1):,}")
                 cc2.metric("Total Pasajeros V2", f"{int(t_v2):,}")
