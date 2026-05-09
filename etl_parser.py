@@ -145,9 +145,6 @@ def _col_to_est_idx(col):
     if 'vina' in cu: return ESTACIONES.index('Viña del Mar')
     if 'aldea' in cu: return ESTACIONES.index('Sargento Aldea')
     if 'belloto' in cu: return ESTACIONES.index('El Belloto')
-    if 'concepcion' in cu: return ESTACIONES.index('La Concepcion')
-    if 'villaalem' in cu: return ESTACIONES.index('Villa Alemana')
-    if 'salto' in cu: return ESTACIONES.index('El Salto')
     for nk, idx in _EST_NORM:
         if nk in cu: return idx
     return None
@@ -262,9 +259,6 @@ def calcular_dwell(df1, df2):
             if not m.empty and 0 < m['t_ini'].min()-r2['t_fin'] < 60: df1.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(m['t_ini'].min()-r2['t_fin'],1)
     return df1, df2
 
-# =============================================================================
-# 🚀 LÓGICA DE PASAJEROS: POSICIONAL ESTRICTO BLINDADO
-# =============================================================================
 def cargar_pax(data, fname, via_param=1):
     try:
         ext = fname.lower()
@@ -285,7 +279,6 @@ def cargar_pax(data, fname, via_param=1):
 
         if full is None or full.empty or len(full) <= 3: return pd.DataFrame()
 
-        # Búsqueda dinámica de la fila del encabezado
         start_idx = 9 
         for i in range(min(25, len(full))):
             val_a = str(full.iloc[i, 0]).strip().upper()
@@ -298,20 +291,20 @@ def cargar_pax(data, fname, via_param=1):
         data_rows = full.iloc[start_idx:].copy().reset_index(drop=True)
         df = pd.DataFrame()
 
-        # 🚨 EXTRACCIÓN CIEGA E INFALIBLE (Las columnas jamás cambian de lugar)
+        # EXTRACCIÓN ESTRICTA (Basada en CSV de EFE)
         # 0: N° THDR, 1: N° Viaje, 2: Tren, 3: Fecha, 4: Hora Origen
         df['Nro_THDR_raw'] = data_rows.iloc[:, 0].astype(str).values if data_rows.shape[1] > 0 else ''
         df['Tren']         = data_rows.iloc[:, 2].astype(str).values if data_rows.shape[1] > 2 else ''
         df['Fecha_Excel']  = data_rows.iloc[:, 3].astype(str).values if data_rows.shape[1] > 3 else ''
         df['Hora Origen']  = data_rows.iloc[:, 4].astype(str).values if data_rows.shape[1] > 4 else ''
 
-        # Mapeo de Estaciones según el orden real del archivo de EFE
         val_col8 = str(full.iloc[start_idx - 1, 8]).strip().upper() if full.shape[1] > 8 else ''
         if 'PUE' in val_col8 or 'PUERTO' in val_col8:
             est_orden = PAX_COLS
         else:
             est_orden = list(reversed(PAX_COLS))
 
+        # Estaciones: Columna 8 a 28
         for i, st in enumerate(est_orden):
             col_idx = 8 + i
             if col_idx < data_rows.shape[1]:
@@ -319,14 +312,12 @@ def cargar_pax(data, fname, via_param=1):
             else:
                 df[st] = '0'
 
-        # 🚨 FIX CRÍTICO: EXTRAMOS ESTRICTAMENTE LA COLUMNA 29 ("Total a Bordo")
-        # El usuario pidió explícitamente ignorar la Columna 30 (Carga Máxima)
+        # TOTAL A BORDO es estrictamente la Columna 29. CargaMax sirve de variable en la UI.
         if 29 < data_rows.shape[1]:
             df['CargaMax'] = data_rows.iloc[:, 29].values
         else:
             df['CargaMax'] = '0'
 
-        # FECHA: Limpiar fecha del Excel (Columna 3) y usar nombre de archivo si falla
         fecha_global = extraer_fecha_segura(full.head(15), fname, is_thdr=False)
         df['Fecha_s'] = df['Fecha_Excel'].apply(parse_excel_date).replace('None', np.nan).replace('', np.nan).ffill().fillna(fecha_global)
 
@@ -334,7 +325,6 @@ def cargar_pax(data, fname, via_param=1):
         df['Tren_Clean'] = df['Tren'].apply(clean_id)
         df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
         
-        # VÍA: Por paridad del THDR
         name_u = fname.upper()
         via_titulo = 1 if 'V1' in name_u or 'VIA 1' in name_u or 'VIA1' in name_u else (2 if 'V2' in name_u or 'VIA 2' in name_u or 'VIA2' in name_u else via_param)
 
@@ -380,22 +370,29 @@ def match_pax(row, df_pax):
     sub = df_pax[df_pax['Via'] == via].copy()
     if sub.empty: return EMPTY
     
-    # 💡 FIX MORTAL (EL BUG DEL 01-01-2026):
-    # Se eliminó la prohibición de buscar la fecha "2026-01-01" en la data real.
-    if 'Fecha_s' in sub.columns and thdr_date:
+    if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
         sub_date = sub[sub['Fecha_s'] == thdr_date]
         if not sub_date.empty: 
             sub = sub_date
 
     sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
     
-    if num_servicio != '' and 'Tren_Clean' in sub.columns:
-        match_exacto = sub[sub['Tren_Clean'] == num_servicio]
+    # Intento 1: Cruce de Tren Exacto
+    if num_servicio != '':
+        match_exacto = pd.DataFrame()
+        if 'Tren_Clean' in sub.columns:
+            match_exacto = sub[sub['Tren_Clean'] == num_servicio]
+            
+        # Intento 2 (Fallback fuerte): Cruce por N° THDR Secuencial si el Tren_Clean no funcionó
+        if match_exacto.empty and 'Nro_THDR' in sub.columns:
+            sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
+            match_exacto = sub[sub['Nro_THDR_cmp'] == num_servicio]
+            
         if not match_exacto.empty:
             best_exact = match_exacto.loc[match_exacto['diff'].idxmin()]
-            # Devuelve 'CargaMax' interno, que ahora SÍ ES la Columna 29 ('Total a Bordo')
             return {c: _to_int(best_exact.get(c, 0)) for c in PAX_COLS}, _to_int(best_exact.get('CargaMax', 0)), mins_to_time_str(best_exact.get('t_ini_p')), str(best_exact.get('Tren', '')), best_exact.name
 
+    # Intento 3 (Fallback Suave): Horario Cercano
     if pd.notna(t_i):
         best_match = sub.loc[sub['diff'].idxmin()]
         if best_match['diff'] <= 15: 
