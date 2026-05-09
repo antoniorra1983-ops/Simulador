@@ -432,54 +432,6 @@ def match_pax(row, df_pax):
 
     return EMPTY
 
-def calcular_dwell(df1, df2):
-    if df1.empty or df2.empty: return df1, df2
-    if 'num_servicio' not in df1.columns or 'num_servicio' not in df2.columns: return df1, df2
-    for fecha in df1['Fecha_str'].unique():
-        d1 = df1[df1['Fecha_str']==fecha]
-        d2 = df2[df2['Fecha_str']==fecha]
-        if d2.empty: continue
-        for idx1, r1 in d1.iterrows():
-            s = r1.get('num_servicio')
-            if pd.isna(s) or s == '': continue
-            m = d2[(d2['num_servicio']==s) & (d2['t_ini']>r1['t_fin'])]
-            if not m.empty:
-                dw = m['t_ini'].min()-r1['t_fin']
-                if 0<dw<60: df2.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(dw,1)
-        for idx2, r2 in d2.iterrows():
-            s = r2.get('num_servicio')
-            if pd.isna(s) or s == '': continue
-            m = d1[(d1['num_servicio']==s) & (d1['t_ini']>r2['t_fin'])]
-            if not m.empty:
-                dw = m['t_ini'].min()-r2['t_fin']
-                if 0<dw<60: df1.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(dw,1)
-    return df1, df2
-
-def cargar_prevenciones(data, fname):
-    try:
-        raw = pd.read_csv(BytesIO(data), sep=',', encoding='latin-1')
-        if raw.shape[1] < 2: raw = pd.read_csv(BytesIO(data), sep=';', encoding='latin-1')
-        res = []
-        for _, r in raw.iterrows():
-            try:
-                v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
-                vel = float(re.search(r'\d+', str(r.iloc[2])).group())
-                res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
-            except: pass
-        return res
-    except: 
-        try:
-            raw = pd.read_excel(BytesIO(data), engine="openpyxl")
-            res = []
-            for _, r in raw.iterrows():
-                try:
-                    v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
-                    vel = float(re.search(r'\d+', str(r.iloc[2])).group())
-                    res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
-                except: pass
-            return res
-        except: return []
-
 def parsear_planilla_maestra(data, fname):
     try:
         ext = fname.lower()
