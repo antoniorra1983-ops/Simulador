@@ -26,7 +26,7 @@ if not hasattr(etl_parser, 'get_pax_at_km_nativo') and hasattr(etl_parser, 'get_
 from etl_parser import (
     procesar_thdr, calcular_dwell, cargar_pax, match_pax, 
     calc_tren_km_real_general, clean_id, mins_to_time_str, clasificar_dia,
-    cargar_prevenciones, get_vacios_dia
+    cargar_prevenciones, get_vacios_dia, parsear_planilla_maestra
 )
 from motor_fisico import (
     calcular_termodinamica_flota_v111, calcular_receptividad_por_headway, 
@@ -400,10 +400,9 @@ def main():
             df_px['Fecha_s'] = df_px['Fecha_s'].astype(str).str.strip()
             fechas_disp = sorted(list(set([x for x in df_px['Fecha_s'].dropna().unique() if x and x.lower() not in ["none", "nan", "fecha no detectada"]])))
             
-            # 💡 FIX V136: Evitar que el simulador promedie 90 días por defecto
             default_fechas = [fechas_disp[-1]] if fechas_disp else None
             
-            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Si eliges varias, se promediarán para suavizar el ruido estadístico)", fechas_disp, default=default_fechas)
+            fecha_sel_pax = st.multiselect("📅 Selecciona Fechas a evaluar (Suma pura y dura de los datos crudos)", fechas_disp, default=default_fechas)
             
             if not fecha_sel_pax: 
                 st.info("Selecciona al menos una fecha.")
@@ -418,21 +417,10 @@ def main():
                     if c in df_dia_pax.columns:
                         df_dia_pax[c] = pd.to_numeric(df_dia_pax[c], errors='coerce').fillna(0)
                 
-                if len(fecha_sel_pax) > 1:
-                    agg_dict = {c: 'mean' for c in pax_cols_list if c in df_dia_pax.columns}
-                    if 'CargaMax' in df_dia_pax.columns: agg_dict['CargaMax'] = 'mean'
-                    df_dia_pax = df_dia_pax.groupby(['Via', 't_ini_p']).agg(agg_dict).reset_index()
-                    
-                    for c in pax_cols_list + ['CargaMax']: 
-                        if c in df_dia_pax.columns: df_dia_pax[c] = df_dia_pax[c].round().astype(int)
-                        
-                    df_dia_pax['Fecha'] = f"Promedio ({len(fecha_sel_pax)} días)"
-                    df_dia_pax['N° THDR Pax'] = 'Promedio Varios Días'
-                    df_dia_pax['Servicio'] = '—'
-                else:
-                    df_dia_pax.rename(columns={'Fecha_s': 'Fecha', 'Nro_THDR': 'N° THDR Pax', 'Tren': 'Servicio'}, inplace=True)
-                    for c in pax_cols_list + ['CargaMax']: 
-                        if c in df_dia_pax.columns: df_dia_pax[c] = df_dia_pax[c].astype(int)
+                # 💡 AQUÍ ESTÁ EL ARREGLO: Se extirpó el bloque que promediaba (groupby.agg)
+                df_dia_pax.rename(columns={'Fecha_s': 'Fecha', 'Nro_THDR_raw': 'N° THDR Pax', 'Tren_Clean': 'Servicio'}, inplace=True)
+                for c in pax_cols_list + ['CargaMax']: 
+                    if c in df_dia_pax.columns: df_dia_pax[c] = df_dia_pax[c].astype(int)
 
                 df_dia_pax = df_dia_pax.sort_values(by=['Via', 't_ini_p'])
                 df_dia_pax['Hora Origen'] = df_dia_pax['t_ini_p'].apply(mins_to_time_str)
@@ -441,7 +429,7 @@ def main():
                 t_v1 = df_dia_pax[df_dia_pax['Via']==1]['Total a Bordo'].sum() if 'Total a Bordo' in df_dia_pax.columns else 0
                 t_v2 = df_dia_pax[df_dia_pax['Via']==2]['Total a Bordo'].sum() if 'Total a Bordo' in df_dia_pax.columns else 0
                 
-                st.markdown(f"### 📊 Resumen de Pasajeros {'(PROMEDIO SUAVIZADO)' if len(fecha_sel_pax) > 1 else ''}")
+                st.markdown(f"### 📊 Resumen de Pasajeros {'(ACUMULADO TOTAL)' if len(fecha_sel_pax) > 1 else ''}")
                 cc1, cc2, cc3 = st.columns(3)
                 cc1.metric("Total Pasajeros V1", f"{int(t_v1):,}")
                 cc2.metric("Total Pasajeros V2", f"{int(t_v2):,}")
@@ -552,7 +540,7 @@ def main():
                             except TypeError:
                                 trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb = simular_tramo_termodinamico(
                                     sb_flota, False, km_o, km_d, via_sb, pct_trac, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
-                                    None, estacion_anio_plan, 480.0
+                                    None, estacion_anio_plan, 480.0, es_vacio=False
                                 )
                         
                         try:
