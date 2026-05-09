@@ -359,6 +359,7 @@ def cargar_pax(data, fname, via_param=1):
         return df.dropna(subset=['t_ini_p', 'Fecha_s'])
     except Exception as e: return pd.DataFrame()
 
+# 💡 AQUI ESTÁ EL ARREGLO: Se inyectó el "Salvavidas por Horario" (Intento 3)
 def match_pax(row, df_pax):
     try: pax_cols_safe = PAX_COLS
     except NameError: pax_cols_safe = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
@@ -374,6 +375,7 @@ def match_pax(row, df_pax):
     sub = df_pax[df_pax['Via'] == via].copy()
     if sub.empty: return EMPTY
 
+    # 1. Intento por Tren Exacto y Día Exacto
     if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
         sub_date = sub[sub['Fecha_s'] == thdr_date]
         if not sub_date.empty:
@@ -384,6 +386,7 @@ def match_pax(row, df_pax):
                 best = match_exacto.loc[match_exacto['diff'].idxmin()]
                 return {c: int(best.get(c, 0)) for c in pax_cols_safe}, int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR_raw', '')), best.name
 
+    # 2. Intento por Tren (Ignorando la fecha si viene mala)
     if num_servicio != '':
         match_srv = sub[sub['Tren_Clean'] == num_servicio]
         if not match_srv.empty:
@@ -391,6 +394,21 @@ def match_pax(row, df_pax):
             match_srv['diff'] = match_srv['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
             best_match = match_srv.loc[match_srv['diff'].idxmin()]
             return {c: int(best_match.get(c, 0)) for c in pax_cols_safe}, int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', '')), best_match.name
+
+    # 3. 🚨 EL SALVAVIDAS: Búsqueda por Horario Cercano (Si el N° de Tren del THDR no existe o no calza en el Excel de Pasajeros)
+    if pd.notna(t_i):
+        if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
+            sub_date = sub[sub['Fecha_s'] == thdr_date]
+            if not sub_date.empty:
+                sub = sub_date
+
+        sub = sub.copy()
+        sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
+        if not sub.empty:
+            idx_min = sub['diff'].idxmin()
+            best_time = sub.loc[idx_min]
+            if best_time['diff'] <= 20: # 20 minutos de tolerancia (Holgura EFE)
+                return {c: int(best_time.get(c, 0)) for c in pax_cols_safe}, int(best_time.get('CargaMax', 0)), mins_to_time_str(best_time.get('t_ini_p')), str(best_time.get('Nro_THDR_raw', '')), best_time.name
 
     return EMPTY
 
@@ -542,58 +560,3 @@ def parsear_planilla_maestra(data, fname):
         if not df_viajes.empty: df_viajes = df_viajes.drop_duplicates(subset=['_id'])
         return df_viajes, "ok"
     except Exception as e: return pd.DataFrame(), str(e)
-
-# =============================================================================
-# FUNCIONES RESTAURADAS PARA EVITAR IMPORTERROR EN APP.PY
-# =============================================================================
-
-def calcular_dwell(df1, df2):
-    if df1.empty or df2.empty: return df1, df2
-    if 'num_servicio' not in df1.columns or 'num_servicio' not in df2.columns: return df1, df2
-    for fecha in df1['Fecha_str'].unique():
-        d1 = df1[df1['Fecha_str']==fecha]
-        d2 = df2[df2['Fecha_str']==fecha]
-        if d2.empty: continue
-        for idx1, r1 in d1.iterrows():
-            s = r1.get('num_servicio')
-            if pd.isna(s) or s == '': continue
-            m = d2[(d2['num_servicio']==s) & (d2['t_ini']>r1['t_fin'])]
-            if not m.empty:
-                dw = m['t_ini'].min()-r1['t_fin']
-                if 0<dw<60: df2.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(dw,1)
-        for idx2, r2 in d2.iterrows():
-            s = r2.get('num_servicio')
-            if pd.isna(s) or s == '': continue
-            m = d1[(d1['num_servicio']==s) & (d1['t_ini']>r2['t_fin'])]
-            if not m.empty:
-                dw = m['t_ini'].min()-r2['t_fin']
-                if 0<dw<60: df1.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(dw,1)
-    return df1, df2
-
-def cargar_prevenciones(data, fname):
-    try:
-        raw = pd.read_csv(BytesIO(data), sep=',', encoding='latin-1')
-        if raw.shape[1] < 2: raw = pd.read_csv(BytesIO(data), sep=';', encoding='latin-1')
-        res = []
-        for _, r in raw.iterrows():
-            try:
-                v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
-                vel = float(re.search(r'\d+', str(r.iloc[2])).group())
-                res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
-            except: pass
-        return res
-    except: 
-        try:
-            raw = pd.read_excel(BytesIO(data), engine="openpyxl")
-            res = []
-            for _, r in raw.iterrows():
-                try:
-                    v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
-                    vel = float(re.search(r'\d+', str(r.iloc[2])).group())
-                    res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
-                except: pass
-            return res
-        except: return []
-
-def get_vacios_dia(df_dia):
-    return []
