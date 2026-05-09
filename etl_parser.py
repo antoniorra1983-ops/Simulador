@@ -21,6 +21,7 @@ def parse_time_to_mins(val):
     if pd.isna(val): return None
     sv = str(val).strip().lower()
     if sv in ('', 'nan', 'none'): return None
+    if ' ' in sv: sv = sv.split(' ')[-1]
     m = re.search(r'(\d{1,2}):(\d{2})(?::(\d{2}))?', sv)
     if m: return int(m.group(1)) * 60.0 + int(m.group(2)) + (int(m.group(3)) / 60.0 if m.group(3) else 0.0)
     try:
@@ -31,13 +32,36 @@ def parse_time_to_mins(val):
 def parse_excel_date(val):
     if pd.isna(val): return None
     if isinstance(val, (datetime, pd.Timestamp)): return val.strftime('%Y-%m-%d')
-    v_str = str(val).strip()
-    m_dt = re.search(r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b', v_str)
-    if m_dt:
-        d, m, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
-        if y < 100: y += 2000
-        return f"{y:04d}-{m:02d}-{d:02d}"
+    v_str = re.sub(r'\.0+$', '', str(val).strip()).split(' ')[0]
+    if not v_str or v_str.lower() in ['nan', 'none', 'fecha', 'date', 'nat']: return None
+    
+    if v_str.isdigit():
+        v_int = int(v_str)
+        if 40000 <= v_int <= 60000:
+            try: return (date(1899, 12, 30) + timedelta(days=v_int)).strftime('%Y-%m-%d')
+            except: pass
+        elif len(v_str) in [5, 6]:
+            s_pad = v_str.zfill(6)
+            try:
+                d, m, y = int(s_pad[0:2]), int(s_pad[2:4]), int(s_pad[4:6])
+                if 1 <= d <= 31 and 1 <= m <= 12: return f"{2000+y if y<100 else y:04d}-{m:02d}-{d:02d}"
+            except: pass
+            
+    for pat in [r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b', r'\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b']:
+        m_dt = re.search(pat, v_str)
+        if m_dt:
+            if len(m_dt.group(1)) == 4: 
+                y, m_val, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+            else: 
+                d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+            if m_val > 12 and d <= 12: d, m_val = m_val, d
+            if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
     return None
+
+def clean_primary_key(x):
+    if pd.isna(x): return ''
+    s = re.sub(r'[^A-Z0-9]', '', str(x).strip().upper().replace('.0', ''))
+    return s.lstrip('0') if s not in ['NAN', ''] else ''
 
 def clean_id(x):
     try:
@@ -68,6 +92,13 @@ def extraer_fecha_segura(df_raw, fname):
 
 def _col_to_est_idx(col):
     cu = re.sub(r'[^a-z0-9]','', str(col).lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
+    if 'americas' in cu: return ESTACIONES.index('Las Americas')
+    if 'vina' in cu: return ESTACIONES.index('Viña del Mar')
+    if 'aldea' in cu: return ESTACIONES.index('Sargento Aldea')
+    if 'belloto' in cu: return ESTACIONES.index('El Belloto')
+    if 'concepcion' in cu: return ESTACIONES.index('La Concepcion')
+    if 'villaalem' in cu: return ESTACIONES.index('Villa Alemana')
+    if 'salto' in cu: return ESTACIONES.index('El Salto')
     for i, est in enumerate(ESTACIONES):
         ne = re.sub(r'[^a-z0-9]','', est.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
         if ne in cu: return i
@@ -75,13 +106,33 @@ def _col_to_est_idx(col):
 
 def calc_tren_km_real_general(row):
     k_s, k_e = min(row['km_orig'], row['km_dest']), max(row['km_orig'], row['km_dest'])
+    man = row.get('maniobra')
+    if man in ['CORTE_BTO','ACOPLE_BTO','CORTE_PU_SA_BTO']:
+        km_man = KM_ACUM[14]
+        if k_s <= km_man <= k_e: return abs(km_man-k_s)*2.0 + abs(k_e-km_man)*1.0
+    elif man in ['CORTE_SA','ACOPLE_SA']:
+        km_man = KM_ACUM[18]
+        if k_s <= km_man <= k_e: return abs(km_man-k_s)*2.0 + abs(k_e-km_man)*1.0
     return abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0)
+
+def make_unique(df):
+    if df.empty: return df
+    cols = pd.Series(df.columns)
+    for dup in cols[cols.duplicated()].unique(): 
+        cols[cols==dup] = [f"{dup}_{i}" if i else dup for i in range(sum(cols==dup))]
+    df.columns = cols
+    return df
 
 def procesar_thdr(data, fname, via_param=1):
     try:
-        eng = "openpyxl" if fname.lower().endswith('.xlsx') else "xlrd"
-        raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
-        
+        ext = fname.lower()
+        if ext.endswith('.csv'):
+            try: raw = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)
+            except: raw = pd.read_csv(BytesIO(data), header=None, sep=';', encoding='latin-1', dtype=str)
+        else:
+            eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
+            raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
+
         if raw is None or raw.empty: return pd.DataFrame(), f"Archivo vacío: {fname}"
         fecha_str = extraer_fecha_segura(raw, fname)
         
@@ -90,7 +141,7 @@ def procesar_thdr(data, fname, via_param=1):
             line = ' '.join([str(x).upper() for x in raw.iloc[i].values if pd.notna(x)])
             if 'SALIDA' in line or 'HORA' in line or 'LLEGADA' in line:
                 header_idx = i; break
-        
+                
         df = raw.iloc[header_idx+1:].copy().reset_index(drop=True)
         df.columns = [f"Col_{i}" for i in range(df.shape[1])]
         df = df.dropna(how='all')
@@ -130,70 +181,110 @@ def procesar_thdr(data, fname, via_param=1):
         return df.dropna(subset=['t_ini']), "ok"
     except Exception as e: return pd.DataFrame(), str(e)
 
+# 💡 AQUÍ ESTÁ LA RESTAURACIÓN CRÍTICA DEL JUEVES: EL ESCÁNER DINÁMICO
 def cargar_pax(data, fname, via_param=1):
-    """MAPEADO RÍGIDO NATIVO EXCEL: FILA 11. COL 3 FECHA, COL 4 HORA, COL 29 TOTAL A BORDO"""
     try:
-        eng = "xlrd" if fname.lower().endswith(".xls") else "openpyxl"
-        df_raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
-        
-        if df_raw.shape[1] < 10: return pd.DataFrame()
-            
-        data_rows = df_raw.iloc[10:].copy().reset_index(drop=True)
-        
-        df = pd.DataFrame()
-        df['Nro_THDR_raw'] = data_rows.iloc[:, 0].values
-        df['Tren_Clean']   = data_rows.iloc[:, 2].apply(clean_id).values
-        df['Fecha_s']      = data_rows.iloc[:, 3].apply(parse_excel_date).values
-        df['Hora Origen']  = data_rows.iloc[:, 4].values
-        
-        # Mapeo de estaciones según la cabecera real (Fila 10 / Índice 9)
-        header_row = df_raw.iloc[9].fillna('').astype(str).str.upper().values
-        is_pue_start = 'PUE' in header_row[8] or 'PUERTO' in header_row[8]
-        orden_est = PAX_COLS if is_pue_start else list(reversed(PAX_COLS))
-        
-        for i, st in enumerate(orden_est):
-            if 8 + i < data_rows.shape[1]:
-                df[st] = data_rows.iloc[:, 8 + i].apply(clean_pax_number).values
-            else:
-                df[st] = 0
-            
-        # DATO SAGRADO: TOTAL A BORDO (Columna 29 / AD)
-        if data_rows.shape[1] > 29:
-            df['CargaMax'] = data_rows.iloc[:, 29].apply(clean_pax_number).values
+        ext = fname.lower()
+        if ext.endswith('.csv'):
+            try: full = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)
+            except: full = pd.read_csv(BytesIO(data), header=None, sep=';', encoding='latin-1', dtype=str)
         else:
-            df['CargaMax'] = 0
+            eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
+            full = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
+
+        if full is None or full.empty or len(full) <= 10: return pd.DataFrame()
+
+        header_idx = 9
+        EXACT_MAP = {'PUE':'PUE','PUERTO':'PUE','PU':'PUE','BEL':'BEL','BELLAVISTA':'BEL','BE':'BEL','FRA':'FRA','FRANCIA':'FRA','FR':'FRA','BAR':'BAR','BARON':'BAR','BA':'BAR','POR':'POR','PORTALES':'POR','PO':'POR','REC':'REC','RECREO':'REC','RE':'REC','MIR':'MIR','MIRAMAR':'MIR','MI':'MIR','VIN':'VIN','VINA DEL MAR':'VIN','VIÑA DEL MAR':'VIN','VM':'VIN','HOS':'HOS','HOSPITAL':'HOS','HO':'HOS','CHO':'CHO','CHORRILLOS':'CHO','CH':'CHO','SLT':'SLT','SALTO':'SLT','EL SALTO':'SLT','ES':'SLT','ELS':'SLT','VAL':'VAL','VALENCIA':'VAL','QUI':'QUI','QUILPUE':'QUI','QUILPUÉ':'QUI','QU':'QUI','SOL':'SOL','EL SOL':'SOL','SO':'SOL','ESO':'SOL','BTO':'BTO','EL BELLOTO':'BTO','BELLOTO':'BTO','EB':'BTO','ELB':'BTO','AME':'AME','LAS AMERICAS':'AME','AMERICAS':'AME','LAS':'AME','LAM':'AME','AM':'AME','CON':'CON','LA CONCEPCION':'CON','CONCEPCION':'CON','LAC':'CON','LCO':'CON','CO':'CON','VAM':'VAM','VILLA ALEMANA':'VAM','ALEMANA':'VAM','VIL':'VAM','VALE':'VAM','VL':'VAM','SGA':'SGA','SARGENTO ALDEA':'SGA','ALDEA':'SGA','SAR':'SGA','SA':'SGA','PEN':'PEN','PENABLANCA':'PEN','PEÑABLANCA':'PEN','PENA BLANCA':'PEN','PENA':'PEN','PE':'PEN','LIM':'LIM','LIMACHE':'LIM','LI':'LIM'}
+        col_mapping = {}
+        keys_sorted = sorted(EXACT_MAP.keys(), key=len, reverse=True)
         
+        for c_idx in range(full.shape[1]):
+            vals = [str(full.iloc[r, c_idx]).strip().upper() for r in range(max(0, header_idx-4), header_idx+1)]
+            combo = " ".join(vals)
+            combo_norm = unicodedata.normalize('NFD', combo).encode('ascii', 'ignore').decode().replace('.', '').replace(':', '')
+
+            mapped = False
+            for k in keys_sorted:
+                if k == vals[-1] or k == vals[-2] or f" {k} " in f" {combo_norm} " or f"_{k}_" in f"_{combo_norm}_":
+                    col_mapping[col_mapping.get(c_idx, '')] = EXACT_MAP[k] 
+                    col_mapping[c_idx] = EXACT_MAP[k]
+                    mapped = True
+                    break
+            
+            if mapped: continue
+            if 'HORA' in combo_norm and 'ORIG' in combo_norm: col_mapping[c_idx] = 'Hora Origen'
+            elif 'THDR' in combo_norm and 'TREN' not in combo_norm: col_mapping[c_idx] = 'Nro_THDR_raw'
+            elif 'TREN' in combo_norm or 'SERVICIO' in combo_norm: col_mapping[c_idx] = 'Tren'
+            elif 'CargaMax' not in col_mapping.values():
+                if any(w in combo_norm for w in ['TOTAL', 'BORDO', 'CARGA', 'PASAJERO']) and not any(exc in combo_norm for exc in ['THDR', 'TREN', 'HORA', 'VIA']):
+                    col_mapping[c_idx] = 'CargaMax'
+
+        data_rows = full.iloc[header_idx + 1:].copy()
+        df = pd.DataFrame()
+        for c_idx, col_name in col_mapping.items():
+            if isinstance(c_idx, int) and c_idx < full.shape[1]: 
+                df[col_name] = data_rows.iloc[:, c_idx].values
+                
+        fecha_global = extraer_fecha_segura(full, fname)
+        if full.shape[1] > 3:
+            df['Fecha_Excel_Raw'] = data_rows.iloc[:, 3].values
+            df['Fecha_s'] = df['Fecha_Excel_Raw'].apply(parse_excel_date).fillna(fecha_global).replace('', fecha_global).ffill()
+        else:
+            df['Fecha_s'] = fecha_global
+                
+        for col in ['Hora Origen', 'Nro_THDR_raw', 'Tren']:
+            if col not in df.columns: df[col] = ''
+        if 'CargaMax' not in df.columns: df['CargaMax'] = '0'
+        for c in PAX_COLS:
+            if c not in df.columns: df[c] = '0'
+
+        df['Nro_THDR'] = df['Nro_THDR_raw'].apply(clean_primary_key)
+        df['Tren_Clean'] = df['Tren'].apply(clean_id)
         df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
         df['Via'] = via_param
-        
-        # Si la fecha oficial está vacía en algunas filas, usar la general del archivo
-        fecha_fallback = extraer_fecha_segura(df_raw, fname)
-        df['Fecha_s'] = df['Fecha_s'].fillna(fecha_fallback).replace('None', fecha_fallback)
-        
-        return df.dropna(subset=['t_ini_p', 'Fecha_s'])
+        df = df.dropna(subset=['t_ini_p'])
+        if df.empty: return pd.DataFrame()
+        for c in PAX_COLS + ['CargaMax']: df[c] = df[c].apply(lambda x: int(re.sub(r'[^\d]', '', str(x).replace('.', '').replace(',', '')) or 0))
+        return df
     except Exception as e: return pd.DataFrame()
 
+# 💡 RESTAURACIÓN DEL CRUCE DE DATOS EXACTO QUE FUNCIONABA EL JUEVES
 def match_pax(row, df_pax):
     EMPTY = ({c: 0 for c in PAX_COLS}, 0, '--:--:--', 'No Detectado', -1)
     if df_pax.empty: return EMPTY
-    
-    tren_row = clean_id(row.get('num_servicio', ''))
-    fecha_row = row.get('Fecha_str', '')
+    def _to_int(v):
+        try: return int(float(v)) if pd.notna(v) else 0
+        except: return 0
+        
     t_i = row.get('t_ini')
+    via = row.get('via_op', row.get('Via', 1))
+    nro_viaje = clean_primary_key(row.get('nro_viaje', ''))
+    thdr_date = row.get('Fecha_str')
     
-    # Prioridad 1: Match Exacto por ID Tren y Fecha
-    match = df_pax[(df_pax['Tren_Clean'] == tren_row) & (df_pax['Fecha_s'] == fecha_row)]
+    sub = df_pax[df_pax['Via'] == via].copy()
+    if sub.empty: return EMPTY
     
-    # Prioridad 2: Si el THDR tiene fecha rota (2026-01-01), buscar el tren en todo el archivo
-    if match.empty and fecha_row == "2026-01-01":
-        match = df_pax[df_pax['Tren_Clean'] == tren_row]
-            
-    if not match.empty:
-        match = match.copy()
-        match['diff'] = abs(match['t_ini_p'] - t_i)
-        best = match.loc[match['diff'].idxmin()]
-        return {c: int(best[c]) for c in PAX_COLS}, int(best['CargaMax']), mins_to_time_str(best['t_ini_p']), str(best.get('Nro_THDR_raw', '')), best.name
-    
+    if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
+        sub_date = sub[sub['Fecha_s'] == thdr_date]
+        if not sub_date.empty: 
+            sub = sub_date
+        else: 
+            return EMPTY 
+
+    sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
+    if nro_viaje != '' and 'Nro_THDR' in sub.columns:
+        sub['Nro_THDR_cmp'] = sub['Nro_THDR'].apply(clean_primary_key)
+        match_exacto = sub[(sub['Nro_THDR_cmp'] == nro_viaje) & (sub['Nro_THDR_cmp'] != '')]
+        if not match_exacto.empty:
+            best = match_exacto.iloc[0]
+            return {c: _to_int(best.get(c, 0)) for c in PAX_COLS}, _to_int(best.get('CargaMax', 0)), mins_to_time_str(best.get('t_ini_p')), str(best.get('Nro_THDR', '')), best.name
+
+    if pd.notna(t_i):
+        best_match = sub.loc[sub['diff'].idxmin()]
+        if best_match['diff'] <= 15: 
+            return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR', '')), best_match.name
+
     return EMPTY
 
 def cargar_prevenciones(data, fname):
@@ -221,8 +312,28 @@ def cargar_prevenciones(data, fname):
             return res
         except: return []
 
-def get_vacios_dia(df): return []
-def calcular_dwell(df1, df2): return df1, df2
+def calcular_dwell(df1, df2):
+    if df1.empty or df2.empty: return df1, df2
+    if 'num_servicio' not in df1.columns or 'num_servicio' not in df2.columns: return df1, df2
+    for fecha in df1['Fecha_str'].unique():
+        d1 = df1[df1['Fecha_str']==fecha]
+        d2 = df2[df2['Fecha_str']==fecha]
+        if d2.empty: continue
+        for idx1, r1 in d1.iterrows():
+            s = r1.get('num_servicio')
+            if pd.isna(s) or s == '': continue
+            m = d2[(d2['num_servicio']==s) & (d2['t_ini']>r1['t_fin'])]
+            if not m.empty:
+                dw = m['t_ini'].min()-r1['t_fin']
+                if 0<dw<60: df2.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(dw,1)
+        for idx2, r2 in d2.iterrows():
+            s = r2.get('num_servicio')
+            if pd.isna(s) or s == '': continue
+            m = d1[(d1['num_servicio']==s) & (d1['t_ini']>r2['t_fin'])]
+            if not m.empty:
+                dw = m['t_ini'].min()-r2['t_fin']
+                if 0<dw<60: df1.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(dw,1)
+    return df1, df2
 
 def parsear_planilla_maestra(data, fname):
     try:
@@ -372,3 +483,5 @@ def parsear_planilla_maestra(data, fname):
         if not df_viajes.empty: df_viajes = df_viajes.drop_duplicates(subset=['_id'])
         return df_viajes, "ok"
     except Exception as e: return pd.DataFrame(), str(e)
+
+def get_vacios_dia(df): return []
