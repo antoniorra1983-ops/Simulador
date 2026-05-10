@@ -154,6 +154,9 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     
     n_uni = 2 if doble else 1
     
+    # 💡 Vector Espacial: Longitud Física de la Flota para liberar restricciones
+    long_tren_km = (0.070 if tipo_tren == 'SFE' else 0.046) * n_uni
+    
     pax_kg_total = pax_abordo * _get_val('PAX_KG', 75.0)
     masa_estatica_kg = (f.get('tara_t', 86.1) * 1000 * n_uni) + pax_kg_total
     masa_dinamica_kg = masa_estatica_kg + (f.get('m_iner_t', 7.2) * 1000 * n_uni)
@@ -229,16 +232,39 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             
             if prevenciones:
                 for p in prevenciones:
-                    if p['via'] == via_op and (p['km_min'] - 1.5) <= km_actual <= p['km_max']:
-                        if p['km_min'] <= km_actual <= p['km_max']:
-                            v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+                    if p['via'] == via_op:
+                        if via_op == 1:
+                            km_inicio_restriccion = p['km_min']
+                            km_fin_restriccion = p['km_max'] + long_tren_km
+                            km_aviso = p['km_min'] - 1.5
+                            
+                            if km_aviso <= km_actual <= km_fin_restriccion:
+                                if km_inicio_restriccion <= km_actual <= km_fin_restriccion:
+                                    v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+                                else:
+                                    dist_a_prev = (km_inicio_restriccion - km_actual) * 1000.0
+                                    v_p_ms = p['v_kmh'] / 3.6
+                                    if v_ms > v_p_ms:
+                                        d_freno_prev = (v_ms**2 - v_p_ms**2) / (2 * a_freno_op)
+                                        if dist_a_prev <= d_freno_prev + 50: 
+                                            v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
                         else:
-                            dist_a_prev = abs(p['km_min'] - km_actual) * 1000.0
-                            v_p_ms = p['v_kmh'] / 3.6
-                            if v_ms > v_p_ms:
-                                d_freno_prev = (v_ms**2 - v_p_ms**2) / (2 * a_freno_op)
-                                if dist_a_prev <= d_freno_prev + 50: v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+                            km_inicio_restriccion = p['km_max']
+                            km_fin_restriccion = p['km_min'] - long_tren_km
+                            km_aviso = p['km_max'] + 1.5
+                            
+                            if km_fin_restriccion <= km_actual <= km_aviso:
+                                if km_fin_restriccion <= km_actual <= km_inicio_restriccion:
+                                    v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+                                else:
+                                    dist_a_prev = (km_actual - km_inicio_restriccion) * 1000.0
+                                    v_p_ms = p['v_kmh'] / 3.6
+                                    if v_ms > v_p_ms:
+                                        d_freno_prev = (v_ms**2 - v_p_ms**2) / (2 * a_freno_op)
+                                        if dist_a_prev <= d_freno_prev + 50: 
+                                            v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
 
+            # Restricciones Toperas
             if via_op == 1 and km_actual >= 42.93: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual < 43.03 else 10.0)
             if via_op == 2 and km_actual <= 0.20: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual > 0.10 else 10.0)
             
@@ -251,7 +277,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 pend_permil = _PEND_ARRAY_V1[idx_km] if via_op == 1 else _PEND_ARRAY_V2[idx_km]
                 f_pend = masa_estatica_kg * 9.81 * (pend_permil / 1000.0)
                 
-            f_curva = _CURVA_ARRAY[idx_km] * (masa_dinamica_kg / 1000.0) * 9.81
+            # 💡 FIX 1: La curva solo fricciona sobre la Masa Estática (Sin inercia rotacional)
+            f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
             f_res_total = f_davis + f_pend + f_curva
             
             # Squeeze Control Activo
@@ -338,8 +365,15 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             f_real_total = (masa_dinamica_kg * a_net) + f_res_total
             
             if f_real_total > 0 and estado_marcha != "BRAKE_STATION":
-                f_motor_real = min(f_real_total, f_disp_trac_real)
-                carga_pct = f_motor_real / max(1.0, f_trac_max_n_nominal) 
+                # 💡 FIX 3: Límite absoluto de potencia (kW) según velocidad actual para prevenir overshoot
+                f_limite_potencia_inst = p_max_op_w_real / max(0.1, v_ms)
+                f_absoluta_disp_inst = min(f_disp_trac_real, f_limite_potencia_inst)
+                
+                f_motor_real = min(f_real_total, f_absoluta_disp_inst)
+                
+                # 💡 FIX 2: Eficiencia relativa a la capacidad real A ESTA VELOCIDAD (Evita falso 82% a 100km/h)
+                carga_pct = f_motor_real / max(1.0, f_absoluta_disp_inst) 
+                
                 eta_base = f.get('eta_motor', 0.92)
                 eta_din = eta_base * (1.0 - 0.2 * (1.0 - max(0.1, carga_pct))**3)
                 
@@ -476,7 +510,10 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                         f_piloto_disp = min(f_piloto, p_piloto/max(0.1, v_ms)) if v_ms > 0 else f_piloto
                         
                         f_motor = max(f_piloto_disp, f_davis + (masa_kg * 0.1))
-                        f_motor = min(f_motor, f.get('f_trac_max_kn', 110.0)*1000*n_uni)
+                        
+                        # 💡 FIX 3 (en macro): Límite absoluto en kW para evitar facturación de sobrepotencia en el Pre-Calculador
+                        f_limite_total_abs = min(f.get('f_trac_max_kn', 110.0)*1000*n_uni, (f.get('p_max_kw', 720.0)*1000*n_uni)/max(0.1, v_ms))
+                        f_motor = min(f_motor, f_limite_total_abs)
                         
                         p_dem_kw += ((f_motor * v_ms) / 1000.0 / eta_m)
                     elif state == "CRUISE" and f_davis > 0: 
