@@ -134,8 +134,9 @@ def procesar_datos_completos(_b1, _b2, _bx1, _bx2, sig_pesada):
             df_all['pax_row_idx'] = -1
             
         df_all['maniobra'] = None
-        df_all['tren_km'] = df_all.apply(calc_tren_km_real_general, axis=1)
-        
+        # tren_km ya viene correcto desde procesar_thdr; solo calcular si falta
+        if 'tren_km' not in df_all.columns:
+            df_all['tren_km'] = df_all.apply(calc_tren_km_real_general, axis=1)
     return df_all, df_px, err_t, err_p
 
 @st.cache_data(show_spinner="Cargando Prevenciones (TSR)...")
@@ -253,7 +254,9 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         viajes_completos.append(viaje_final)
         
     df_sint_final = pd.DataFrame(viajes_completos)
-    df_sint_final['tren_km'] = df_sint_final.apply(calc_tren_km_real_general, axis=1)
+    # tren_km ya viene correcto desde procesar_thdr via viaje_final = r.to_dict(); no recalcular
+    if 'tren_km' not in df_sint_final.columns:
+        df_sint_final['tren_km'] = df_sint_final.apply(calc_tren_km_real_general, axis=1)
     df_sint_final.index = df_sint_final['_id']
     
     if use_regen:
