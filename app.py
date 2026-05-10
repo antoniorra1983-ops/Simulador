@@ -365,7 +365,6 @@ def main():
         
         gap_vias = st.slider("Separación Visual Vías (px)", 120, 350, 200, 10)
 
-    # Ingesta en memoria
     def _all_blobs_internal(f_uploader, gh_key): 
         return tuple(leer(f_uploader) + st.session_state.get(gh_key, []))
 
@@ -380,18 +379,9 @@ def main():
         for nm, data in b:
             file_signature += f"{nm}_{len(data)}|"
 
-    # 💡 LECTURA INDEPENDIENTE: Procesa solo lo que el usuario suba sin trabas lógicas
     df_all, df_px, err_t, err_p = procesar_datos_completos(b1, b2, bx1, bx2, file_signature)
     
     prevenciones_list = procesar_prevenciones_independiente(b_prev, file_signature)
-
-    with st.sidebar:
-        if err_t:
-            with st.expander(f"⚠️ {len(err_t)} Errores de Lectura THDR"):
-                for e in err_t: st.caption(e)
-        if err_p:
-            with st.expander(f"⚠️ {len(err_p)} Errores de Lectura Pasajeros"):
-                for e in err_p: st.caption(e)
 
     fechas = sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)]))) if not df_all.empty else []
 
@@ -404,7 +394,11 @@ def main():
     
     with tab_mapa:
         if df_all.empty: 
-            st.warning("⚠️ Sin datos operativos. Por favor, cargue archivos THDR en la barra lateral.")
+            st.warning("⚠️ Sin datos operativos. Por favor, cargue archivos THDR válidos en la barra lateral.")
+            # 💡 FIX: Mostrar errores de extracción directamente en el centro para no estar a ciegas
+            if err_t:
+                st.error("🚨 Se detectaron errores fatales al intentar leer los archivos THDR:")
+                for e in err_t: st.code(e)
         else:
             fecha_sel = st.selectbox("📅 Fecha Operativa (THDR)", fechas, key="fs_hist")
             df_dia = df_all[df_all['Fecha_str']==fecha_sel].copy()
@@ -421,6 +415,9 @@ def main():
         st.subheader("📋 Auditoría de Carga de Pasajeros")
         if df_px.empty: 
             st.warning("⚠️ Sin datos de pasajeros cargados para auditar.")
+            if err_p:
+                st.error("🚨 Se detectaron errores al leer el Excel de Pasajeros:")
+                for e in err_p: st.code(e)
         else:
             df_px['Fecha_s'] = df_px['Fecha_s'].astype(str).str.strip()
             fechas_disp = sorted(list(set([x for x in df_px['Fecha_s'].dropna().unique() if x and x.lower() not in ["none", "nan", "fecha no detectada", "nat"]])))
@@ -442,7 +439,6 @@ def main():
                     if c in df_dia_pax.columns:
                         df_dia_pax[c] = pd.to_numeric(df_dia_pax[c], errors='coerce').fillna(0)
                 
-                # 💡 FIX APLICADO: SUMA PURA Y CRUDA (Cero groupby 'mean')
                 df_dia_pax.rename(columns={'Fecha_s': 'Fecha', 'Nro_THDR_raw': 'N° THDR Pax', 'Tren_Clean': 'Servicio'}, inplace=True)
                 for c in pax_cols_list + ['CargaMax']: 
                     if c in df_dia_pax.columns: df_dia_pax[c] = df_dia_pax[c].astype(int)
