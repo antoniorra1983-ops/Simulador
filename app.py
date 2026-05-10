@@ -147,7 +147,7 @@ def procesar_prevenciones_independiente(_bp, sig_ligera):
         except: pass
     return prev_list
 
-@st.cache_data(show_spinner="Simulando física termodinámica histórica...")
+@st.cache_data(show_spinner="Simulando termodinámica histórica...")
 def simular_dia_historico_cached(_df_dia, pct_trac, use_rm, use_pend, use_regen, tipo_regen, estacion_anio, _prevenciones, data_sig_fisica):
     dict_regen = {}
     if use_regen:
@@ -158,7 +158,7 @@ def simular_dia_historico_cached(_df_dia, pct_trac, use_rm, use_pend, use_regen,
         
     return calcular_termodinamica_flota_v111(_df_dia, pct_trac, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=_prevenciones)
 
-@st.cache_data(show_spinner="Integrando física, malla y demanda en el Planificador...")
+@st.cache_data(show_spinner="Integrando física y demanda en Planificador...")
 def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig):
     viajes_completos = []
     perfiles_por_servicio = {}
@@ -257,12 +257,13 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
     df_sint_final['tren_km'] = df_sint_final.apply(calc_tren_km_real_general, axis=1)
     df_sint_final.index = df_sint_final['_id']
     
-    dict_regen_sint = {}
     if use_regen:
-        try:
-            if "Probabilístico" in tipo_regen: dict_regen_sint = calcular_receptividad_por_headway(df_sint_final)
-            else: dict_regen_sint = precalcular_red_electrica_v111(df_sint_final, pct_trac, use_rm, estacion_anio_plan)
-        except Exception: pass
+        if "Probabilístico" in tipo_regen:
+            dict_regen_sint = calcular_receptividad_por_headway(df_sint_final)
+        else:
+            dict_regen_sint = precalcular_red_electrica_v111(df_sint_final, pct_trac, use_rm, estacion_anio_plan)
+    else:
+        dict_regen_sint = {}
         
     try:
         df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=_prevenciones)
@@ -272,7 +273,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
     return df_sint_final, df_sint_e
 
 # =============================================================================
-# 3. APLICACIÓN PRINCIPAL (MAIN ORCHESTRATOR - Única Definición)
+# 3. APLICACIÓN PRINCIPAL (MAIN ORCHESTRATOR)
 # =============================================================================
 def main():
     def reset_plan_state():
@@ -329,6 +330,7 @@ def main():
                         st.session_state[key] = []; st.rerun()
 
         st.subheader("Carga de Planillas Locales")
+        # 💡 FIX APLICADO: Arquitectura limpia. El Orquestador ahora carga cualquier combinación.
         f_v1 = st.file_uploader("THDR Vía 1 (Puerto→Limache)", accept_multiple_files=True, key="t1")
         f_v2 = st.file_uploader("THDR Vía 2 (Limache→Puerto)", accept_multiple_files=True, key="t2")
         f_px1 = st.file_uploader("Pasajeros Vía 1", accept_multiple_files=True, key="px1")
@@ -380,6 +382,7 @@ def main():
         for nm, data in b:
             file_signature += f"{nm}_{len(data)}|"
 
+    # 💡 LECTURA INDEPENDIENTE: Procesa solo lo que el usuario suba sin trabas lógicas
     df_all, df_px, err_t, err_p = procesar_datos_completos(b1, b2, bx1, bx2, file_signature)
     
     prevenciones_list = procesar_prevenciones_independiente(b_prev, file_signature)
@@ -421,7 +424,7 @@ def main():
             st.warning("⚠️ Sin datos de pasajeros cargados para auditar.")
         else:
             df_px['Fecha_s'] = df_px['Fecha_s'].astype(str).str.strip()
-            fechas_disp = sorted(list(set([x for x in df_px['Fecha_s'].dropna().unique() if x and x.lower() not in ["none", "nan", "fecha no detectada"]])))
+            fechas_disp = sorted(list(set([x for x in df_px['Fecha_s'].dropna().unique() if x and x.lower() not in ["none", "nan", "fecha no detectada", "nat"]])))
             
             default_fechas = [fechas_disp[-1]] if fechas_disp else None
             
@@ -451,7 +454,11 @@ def main():
                     df_dia_pax = df_dia_pax.sort_values(by=['Via', 't_ini_p'])
                     
                 df_dia_pax['Hora Origen'] = df_dia_pax['t_ini_p'].apply(mins_to_time_str)
-                df_dia_pax.rename(columns={'CargaMax': 'Total a Bordo'}, inplace=True)
+                
+                if 'CargaMax' in df_dia_pax.columns:
+                    df_dia_pax.rename(columns={'CargaMax': 'Total a Bordo'}, inplace=True)
+                else:
+                    df_dia_pax['Total a Bordo'] = 0
                 
                 t_v1 = df_dia_pax[df_dia_pax['Via']==1]['Total a Bordo'].sum() if 'Total a Bordo' in df_dia_pax.columns else 0
                 t_v2 = df_dia_pax[df_dia_pax['Via']==2]['Total a Bordo'].sum() if 'Total a Bordo' in df_dia_pax.columns else 0
@@ -491,7 +498,7 @@ def main():
             nombre_perfil = f"Estático ({pax_promedio_viaje} pax)"
             
             if not df_px.empty:
-                fechas_disp_todas = sorted([str(x) for x in df_px['Fecha_s'].dropna().unique() if str(x).strip() and str(x).lower() not in ["none", "nan", "fecha no detectada"]])
+                fechas_disp_todas = sorted([str(x) for x in df_px['Fecha_s'].dropna().unique() if str(x).strip() and str(x).lower() not in ["none", "nan", "fecha no detectada", "nat"]])
                 fechas_disp_tipo = [f for f in fechas_disp_todas if clasificar_dia(f) == tipo_dia_plan]
                 
                 if fechas_disp_tipo:
