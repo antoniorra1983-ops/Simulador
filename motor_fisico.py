@@ -72,7 +72,7 @@ if len(_e_km) == len(_e_m) and len(_e_km) > 1:
             _PEND_ARRAY_V1[s_m:e_m] = pend
             _PEND_ARRAY_V2[s_m:e_m] = -pend
 
-# Arreglo de Curvaturas de Alta Velocidad (Von Röckl)
+# 💡 INYECCIÓN FRONTERA 2: Arreglo de Curvaturas de Alta Velocidad (Von Röckl)
 _CURVA_ARRAY = np.zeros(45000, dtype=float)
 _curvas = _get_val('CURVAS_KM', [])
 for ki, kf, r_m in _curvas:
@@ -90,6 +90,10 @@ def vel_at_km(km_km, via, use_rm):
     return _VEL_ARRAY_RM[idx] if use_rm else _VEL_ARRAY_NORM[idx]
 
 def km_at_t(t_ini, t_fin, t, via, use_rm=False, km_orig=0.0, km_dest=0.0, nodos=None, t_arr=None):
+    """
+    💡 FIX APLICADO (Curva S): Reemplaza la velocidad constante lineal por una interpolación 
+    trigonométrica no-lineal. Esto reactiva las tasas de aceleración y frenado para la red eléctrica.
+    """
     if nodos and len(nodos) >= 2:
         if t <= nodos[0][0]: return nodos[0][1]
         if t >= nodos[-1][0]: return nodos[-1][1]
@@ -100,6 +104,7 @@ def km_at_t(t_ini, t_fin, t, via, use_rm=False, km_orig=0.0, km_dest=0.0, nodos=
             if t1 <= t <= t2:
                 if t2 == t1: return k1
                 frac = (t - t1) / (t2 - t1)
+                # Curva-S trigonométrica (Suave en los extremos, rápido al medio)
                 frac_smooth = (1.0 - np.cos(frac * np.pi)) / 2.0
                 return k1 + (k2 - k1) * frac_smooth
                 
@@ -173,14 +178,15 @@ def _calc_tren_km_real_motor(row):
     man = row.get('maniobra')
     is_doble = row.get('doble', False)
     
-    if not man or pd.isna(man) or str(man).lower() == 'none':
+    if not man or pd.isna(man) or str(man).strip().lower() in ['none', '']:
         return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
     
     # 1. Identificar el PK del hito geográfico
     km_man = None
-    if man in ['CORTE_BTO', 'ACOPLE_BTO', 'CORTE_PU_SA_BTO']:
+    man_upper = str(man).upper()
+    if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper:
         km_man = 25.3
-    elif man in ['CORTE_SA', 'ACOPLE_SA']:
+    elif 'CORTE_SA' in man_upper or 'ACOPLE_SA' in man_upper:
         km_man = 29.1
         
     if km_man is None:
@@ -192,10 +198,10 @@ def _calc_tren_km_real_motor(row):
         dist_antes_maniobra = abs(km_man - k_o)
         dist_despues_maniobra = abs(k_d - km_man)
         
-        if man.startswith('CORTE'):
+        if 'CORTE' in man_upper:
             # En un CORTE, el tren comienza como DOBLE y termina como SIMPLE
             return (dist_antes_maniobra * 2.0) + (dist_despues_maniobra * 1.0)
-        elif man.startswith('ACOPLE'):
+        elif 'ACOPLE' in man_upper:
             # En un ACOPLE, el tren comienza como SIMPLE y termina como DOBLE
             return (dist_antes_maniobra * 1.0) + (dist_despues_maniobra * 2.0)
             
@@ -210,11 +216,12 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     f = flota_db.get(tipo_tren, {})
     if not f: return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     
-    # 💡 PRE-CÁLCULO DEL HITO DE MANIOBRA
+    # 💡 PRE-CÁLCULO DEL HITO DE MANIOBRA CON UPPERCASE
     km_man = None
-    if maniobra in ['CORTE_BTO', 'ACOPLE_BTO', 'CORTE_PU_SA_BTO']:
+    man_upper = str(maniobra).upper() if maniobra and not pd.isna(maniobra) else ''
+    if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper:
         km_man = 25.3
-    elif maniobra in ['CORTE_SA', 'ACOPLE_SA']:
+    elif 'CORTE_SA' in man_upper or 'ACOPLE_SA' in man_upper:
         km_man = 29.1
     dist_to_maniobra = abs(km_man - km_ini) * 1000.0 if km_man is not None else -1
     
@@ -237,8 +244,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     if not es_sintetico and duracion_real_h > 0:
         dist_total_km = abs(k_e - k_s)
         v_promedio_kmh = dist_total_km / duracion_real_h
-        v_limit_thdr = v_promedio_kmh * 1.35 
-        pct_trac = 100.0 
+        v_limit_thdr = v_promedio_kmh * 1.35 # Techo orgánico para forzar Coasting
+        pct_trac = 100.0 # El Piloto Automático toma el control
     
     trc, aux, reg, t_horas = 0.0, 0.0, 0.0, 0.0
     
@@ -280,10 +287,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             dist_recorrida_total = abs(km_actual - km_ini) * 1000.0
             es_doble = doble
             
-            if km_man is not None and min(km_ini, km_fin) <= km_man <= max(km_ini, km_fin) and maniobra and not pd.isna(maniobra):
-                if maniobra.startswith('CORTE'):
+            if km_man is not None and min(km_ini, km_fin) <= km_man <= max(km_ini, km_fin) and man_upper:
+                if 'CORTE' in man_upper:
                     es_doble = True if dist_recorrida_total <= dist_to_maniobra else False
-                elif maniobra.startswith('ACOPLE'):
+                elif 'ACOPLE' in man_upper:
                     es_doble = False if dist_recorrida_total <= dist_to_maniobra else True
                     
             n_uni_inst = 2 if es_doble else 1
@@ -309,6 +316,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             v_cons_kmh = max(5.0, _VEL_ARRAY_RM[idx_km] if use_rm else _VEL_ARRAY_NORM[idx_km])
             if v_consigna_override is not None: v_cons_kmh = min(v_cons_kmh, v_consigna_override)
             
+            # Aplica límite histórico si existe
             v_cons_kmh = min(v_cons_kmh, v_limit_thdr)
             
             if prevenciones:
@@ -343,6 +351,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                                         if dist_a_prev <= d_freno_prev + 50: 
                                             v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
 
+            # Restricciones Toperas
             if via_op == 1 and km_actual >= 42.93: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual < 43.03 else 10.0)
             if via_op == 2 and km_actual <= 0.20: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual > 0.10 else 10.0)
             
@@ -355,9 +364,11 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 pend_permil = _PEND_ARRAY_V1[idx_km] if via_op == 1 else _PEND_ARRAY_V2[idx_km]
                 f_pend = masa_estatica_kg * 9.81 * (pend_permil / 1000.0)
                 
+            # La curva solo fricciona sobre la Masa Estática (Sin inercia rotacional)
             f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
             f_res_total = f_davis + f_pend + f_curva
             
+            # Squeeze Control Activo
             dist_ser = min([abs(km_actual - s[0]) for s in ser_data]) if ser_data else 5.0
             r_linea = dist_ser * 0.045
             i_req = (f_trac_max_n_nominal * max(0.1, v_ms)) / 3000.0
@@ -468,7 +479,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     n_est_mid = max(0, len(paradas_km) - 2)
     dwell_h = (n_est_mid * _get_val('DWELL_DEF', 25.0)) / 3600.0
     
-    # 💡 Usa el estado final y masa del tren (n_uni_final) para la energía en la última estación
     hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
     aux_kw_dwell = calcular_aux_dinamico(aux_kw_nominal_final, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni_final, estacion_anio, "DWELL", f_compresor_especifico)
     
@@ -479,7 +489,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     return trc, aux, reg, 0.0, neto_ideal, t_horas
 
 # =============================================================================
-# 5. PRE-CALCULADORES DE RED (MACRO)
+# 4. PRE-CALCULADORES DE RED (MACRO)
 # =============================================================================
 def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
     if df_dia.empty: return {}
@@ -549,12 +559,11 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
             
             eta_m = f.get('eta_motor', 0.92)
             
-            # 💡 FIX: Maniobras dinámicas para el pre-calculador eléctrico
             km_man = None
-            maniobra_tr = tr.get('maniobra')
-            if maniobra_tr in ['CORTE_BTO', 'ACOPLE_BTO', 'CORTE_PU_SA_BTO']:
+            maniobra_tr = str(tr.get('maniobra', '')).upper()
+            if 'CORTE_BTO' in maniobra_tr or 'ACOPLE_BTO' in maniobra_tr or 'CORTE_PU_SA_BTO' in maniobra_tr:
                 km_man = 25.3
-            elif maniobra_tr in ['CORTE_SA', 'ACOPLE_SA']:
+            elif 'CORTE_SA' in maniobra_tr or 'ACOPLE_SA' in maniobra_tr:
                 km_man = 29.1
             
             dist_to_maniobra = abs(km_man - tr['km_orig']) if km_man is not None else -1
@@ -568,10 +577,10 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                 dist_recorrida_total = abs(pos - tr['km_orig'])
                 es_doble = tr['doble']
                 
-                if km_man is not None and min(tr['km_orig'], tr['km_dest']) <= km_man <= max(tr['km_orig'], tr['km_dest']) and maniobra_tr and not pd.isna(maniobra_tr):
-                    if maniobra_tr.startswith('CORTE'):
+                if km_man is not None and min(tr['km_orig'], tr['km_dest']) <= km_man <= max(tr['km_orig'], tr['km_dest']) and maniobra_tr:
+                    if 'CORTE' in maniobra_tr:
                         es_doble = True if dist_recorrida_total <= dist_to_maniobra else False
-                    elif maniobra_tr.startswith('ACOPLE'):
+                    elif 'ACOPLE' in maniobra_tr:
                         es_doble = False if dist_recorrida_total <= dist_to_maniobra else True
                         
                 n_uni = 2 if es_doble else 1
