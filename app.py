@@ -73,7 +73,7 @@ def leer_github(url):
     except Exception as e: 
         return None, str(e)
 
-@st.cache_data(show_spinner="Procesando THDR...", version="2")
+@st.cache_data(show_spinner="Procesando THDR...", ttl=1)
 def build_thdr_v71(blobs_v1, blobs_v2):
     all_parts, err = [], []
     for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
@@ -97,7 +97,7 @@ def build_thdr_v71(blobs_v1, blobs_v2):
         return df1, df2, err
     return pd.DataFrame(), pd.DataFrame(), err
 
-@st.cache_data(show_spinner="Cargando Pasajeros...", version="2")
+@st.cache_data(show_spinner="Cargando Pasajeros...")
 def build_pax_v71(blobs_v1, blobs_v2):
     parts, err = [], []
     for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
@@ -107,7 +107,7 @@ def build_pax_v71(blobs_v1, blobs_v2):
     if len(parts) > 0: return pd.concat(parts, ignore_index=True), err
     return pd.DataFrame(), err
 
-@st.cache_data(show_spinner="Consolidando viajes y cruzando datos...", version="2")
+@st.cache_data(show_spinner="Consolidando viajes y cruzando datos...", ttl=1)
 def procesar_datos_completos(_b1, _b2, _bx1, _bx2, sig_pesada):
     df1, df2, err_t = build_thdr_v71(_b1, _b2)
     df_px, err_p = build_pax_v71(_bx1, _bx2)
@@ -139,7 +139,7 @@ def procesar_datos_completos(_b1, _b2, _bx1, _bx2, sig_pesada):
             df_all['tren_km'] = df_all.apply(calc_tren_km_real_general, axis=1)
     return df_all, df_px, err_t, err_p
 
-@st.cache_data(show_spinner="Cargando Prevenciones (TSR)...", version="2")
+@st.cache_data(show_spinner="Cargando Prevenciones (TSR)...")
 def procesar_prevenciones_independiente(_bp, sig_ligera):
     prev_list = []
     for nm, data in _bp: 
@@ -147,7 +147,7 @@ def procesar_prevenciones_independiente(_bp, sig_ligera):
         except: pass
     return prev_list
 
-@st.cache_data(show_spinner="Simulando termodinámica histórica...", version="2")
+@st.cache_data(show_spinner="Simulando termodinámica histórica...")
 def simular_dia_historico_cached(_df_dia, pct_trac_hist, use_rm, use_pend, use_regen, tipo_regen, estacion_anio, _prevenciones, data_sig_fisica):
     dict_regen = {}
     if use_regen:
@@ -158,7 +158,7 @@ def simular_dia_historico_cached(_df_dia, pct_trac_hist, use_rm, use_pend, use_r
         
     return calcular_termodinamica_flota_v111(_df_dia, pct_trac_hist, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=_prevenciones)
 
-@st.cache_data(show_spinner="Integrando física y demanda en Planificador...", version="2")
+@st.cache_data(show_spinner="Integrando física y demanda en Planificador...")
 def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig):
     viajes_completos = []
     perfiles_por_servicio = {}
