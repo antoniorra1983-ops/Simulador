@@ -44,6 +44,10 @@ def parse_time_to_mins(val):
     except: return None
 
 def parse_excel_date(val):
+    """
+    💡 FIX APLICADO: Ultra-robusto. Entiende formatos pegados de EFE, 
+    incluyendo el formato corto DMMAA (5 dígitos).
+    """
     if pd.isna(val): return None
     if isinstance(val, (datetime, pd.Timestamp)): return val.strftime('%Y-%m-%d')
     v_str = str(val).strip()
@@ -59,6 +63,10 @@ def parse_excel_date(val):
             if 1 <= d <= 31 and 1 <= m <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m:02d}-{d:02d}"
         elif len(v_str_num) == 6:
             d, m, y = int(v_str_num[0:2]), int(v_str_num[2:4]), int(v_str_num[4:6])
+            if m > 12 >= d: d, m = m, d
+            if 1 <= d <= 31 and 1 <= m <= 12 and 20 <= y <= 99: return f"20{y:02d}-{m:02d}-{d:02d}"
+        elif len(v_str_num) == 5:
+            d, m, y = int(v_str_num[0:1]), int(v_str_num[1:3]), int(v_str_num[3:5])
             if m > 12 >= d: d, m = m, d
             if 1 <= d <= 31 and 1 <= m <= 12 and 20 <= y <= 99: return f"20{y:02d}-{m:02d}-{d:02d}"
 
@@ -77,23 +85,44 @@ def parse_excel_date(val):
 
 def extraer_fecha_segura(df_raw, fname, is_thdr=False):
     """
-    💡 FIX APLICADO: Prohibición estricta de escanear el interior de los archivos THDR.
+    💡 FIX APLICADO: Prioridad absoluta a la celda A1 para THDR (formato DMMAA).
     """
-    # 1. Buscar en el nombre del archivo patrones de 8 o 6 dígitos pegados
-    bloques_numeros = re.findall(r'\d+', str(fname))
-    for b in bloques_numeros:
-        if len(b) == 8:
-            y, mon, d = (int(b[0:4]), int(b[4:6]), int(b[6:8])) if int(b[0:4]) >= 2000 else (int(b[4:8]), int(b[2:4]), int(b[0:2]))
-            if mon > 12 >= d: d, mon = mon, d
-            if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100:
-                return f"{y:04d}-{mon:02d}-{d:02d}"
-        elif len(b) == 6:
-            d, mon, y = int(b[0:2]), int(b[2:4]), int(b[4:6])
-            if mon > 12 >= d: d, mon = mon, d
-            if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99:
-                return f"20{y:02d}-{mon:02d}-{d:02d}"
-                
-    # 2. Buscar en el nombre del archivo formatos con guiones o puntos
+    # 1. REGLA DE ORO THDR: Buscar en la celda A1 (iloc[0,0]) formato DMMAA o DDMMAA
+    if is_thdr and df_raw is not None and not df_raw.empty:
+        try:
+            a1_val = str(df_raw.iloc[0, 0]).strip()
+            a1_num = re.sub(r'\.0+$', '', a1_val)
+            if a1_num.isdigit():
+                if len(a1_num) == 5: # DMMAA
+                    d, m, y = int(a1_num[0:1]), int(a1_num[1:3]), int(a1_num[3:5])
+                    if 1 <= d <= 31 and 1 <= m <= 12: return f"20{y:02d}-{m:02d}-{d:02d}"
+                elif len(a1_num) == 6: # DDMMAA
+                    d, m, y = int(a1_num[0:2]), int(a1_num[2:4]), int(a1_num[4:6])
+                    if 1 <= d <= 31 and 1 <= m <= 12: return f"20{y:02d}-{m:02d}-{d:02d}"
+                elif 40000 <= int(a1_num) <= 60000:
+                    return (date(1899, 12, 30) + timedelta(days=int(a1_num))).strftime('%Y-%m-%d')
+            
+            dt = parse_excel_date(a1_val)
+            if dt: return dt
+        except: pass
+
+    # 2. Buscar en el nombre del archivo patrones de 8 o 6 dígitos pegados
+    s_fname = re.sub(r'\D', '', str(fname))
+    for pat in [r'(\d{4})(\d{2})(\d{2})', r'(\d{2})(\d{2})(\d{4})', r'(\d{2})(\d{2})(\d{2})']:
+        matches = re.finditer(pat, s_fname)
+        for m in matches:
+            if len(m.group(0)) == 8:
+                y, mon, d = (int(m.group(1)), int(m.group(2)), int(m.group(3))) if int(m.group(1)) >= 2000 else (int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                if mon > 12 >= d: d, mon = mon, d
+                if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100:
+                    return f"{y:04d}-{mon:02d}-{d:02d}"
+            elif len(m.group(0)) == 6:
+                d, mon, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if mon > 12 >= d: d, mon = mon, d
+                if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99:
+                    return f"20{y:02d}-{mon:02d}-{d:02d}"
+                    
+    # 3. Buscar en el nombre del archivo formatos con guiones o puntos
     for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
         m = re.search(pat, str(fname))
         if m:
@@ -104,11 +133,11 @@ def extraer_fecha_segura(df_raw, fname, is_thdr=False):
             if mon > 12 >= d: d, mon = mon, d
             if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
 
-    # 💡 BARRERA FÍSICA: Si es THDR, no puede mirar adentro del archivo.
+    # 4. BARRERA FÍSICA: Si es THDR y falló A1 y el nombre, corta aquí.
     if is_thdr:
         return "2026-01-01"
 
-    # 3. ESCÁNER CIEGO: Busca dentro del Excel (SOLO autorizado para archivos de Pasajeros)
+    # 5. ESCÁNER CIEGO: Busca dentro del Excel (SOLO autorizado para archivos de Pasajeros)
     if df_raw is not None:
         for i in range(min(50, len(df_raw))):
             for val in df_raw.iloc[i].values:
@@ -223,7 +252,7 @@ def procesar_thdr(data, fname, via_param=1):
         if raw is None or raw.empty or raw.shape[0] < 5: 
             return pd.DataFrame(), f"El archivo está vacío o no tiene suficientes filas."
         
-        # 💡 Aquí inyectamos el True, prohibiendo buscar adentro del THDR
+        # 💡 LE PASAMOS EL THDR COMPLETO AL EXTRACTOR PARA QUE LEA LA CELDA A1
         fecha_str = extraer_fecha_segura(raw, fname, is_thdr=True)
 
         header_idx = -1
@@ -249,9 +278,11 @@ def procesar_thdr(data, fname, via_param=1):
             else: cols.append(s_val)
             
         df = raw.iloc[header_idx + 1:].copy().reset_index(drop=True)
+        # Asignar nombres limpios y evitar duplicados
         df.columns = [f"Col_{i}_{c}" for i, c in enumerate(cols)] + [f"Col_{i}_EXTRA" for i in range(len(cols), df.shape[1])]
         df = df.dropna(how='all').reset_index(drop=True)
 
+        # 💡 EXTRACCIÓN DINÁMICA DE TIEMPOS
         est_cols = {}
         for i, col in enumerate(df.columns):
             col_str = str(col).upper()
@@ -263,6 +294,7 @@ def procesar_thdr(data, fname, via_param=1):
                     if idx_est is not None:
                         est_cols[f"T_{i}"] = idx_est
 
+        # 💡 FALLBACK DE SEGURIDAD EXTREMA: Si la cabecera está rota
         if len(est_cols) < 5:
             est_cols = {}
             col_start_time = 5
@@ -420,7 +452,7 @@ def cargar_pax(data, fname, via_param=1):
             if isinstance(c_idx, int) and c_idx < full.shape[1]: 
                 df[col_name] = data_rows.iloc[:, c_idx].values
                 
-        # 💡 A los pasajeros SÍ se les permite escanear su interior (is_thdr=False por defecto)
+        # A los pasajeros SÍ se les permite escanear su interior entero buscando fechas
         fecha_global = extraer_fecha_segura(full, fname, is_thdr=False)
         
         if 'Fecha_s_raw' in df.columns:
@@ -479,7 +511,7 @@ def match_pax(row, df_pax):
             best_match = m.loc[m['diff'].idxmin()]
             return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS_SAFE}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
 
-    # 2. MATCH UNIVERSAL POR TIEMPO (Tolerancia 60 mins)
+    # 2. MATCH UNIVERSAL POR TIEMPO (Ignora el nombre del tren si es distinto en ambos archivos, tolerancia de 60 mins)
     if pd.notna(t_i):
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
         if not sub.empty:
