@@ -6,7 +6,7 @@ from io import BytesIO
 from datetime import datetime, date, timedelta
 
 # =============================================================================
-# CONSTANTES BLINDADAS (Protección contra fallos de caché)
+# CONSTANTES BLINDADAS (Protección contra fallos de caché en Streamlit Cloud)
 # =============================================================================
 ESTACIONES_SAFE = ['Puerto','Bellavista','Francia','Baron','Portales','Recreo','Miramar','Viña del Mar','Hospital','Chorrillos','El Salto','Valencia','Quilpue','El Sol','El Belloto','Las Americas','La Concepcion','Villa Alemana','Sargento Aldea','Peñablanca','Limache']
 EC_SAFE = ['PU','BE','FR','BA','PO','RE','MI','VM','HO','CH','ES','VAL','QU','SO','EB','AM','CO','VL','SA','PE','LI']
@@ -141,7 +141,7 @@ def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0):
 get_pax_at_km = get_pax_at_km_nativo
 
 # =============================================================================
-# 2. PROCESAMIENTO THDR (LECTOR ESTÁNDAR DURO)
+# 2. PROCESAMIENTO THDR (ROBUSTO - COLUMNAS FIJAS)
 # =============================================================================
 def procesar_thdr(data, fname, via_param=1):
     try:
@@ -151,6 +151,7 @@ def procesar_thdr(data, fname, via_param=1):
         
         fecha_str = extraer_fecha_segura(raw, fname)
         
+        # Buscar la cabecera
         header_idx = 1
         for i in range(min(15, len(raw))):
             line = ' '.join([str(x).upper() for x in raw.iloc[i].values if pd.notna(x)])
@@ -165,6 +166,7 @@ def procesar_thdr(data, fname, via_param=1):
         df['num_servicio'] = df.iloc[:, 0].apply(clean_id)
         
         times = []
+        # Tiempos desde la columna 5 en adelante
         for i in range(5, df.shape[1]):
             col_data = df.iloc[:, i].apply(parse_time_to_mins)
             if col_data.notna().any(): times.append(col_data)
@@ -205,7 +207,7 @@ def procesar_thdr(data, fname, via_param=1):
         return pd.DataFrame(), str(e)
 
 # =============================================================================
-# 3. LECTURA Y CRUCE DE PASAJEROS
+# 3. LECTURA Y CRUCE DE PASAJEROS (RESTAURACIÓN DE ESCÁNER DE FECHAS)
 # =============================================================================
 def cargar_pax(data, fname, via_param=1):
     try:
@@ -245,6 +247,9 @@ def cargar_pax(data, fname, via_param=1):
                 col_mapping[c_idx] = 'Nro_THDR_raw'
             elif ('TREN' in combo_norm or 'SERVICIO' in combo_norm) and 'Tren' not in col_mapping.values(): 
                 col_mapping[c_idx] = 'Tren'
+            # 💡 FIX APLICADO: Resurrección del escáner de la Fecha en la columna de Pasajeros
+            elif 'FECHA' in combo_norm and 'Fecha_s_raw' not in col_mapping.values():
+                col_mapping[c_idx] = 'Fecha_s_raw'
             elif 'CargaMax' not in col_mapping.values():
                 if any(w in combo_norm for w in ['TOTAL', 'BORDO', 'CARGA', 'PASAJERO']) and not any(exc in combo_norm for exc in ['THDR', 'TREN', 'HORA', 'VIA', 'FECHA']):
                     col_mapping[c_idx] = 'CargaMax'
@@ -255,8 +260,14 @@ def cargar_pax(data, fname, via_param=1):
             if isinstance(c_idx, int) and c_idx < full.shape[1]: 
                 df[col_name] = data_rows.iloc[:, c_idx].values
                 
-        df['Fecha_s'] = extraer_fecha_segura(full, fname)
+        fecha_global = extraer_fecha_segura(full, fname)
         
+        # 💡 FIX APLICADO: Si la columna Fecha existe, la respeta y rellena. Si no, usa el nombre de archivo.
+        if 'Fecha_s_raw' in df.columns:
+            df['Fecha_s'] = df['Fecha_s_raw'].apply(parse_excel_date).fillna(fecha_global).replace('None', fecha_global).replace('', fecha_global).ffill()
+        else:
+            df['Fecha_s'] = fecha_global
+                
         for col in ['Hora Origen', 'Nro_THDR_raw', 'Tren', 'CargaMax']:
             if col not in df.columns: df[col] = ''
         
@@ -298,6 +309,7 @@ def match_pax(row, df_pax):
         if not sub_date.empty:
             sub = sub_date
 
+    # 1. Búsqueda Exacta
     if num_servicio != '' and 'Tren_Clean' in sub.columns:
         m = sub[sub['Tren_Clean'] == num_servicio]
         if not m.empty:
@@ -306,6 +318,7 @@ def match_pax(row, df_pax):
             best_match = m.loc[m['diff'].idxmin()]
             return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS_SAFE}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
 
+    # 2. MATCH UNIVERSAL POR TIEMPO (Ignora el nombre del tren si es distinto en ambos archivos, tolerancia de 60 mins)
     if pd.notna(t_i):
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
         if not sub.empty:
@@ -354,6 +367,7 @@ def cargar_prevenciones(data, fname):
             try:
                 v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
                 vel = float(re.search(r'\d+', str(r.iloc[2])).group())
+                # Escudo para corregir Puntos Kilométricos invertidos automáticamente
                 res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
             except: pass
         return res
