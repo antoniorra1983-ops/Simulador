@@ -45,8 +45,7 @@ def parse_time_to_mins(val):
 
 def parse_excel_date(val):
     """
-    💡 FIX APLICADO: Ultra-robusto. Entiende formatos pegados de EFE, 
-    incluyendo el formato corto DMMAA (5 dígitos).
+    💡 FIX APLICADO: Ultra-robusto. Entiende formatos pegados de EFE, incluyendo el formato corto DMMAA (5 dígitos).
     """
     if pd.isna(val): return None
     if isinstance(val, (datetime, pd.Timestamp)): return val.strftime('%Y-%m-%d')
@@ -93,10 +92,10 @@ def extraer_fecha_segura(df_raw, fname, is_thdr=False):
             a1_val = str(df_raw.iloc[0, 0]).strip()
             a1_num = re.sub(r'\.0+$', '', a1_val)
             if a1_num.isdigit():
-                if len(a1_num) == 5: # DMMAA
+                if len(a1_num) == 5: 
                     d, m, y = int(a1_num[0:1]), int(a1_num[1:3]), int(a1_num[3:5])
                     if 1 <= d <= 31 and 1 <= m <= 12: return f"20{y:02d}-{m:02d}-{d:02d}"
-                elif len(a1_num) == 6: # DDMMAA
+                elif len(a1_num) == 6: 
                     d, m, y = int(a1_num[0:2]), int(a1_num[2:4]), int(a1_num[4:6])
                     if 1 <= d <= 31 and 1 <= m <= 12: return f"20{y:02d}-{m:02d}-{d:02d}"
                 elif 40000 <= int(a1_num) <= 60000:
@@ -189,6 +188,13 @@ def _col_to_est_idx(col):
     return None
 
 def calc_tren_km_real_general(row):
+    # =============================================================================
+    # COCHE-KM: CÁLCULO FÍSICO INQUEBRANTABLE (DIRECCIONALIDAD ABSOLUTA)
+    # =============================================================================
+    """
+    💡 Coche-Km: Multiplica por 2 para trenes dobles.
+    Algoritmo universal direccional para cortes y acoples.
+    """
     k_s, k_e = min(row['km_orig'], row['km_dest']), max(row['km_orig'], row['km_dest'])
     man = row.get('maniobra')
     if man in ['CORTE_BTO','ACOPLE_BTO','CORTE_PU_SA_BTO']:
@@ -561,7 +567,7 @@ def cargar_prevenciones(data, fname):
         res = []
         for _, r in raw.iterrows():
             try:
-                v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
+                v1, v2 = float(str(r.iloc[0]).replace(',','.')) , float(str(r.iloc[1]).replace(',','.'))
                 vel = float(re.search(r'\d+', str(r.iloc[2])).group())
                 # Escudo para corregir Puntos Kilométricos invertidos automáticamente
                 res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
@@ -573,7 +579,7 @@ def cargar_prevenciones(data, fname):
             res = []
             for _, r in raw.iterrows():
                 try:
-                    v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
+                    v1, v2 = float(str(r.iloc[0]).replace(',','.')) , float(str(r.iloc[1]).replace(',','.'))
                     vel = float(re.search(r'\d+', str(r.iloc[2])).group())
                     res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
                 except: pass
