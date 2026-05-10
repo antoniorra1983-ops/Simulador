@@ -264,7 +264,7 @@ def procesar_thdr(data, fname, via_param=1):
         header_idx = -1
         for i in range(min(20, len(raw))):
             row_str = ' '.join([str(x).upper() for x in raw.iloc[i].values if pd.notna(x)])
-            if any(k in row_str for k in ['SALIDA', 'HORA', 'LLEGADA', 'TREN', 'VIAJE', 'PUE', 'LIM']):
+            if ('MOTRIZ' in row_str or 'MAQUINISTA' in row_str) and any(k in row_str for k in ['VIAJE', 'TREN', 'SERVICIO']):
                 header_idx = i
                 break
         
@@ -394,7 +394,7 @@ def procesar_thdr(data, fname, via_param=1):
         df['num_servicio'] = df[tren_col].apply(clean_primary_key)
         if df['num_servicio'].eq('').all(): df['num_servicio'] = df['nro_viaje']
 
-        df['_id'] = df['Fecha_str'] + "_" + df['num_servicio'] + "_" + df['t_ini'].astype(str)
+        df['_id'] = df['Fecha_str'] + "_V" + df['Via'].astype(str) + "_" + df['num_servicio'] + "_" + df['t_ini'].astype(str)
         df['t_fin'] = df['t_fin'].fillna(df['t_ini'] + df['km_viaje'] / 35.0 * 60.0)
 
         def calc_dwell_dynamic(row):
