@@ -44,27 +44,91 @@ def parse_time_to_mins(val):
     except: return None
 
 def parse_excel_date(val):
+    """
+    💡 FIX APLICADO: Ultra-robusto. Entiende formatos pegados de EFE si es columna Fecha.
+    """
     if pd.isna(val): return None
     if isinstance(val, (datetime, pd.Timestamp)): return val.strftime('%Y-%m-%d')
     v_str = str(val).strip()
+    v_str_num = re.sub(r'\.0+$', '', v_str).split(' ')[0]
     
-    # Manejo de Serial Excel (Ej. 45000)
-    if v_str.isdigit() and 40000 <= int(v_str) <= 60000:
-        try: return (date(1899, 12, 30) + timedelta(days=int(v_str))).strftime('%Y-%m-%d')
-        except: pass
+    # 1. Análisis Numérico Puro (Solo si está en una columna de Fecha confirmada)
+    if v_str_num.isdigit():
+        if 40000 <= int(v_str_num) <= 60000:
+            try: return (date(1899, 12, 30) + timedelta(days=int(v_str_num))).strftime('%Y-%m-%d')
+            except: pass
+        elif len(v_str_num) == 8:
+            y, m, d = (int(v_str_num[0:4]), int(v_str_num[4:6]), int(v_str_num[6:8])) if int(v_str_num[0:4]) >= 2000 else (int(v_str_num[4:8]), int(v_str_num[2:4]), int(v_str_num[0:2]))
+            if m > 12 >= d: d, m = m, d
+            if 1 <= d <= 31 and 1 <= m <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m:02d}-{d:02d}"
+        elif len(v_str_num) == 6:
+            d, m, y = int(v_str_num[0:2]), int(v_str_num[2:4]), int(v_str_num[4:6])
+            if m > 12 >= d: d, m = m, d
+            if 1 <= d <= 31 and 1 <= m <= 12 and 20 <= y <= 99: return f"20{y:02d}-{m:02d}-{d:02d}"
 
-    m_dt = re.search(r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b', v_str)
-    if m_dt:
-        d, m, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
-        if y < 100: y += 2000
-        return f"{y:04d}-{m:02d}-{d:02d}"
-        
-    m_dt2 = re.search(r'\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b', v_str)
-    if m_dt2:
-        y, m, d = int(m_dt2.group(1)), int(m_dt2.group(2)), int(m_dt2.group(3))
-        return f"{y:04d}-{m:02d}-{d:02d}"
-        
+    # 2. Formatos Explícitos con Separadores
+    for pat in [r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b', r'\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b']:
+        m_dt = re.search(pat, v_str)
+        if m_dt:
+            if len(m_dt.group(1)) == 4:
+                y, m_val, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+            else:
+                d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+            if y < 100: y += 2000
+            if m_val > 12 >= d: d, m_val = m_val, d
+            if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
+            
     return None
+
+def extraer_fecha_segura(df_raw, fname):
+    """
+    💡 FIX APLICADO (El Bug 2042): Extracción aislada de bloques.
+    Prohibido leer números de 5 dígitos (cantidades de pasajeros) como fechas Excel.
+    """
+    # 1. Buscar en el nombre del archivo patrones de 8 o 6 dígitos pegados
+    bloques_numeros = re.findall(r'\d+', str(fname))
+    for b in bloques_numeros:
+        if len(b) == 8:
+            y, mon, d = (int(b[0:4]), int(b[4:6]), int(b[6:8])) if int(b[0:4]) >= 2000 else (int(b[4:8]), int(b[2:4]), int(b[0:2]))
+            if mon > 12 >= d: d, mon = mon, d
+            if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100:
+                return f"{y:04d}-{mon:02d}-{d:02d}"
+        elif len(b) == 6:
+            d, mon, y = int(b[0:2]), int(b[2:4]), int(b[4:6])
+            if mon > 12 >= d: d, mon = mon, d
+            if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99:
+                return f"20{y:02d}-{mon:02d}-{d:02d}"
+                
+    # 2. Buscar en el nombre del archivo formatos con guiones o puntos
+    for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
+        m = re.search(pat, str(fname))
+        if m:
+            if len(m.group(1)) == 4:
+                y, mon, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            else:
+                d, mon, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if mon > 12 >= d: d, mon = mon, d
+            if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
+
+    # 3. ESCÁNER CIEGO SEGURO: Busca dentro del Excel, pero SOLO formatos exactos.
+    # Cero riesgo de confundir los 52168 pasajeros con el año 2042.
+    if df_raw is not None:
+        for i in range(min(50, len(df_raw))):
+            for val in df_raw.iloc[i].values:
+                if pd.isna(val): continue
+                v_str = str(val).strip()
+                for pat in [r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b', r'\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b']:
+                    m_dt = re.search(pat, v_str)
+                    if m_dt:
+                        if len(m_dt.group(1)) == 4:
+                            y, m_val, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+                        else:
+                            d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+                        if y < 100: y += 2000
+                        if m_val > 12 >= d: d, m_val = m_val, d
+                        if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
+                        
+    return "2026-01-01"
 
 def clean_id(x):
     try:
@@ -90,47 +154,6 @@ def clasificar_dia(d_str):
         if d.weekday() == 5: return 'Sábado'
         return 'Laboral'
     except: return 'Laboral'
-
-def extraer_fecha_segura(df_raw, fname):
-    """
-    💡 FIX APLICADO: Extrae bloques numéricos de forma aislada 
-    evitando que "via1" se mezcle con la fecha.
-    """
-    # 1. Extraemos los bloques de números aislados (Ej: ['1', '030426'])
-    bloques_numeros = re.findall(r'\d+', str(fname))
-    
-    for b in bloques_numeros:
-        if len(b) == 8:
-            y, mon, d = (int(b[0:4]), int(b[4:6]), int(b[6:8])) if int(b[0:4]) >= 2000 else (int(b[4:8]), int(b[2:4]), int(b[0:2]))
-            if mon > 12 >= d: d, mon = mon, d
-            if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100:
-                return f"{y:04d}-{mon:02d}-{d:02d}"
-        elif len(b) == 6:
-            d, mon, y = int(b[0:2]), int(b[2:4]), int(b[4:6])
-            if mon > 12 >= d: d, mon = mon, d
-            if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99:
-                return f"20{y:02d}-{mon:02d}-{d:02d}"
-                
-    # 2. Si tiene formato con guiones/puntos (Ej: 03-04-2026)
-    for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
-        m = re.search(pat, str(fname))
-        if m:
-            if len(m.group(1)) == 4:
-                y, mon, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            else:
-                d, mon, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            if mon > 12 >= d: d, mon = mon, d
-            if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
-
-    # 3. Si falla el nombre, escanear el interior de las celdas del Excel
-    if df_raw is not None:
-        for i in range(min(50, len(df_raw))):
-            for val in df_raw.iloc[i].values:
-                if pd.isna(val): continue
-                dt = parse_excel_date(val)
-                if dt: return dt
-                
-    return "2026-01-01"
 
 def _col_to_est_idx(col):
     cu = re.sub(r'[^a-z0-9]','', str(col).lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
@@ -205,7 +228,6 @@ def procesar_thdr(data, fname, via_param=1):
         
         fecha_str = extraer_fecha_segura(raw, fname)
 
-        # 💡 BUSCADOR INTELIGENTE DE CABECERA (Combina filas)
         header_idx = -1
         for i in range(min(20, len(raw))):
             row_str = ' '.join([str(x).upper() for x in raw.iloc[i].values if pd.notna(x)])
@@ -229,11 +251,9 @@ def procesar_thdr(data, fname, via_param=1):
             else: cols.append(s_val)
             
         df = raw.iloc[header_idx + 1:].copy().reset_index(drop=True)
-        # Asignar nombres limpios y evitar duplicados
         df.columns = [f"Col_{i}_{c}" for i, c in enumerate(cols)] + [f"Col_{i}_EXTRA" for i in range(len(cols), df.shape[1])]
         df = df.dropna(how='all').reset_index(drop=True)
 
-        # 💡 EXTRACCIÓN DINÁMICA DE TIEMPOS
         est_cols = {}
         for i, col in enumerate(df.columns):
             col_str = str(col).upper()
@@ -245,7 +265,6 @@ def procesar_thdr(data, fname, via_param=1):
                     if idx_est is not None:
                         est_cols[f"T_{i}"] = idx_est
 
-        # 💡 FALLBACK DE SEGURIDAD EXTREMA: Si la cabecera está rota
         if len(est_cols) < 5:
             est_cols = {}
             col_start_time = 5
@@ -361,10 +380,6 @@ def procesar_thdr(data, fname, via_param=1):
 # 3. LECTURA Y CRUCE DE PASAJEROS (FILTRO REPARADO CON FFILL)
 # =============================================================================
 def cargar_pax(data, fname, via_param=1):
-    """
-    Lectura blindada de Carga de Pasajeros. 
-    Usa 'ffill' para arreglar las fechas en blanco que rompían el filtro del orquestador.
-    """
     try:
         eng = "xlrd" if fname.lower().endswith(".xls") else "openpyxl"
         if fname.lower().endswith('.csv'):
@@ -409,7 +424,6 @@ def cargar_pax(data, fname, via_param=1):
                 
         fecha_global = extraer_fecha_segura(full, fname)
         
-        # 💡 SOLUCIÓN DEL FILTRO ROTO: ffill() arrastra la fecha hacia abajo para trenes ciegos
         if 'Fecha_s_raw' in df.columns:
             df['Fecha_s'] = df['Fecha_s_raw'].apply(parse_excel_date)
             df['Fecha_s'] = df['Fecha_s'].ffill().fillna(fecha_global)
