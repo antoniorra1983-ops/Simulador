@@ -45,7 +45,7 @@ if len(_e_km) == len(_e_m) and len(_e_km) > 1:
             _PEND_ARRAY_V2[s_m:e_m] = -pend
 
 # =============================================================================
-# 2. FUNCIONES BASE DE MOVIMIENTO
+# 2. FUNCIONES BASE DE MOVIMIENTO Y RADAR ELÉCTRICO
 # =============================================================================
 def vel_at_km(km_km, via, use_rm):
     idx = min(44999, max(0, int(km_km * 1000.0)))
@@ -58,6 +58,26 @@ def km_at_t(t_ini, t_fin, t, via, use_rm=False, km_orig=0.0, km_dest=0.0, nodos=
     return km_orig + (km_dest - km_orig) * frac
 
 def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos=None, t_arr=None):
+    """
+    💡 FIX RADAR RED: Detecta dinámicamente si el tren acelera, frena o va en crucero
+    para habilitar la regeneración de energía entre trenes (Load Flow).
+    """
+    if not t_arr or len(t_arr) < 2: return "CRUISE", 60.0
+    
+    for i in range(len(t_arr) - 1):
+        if t_arr[i] <= t <= t_arr[i+1]:
+            t_rel = t - t_arr[i]
+            dur_tramo = t_arr[i+1] - t_arr[i]
+            
+            if t_rel < 0.5: # Primeros 30 seg (Aceleración)
+                v = 15.0 + 45.0 * (t_rel / 0.5)
+                return "ACCEL", min(v, 60.0)
+            elif dur_tramo - t_rel < 0.5: # Últimos 30 seg (Frenado)
+                v = 60.0 * ((dur_tramo - t_rel) / 0.5)
+                return "BRAKE", max(v, 10.0)
+            else:
+                return "CRUISE", 60.0
+                
     return "CRUISE", 60.0
 
 def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", f_compresor_dwell=1.08):
@@ -76,7 +96,6 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
 
     f_marcha = f_compresor_dwell if estado_marcha == "DWELL" else 1.0
     
-    # Load Shedding / Thermal Compensation (Protección de subestación y ventilación de freno)
     if estado_marcha == "ACCEL": f_marcha = 0.95
     elif estado_marcha == "BRAKE" or estado_marcha == "BRAKE_STATION": f_marcha = 1.05
     elif estado_marcha == "COAST": f_marcha = 0.90
@@ -89,7 +108,7 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
     return aux_base + aux_hvac_val
 
 # =============================================================================
-# 3. MOTOR CINEMÁTICO-TERMODINÁMICO (LAZO CERRADO CORREGIDO)
+# 3. MOTOR CINEMÁTICO-TERMODINÁMICO (W = F * d | CORREGIDO Y BLINDADO)
 # =============================================================================
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False, prevenciones=None):
     flota_db = _get_val('FLOTA', {})
@@ -98,7 +117,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     
     n_uni = 2 if doble else 1
     
-    # 🚨 CORRECCIÓN 1: Separación Estricta de Masas (Gravedad vs Inercia)
+    # 💡 FIX 1: Separación Estricta de Masas (Evita Gravedad Fantasma)
     pax_kg_total = pax_abordo * _get_val('PAX_KG', 75.0)
     masa_estatica_kg = (f.get('tara_t', 86.1) * 1000 * n_uni) + pax_kg_total
     masa_dinamica_kg = masa_estatica_kg + (f.get('m_iner_t', 7.2) * 1000 * n_uni)
@@ -116,7 +135,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     p_freno_max_w = f.get('p_freno_max_kw', f.get('p_max_kw', 720.0)*1.2) * 1000 * n_uni
     v_freno_min = f.get('v_freno_min', 3.81)
     
-    # Termostato Estacional (Selecciona el Techo Térmico del tren)
     if estacion_anio == "invierno": aux_kw_nominal = f.get('aux_kw_heat', 65.16) * n_uni
     else: aux_kw_nominal = f.get('aux_kw_cool', 58.76) * n_uni
         
@@ -159,7 +177,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             v_cons_kmh = max(5.0, _VEL_ARRAY_RM[idx_km] if use_rm else _VEL_ARRAY_NORM[idx_km])
             if v_consigna_override is not None: v_cons_kmh = min(v_cons_kmh, v_consigna_override)
             
-            # 🛑 ATC Preventivo (Lookahead de Frenado Predictivo de 1500m)
+            # ATC Preventivo (Lookahead)
             if prevenciones:
                 for p in prevenciones:
                     if p['via'] == via_op and (p['km_min'] - 1.5) <= km_actual <= p['km_max']:
@@ -172,7 +190,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                                 d_freno_prev = (v_ms**2 - v_p_ms**2) / (2 * a_freno_op)
                                 if dist_a_prev <= d_freno_prev + 50: v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
 
-            # 🛑 Toperas Terminales de Seguridad
+            # Toperas
             if via_op == 1 and km_actual >= 42.93: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual < 43.03 else 10.0)
             if via_op == 2 and km_actual <= 0.20: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual > 0.10 else 10.0)
             
@@ -180,7 +198,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if n_uni == 2: f_davis = (f.get('davis_A',1615.0) * 2) + (f.get('davis_B',0.0) * 2 * v_kmh) + (f.get('davis_C',0.54) * 1.35 * (v_kmh**2))
             else: f_davis = f.get('davis_A',1615.0) + f.get('davis_B',0.0)*v_kmh + f.get('davis_C',0.54)*(v_kmh**2)
                 
-            # 🚨 CORRECCIÓN 2: Cálculo de Gravedad Real sobre la Masa Estática (Sin doble / 1000)
+            # 💡 FIX 2: Corrección Gravitacional con Masa Estática
             f_pend = 0.0
             if use_pend:
                 pend_permil = _PEND_ARRAY_V1[idx_km] if via_op == 1 else _PEND_ARRAY_V2[idx_km]
@@ -196,13 +214,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             elif estado_marcha == "COAST" and v_kmh < v_cons_kmh - 2.0: estado_marcha = "ACCEL"
             elif estado_marcha not in ["ACCEL", "COAST", "BRAKE_STATION", "BRAKE_OVERSPEED"]: estado_marcha = "ACCEL"
 
-            f_motor, f_regen_tramo, a_net_target = 0.0, 0.0, 0.0
+            a_net_target = 0.0
             
-            # Dinámica F = m * a (usando Masa Dinámica)
             if estado_marcha == "BRAKE_STATION":
-                f_req_freno = max(0.0, masa_dinamica_kg * a_freno_op - f_davis - f_pend)
-                f_regen_tramo = min(f_req_freno, f_disp_freno)
-                a_net_target = (-f_regen_tramo - f_davis - f_pend) / masa_dinamica_kg
+                a_net_target = (-f_disp_freno - f_davis - f_pend) / masa_dinamica_kg
                 if a_net_target > -a_freno_op: a_net_target = -a_freno_op 
             elif estado_marcha == "BRAKE_OVERSPEED":
                 f_req_freno = max(0.0, masa_dinamica_kg * 0.4 - f_davis - f_pend)
@@ -226,42 +241,44 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 dt_actual = v_ms / abs(a_net) if a_net < -0.001 else dt
                 v_new = 0.0
                 
-            if f_motor > 0 and v_new * 3.6 > v_cons_kmh:
+            if a_net > 0 and v_new * 3.6 > v_cons_kmh:
                 v_new = v_cons_kmh / 3.6
-                a_req = (v_new - v_ms) / dt_actual if dt_actual > 0 else 0
-                f_motor_req = masa_dinamica_kg * a_req + f_davis + f_pend
-                f_motor = max(0.0, min(f_motor_req, f_disp_trac))
+                a_net = (v_new - v_ms) / dt_actual if dt_actual > 0 else 0.0
                 
-            # 🛑 Escudo Anti-Stall: Evitar bucle infinito si el tren frena antes de llegar
+            # Escudo Anti-Stall
             if v_new < 0.1 and v_ms < 0.1:
                 if dist_restante > 10.0:
-                    v_new = 2.0 # Arrastre forzado mínimo
+                    v_new = 2.0
+                    a_net = (v_new - v_ms) / dt_actual if dt_actual > 0 else 0.0
                 else:
                     t_horas += (dist_restante / 1.0) / 3600.0
                     break
 
+            # 💡 FIX 3: La Distancia Real Recorrida
             step_m = (v_ms + v_new) / 2.0 * dt_actual
             if step_m > dist_restante:
                 step_m = dist_restante
                 if v_ms + v_new > 0: dt_actual = step_m / ((v_ms + v_new) / 2.0)
             if step_m < 0.1: step_m = 0.5 
                 
-            # 🚨 CORRECCIÓN 3: Eliminación del Overshoot de Energía
-            if f_motor > 0:
-                # Calculamos potencia con la velocidad ANTES de la aceleración para no saltar el límite físico
-                p_mech_w = min(f_motor * v_ms, p_max_op_w)
-                
-                # La eficiencia del motor no debe depender de que el maquinista reduzca el % de tracción.
-                # Se calcula usando la capacidad máxima nominal del tren como referencia de diseño.
-                carga_pct = f_motor / max(1.0, f_trac_max_n_nominal) 
+            # 💡 FIX 4: Trabajo Mecánico W = F * d (Elimina Overshoot y Costo Cero al arrancar)
+            f_real_total = (masa_dinamica_kg * a_net) + f_davis + f_pend
+            
+            if f_real_total > 0 and estado_marcha != "BRAKE_STATION":
+                # Tracción
+                f_motor_real = min(f_real_total, f_disp_trac)
+                carga_pct = f_motor_real / max(1.0, f_trac_max_n_nominal) 
                 eta_base = f.get('eta_motor', 0.92)
                 eta_din = eta_base * (1.0 - 0.2 * (1.0 - max(0.1, carga_pct))**3)
                 
-                trc += (p_mech_w * dt_actual) / 3_600_000.0 / eta_din
-            
-            if f_regen_tramo > 0 and v_kmh >= v_freno_min:
-                p_regen_w = min(f_regen_tramo * v_ms, p_freno_max_w)
-                reg += (p_regen_w * dt_actual) / 3_600_000.0 * _get_val('ETA_REGEN_NETA', 0.72)
+                trabajo_j_trac = f_motor_real * step_m
+                trc += (trabajo_j_trac / 3_600_000.0) / eta_din
+                
+            elif f_real_total < 0 and estado_marcha in ["BRAKE_STATION", "BRAKE_OVERSPEED"]:
+                # Regeneración
+                f_freno_real = min(abs(f_real_total), f_disp_freno)
+                trabajo_j_regen = f_freno_real * step_m
+                reg += (trabajo_j_regen / 3_600_000.0) * _get_val('ETA_REGEN_NETA', 0.72)
                 
             # ⚡ Auxiliares Dinámicos
             hora_actual = (t_ini_mins + t_horas * 60.0) / 60.0
@@ -273,7 +290,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             dist_recorrida += step_m
             v_ms = v_new
 
-    # Detención Comercial en Andén (El Tren recarga aire comprimido para suspensión y puertas)
+    # Detención Comercial
     n_est_mid = max(0, len(paradas_km) - 2)
     dwell_h = (n_est_mid * _get_val('DWELL_DEF', 25.0)) / 3600.0
     
