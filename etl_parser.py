@@ -358,11 +358,9 @@ def procesar_thdr(data, fname, via_param=1):
             
         df[['motriz_num', 'tipo_tren']] = df.apply(_get_fleet_info, axis=1)
 
-        col_unidad = next((c for c in df.columns if 'UNIDAD' in str(c).upper()), None)
-        if col_unidad:
-            df['doble'] = df[col_unidad].astype(str).str.upper().str.contains('M|MULT|DOB|2')
-        elif c_m2:
-            df['doble'] = df[c_m2].apply(lambda x: pd.notna(x) and str(x).strip() not in ('0','0.0','','nan'))
+        # Doble: Motriz 2 > 0 => servicio doble. Si es 0, vacio o NaN => simple.
+        if c_m2:
+            df['doble'] = df[c_m2].apply(lambda x: pd.notna(x) and str(x).strip() not in ('0', '0.0', '', 'nan', 'none'))
         else:
             # Fallback: inferir desde motriz_num ya calculado -- '28+29' indica doble
             df['doble'] = df['motriz_num'].astype(str).str.contains(r'\+', regex=True)
