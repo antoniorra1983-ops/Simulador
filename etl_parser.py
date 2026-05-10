@@ -172,23 +172,34 @@ get_pax_at_km = get_pax_at_km_nativo
 # =============================================================================
 def procesar_thdr(data, fname, via_param=1):
     try:
-        eng = "openpyxl" if fname.lower().endswith('.xlsx') else "xlrd"
-        if fname.lower().endswith('.csv'):
+        ext = fname.lower()
+        if ext.endswith('.csv'):
             try: raw = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)
             except: raw = pd.read_csv(BytesIO(data), header=None, sep=';', encoding='latin-1', dtype=str)
         else:
-            raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
+            try:
+                eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
+                raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
+            except Exception as e:
+                if any(x in str(e).lower() for x in ["html", "xml", "format", "token", "unsupported"]):
+                    try:
+                        dfs = pd.read_html(BytesIO(data))
+                        raw = dfs[0].astype(str)
+                    except Exception as html_e:
+                        return pd.DataFrame(), f"Fallo al leer XLS como HTML: {str(html_e)}"
+                else:
+                    return pd.DataFrame(), f"Error al abrir Excel: {str(e)}"
 
         if raw is None or raw.empty or raw.shape[0] < 5: 
-            return pd.DataFrame(), f"Archivo muy corto o vacío."
+            return pd.DataFrame(), f"El archivo está vacío o no tiene suficientes filas."
         
         fecha_str = extraer_fecha_segura(raw, fname)
 
-        # 💡 BUSCADOR INTELIGENTE DE CABECERA (Combina 2 filas de EFE)
+        # 💡 BUSCADOR INTELIGENTE DE CABECERA (Combina filas)
         header_idx = -1
         for i in range(min(20, len(raw))):
             row_str = ' '.join([str(x).upper() for x in raw.iloc[i].values if pd.notna(x)])
-            if 'SALIDA' in row_str or 'HORA' in row_str or 'LLEGADA' in row_str or 'TREN' in row_str:
+            if any(k in row_str for k in ['SALIDA', 'HORA', 'LLEGADA', 'TREN', 'VIAJE', 'PUE', 'LIM']):
                 header_idx = i
                 break
         
@@ -208,76 +219,86 @@ def procesar_thdr(data, fname, via_param=1):
             else: cols.append(s_val)
             
         df = raw.iloc[header_idx + 1:].copy().reset_index(drop=True)
-        n = len(df.columns)
-        if len(cols) >= n: df.columns = cols[:n]
-        else: df.columns = cols + [f"_C{j}" for j in range(n - len(cols))]
-            
-        df = make_unique(df).dropna(how='all').reset_index(drop=True)
+        # Asignar nombres limpios y evitar duplicados
+        df.columns = [f"Col_{i}_{c}" for i, c in enumerate(cols)] + [f"Col_{i}_EXTRA" for i in range(len(cols), df.shape[1])]
+        df = df.dropna(how='all').reset_index(drop=True)
 
-        # 💡 Parseo de tiempos dinámico
-        for col in df.columns:
+        # 💡 EXTRACCIÓN DINÁMICA DE TIEMPOS
+        est_cols = {}
+        for i, col in enumerate(df.columns):
             col_str = str(col).upper()
             if any(k in col_str for k in ['LLEGADA','SALIDA','HORA']) or any(est[:3].upper() in col_str for est in ESTACIONES_SAFE):
-                try: df[f"{col}_min"] = df[col].apply(parse_time_to_mins)
-                except: pass
+                parsed_times = df[col].apply(parse_time_to_mins)
+                if parsed_times.notna().any():
+                    df[f"T_{i}"] = parsed_times
+                    idx_est = _col_to_est_idx(col_str)
+                    if idx_est is not None:
+                        est_cols[f"T_{i}"] = idx_est
 
-        est_cols = {c: _col_to_est_idx(c) for c in df.columns if '_min' in str(c).lower() and 'program' not in str(c).lower()}
-
-        # 💡 FALLBACK DE SEGURIDAD (Si el escáner de nombres falla categóricamente)
+        # 💡 FALLBACK DE SEGURIDAD EXTREMA: Si la cabecera está rota
         if len(est_cols) < 5:
             est_cols = {}
-            for i in range(5, min(5 + N_EST_SAFE, df.shape[1])):
+            col_start_time = 5
+            for c in range(2, min(12, df.shape[1])):
+                muestras = df.iloc[:, c].dropna().head(10).apply(parse_time_to_mins)
+                if muestras.notna().any():
+                    col_start_time = c
+                    break
+                    
+            for i in range(col_start_time, min(col_start_time + N_EST_SAFE, df.shape[1])):
                 col_name = df.columns[i]
-                df[f"{col_name}_min"] = df[col_name].apply(parse_time_to_mins)
-                idx_est = i - 5 if via_param == 1 else (N_EST_SAFE - 1) - (i - 5)
-                est_cols[f"{col_name}_min"] = idx_est
+                parsed_times = df[col_name].apply(parse_time_to_mins)
+                if parsed_times.notna().any():
+                    df[f"T_{i}"] = parsed_times
+                    idx_est = i - col_start_time if via_param == 1 else (N_EST_SAFE - 1) - (i - col_start_time)
+                    est_cols[f"T_{i}"] = idx_est
+
+        if not est_cols:
+            return pd.DataFrame(), f"Formato irlegible. No se encontraron tiempos válidos. Cabeceras detectadas: {list(df.columns)}"
 
         def _safe_get(r, col):
-            try: return r.get(col, np.nan)
-            except: return np.nan
+            val = r.get(col)
+            return val if pd.notna(val) else np.nan
 
         df['t_ini'] = df.apply(lambda row: min([_safe_get(row, c) for c in est_cols.keys() if pd.notna(_safe_get(row, c))] or [np.nan]), axis=1)
         df['t_fin'] = df.apply(lambda row: max([_safe_get(row, c) for c in est_cols.keys() if pd.notna(_safe_get(row, c))] or [np.nan]), axis=1)
 
-        c_m1 = next((c for c in df.columns if 'MOTRIZ' in str(c).upper() and '1' in str(c)), None)
-        c_m2 = next((c for c in df.columns if 'MOTRIZ' in str(c).upper() and '2' in str(c)), None)
-        tren_col = next((c for c in df.columns if str(c).strip().upper() in ('TREN', 'SERVICIO', 'MOTRIZ')), None)
+        c_m1 = next((c for c in df.columns if 'MOTRIZ' in str(c).upper() and '1' in str(c).upper()), None)
+        c_m2 = next((c for c in df.columns if 'MOTRIZ' in str(c).upper() and '2' in str(c).upper()), None)
+        tren_col = next((c for c in df.columns if str(c).strip().upper() in ('TREN', 'SERVICIO', 'MOTRIZ')), df.columns[0])
 
         def _get_fleet_info(r):
-            def extract_n(col_name):
-                if col_name and pd.notna(r.get(col_name)):
-                    val = str(r.get(col_name)).strip()
+            def extract_n(c_name):
+                if c_name and pd.notna(r.get(c_name)):
+                    val = str(r.get(c_name)).strip()
                     if val.lower() not in ('nan', '', '0', '0.0'):
                         m = re.search(r'(\d+)', val)
                         if m: return int(m.group(1))
                 return None
             n1 = extract_n(c_m1)
             n2 = extract_n(c_m2)
-            tipo = "XT-100"
-            motriz_str = ""
-            n_eval = None
-            if (n1 is not None and n1 != 0) and (n2 is not None and n2 != 0): motriz_str = f"{n1}+{n2}"; n_eval = n1
-            elif (n1 is not None and n1 != 0): motriz_str = f"{n1}"; n_eval = n1
-            elif (n2 is not None and n2 != 0): motriz_str = f"{n2}"; n_eval = n2
-            else:
-                n_tren = extract_n(tren_col)
-                if n_tren is not None and n_tren != 0: motriz_str = f"{n_tren}"; n_eval = n_tren
+            n_tren = extract_n(tren_col)
+            
+            n_eval = n1 or n2 or n_tren
             if n_eval is not None:
                 if 1 <= n_eval <= 27: tipo = "XT-100"
                 elif 28 <= n_eval <= 35: tipo = "XT-M"
                 elif 410 <= n_eval <= 414: tipo = "SFE"
                 else: tipo = "XT-100" 
+            else:
+                tipo = "XT-100"
+                
+            motriz_str = f"{n1}+{n2}" if n1 and n2 else str(n_eval or "")
             return pd.Series([motriz_str, tipo])
             
         df[['motriz_num', 'tipo_tren']] = df.apply(_get_fleet_info, axis=1)
 
         col_unidad = next((c for c in df.columns if 'UNIDAD' in str(c).upper()), None)
         if col_unidad: 
-            df['Unidad'] = df[col_unidad].fillna('S').replace('nan','S').replace('','S')
+            df['doble'] = df[col_unidad].astype(str).str.upper().str.contains('M|MULT|DOB|2')
         else: 
-            df['Unidad'] = df[c_m2].apply(lambda x: 'M' if pd.notna(x) and str(x).strip() not in ('0','0.0','','nan') else 'S') if c_m2 else 'S'
+            df['doble'] = df[c_m2].apply(lambda x: pd.notna(x) and str(x).strip() not in ('0','0.0','','nan')) if c_m2 else False
             
-        df['doble'] = df['Unidad'].astype(str).str.strip().upper() == 'M'
         df['Via'] = via_param
         df['Fecha_str'] = fecha_str
 
@@ -301,6 +322,15 @@ def procesar_thdr(data, fname, via_param=1):
         df['km_viaje'] = abs(df['km_dest'] - df['km_orig'])
         df['svc_type'] = df.apply(lambda r: f"{EC_SAFE[KM_ACUM_SAFE.index(r['km_orig'])]}-{EC_SAFE[KM_ACUM_SAFE.index(r['km_dest'])]}", axis=1)
 
+        viaje_col_idx = next((c for c in df.columns if 'VIAJE' in str(c).upper() or 'NRO' in str(c).upper() or 'N°' in str(c).upper()), None)
+        df['nro_viaje'] = df[viaje_col_idx].apply(clean_primary_key) if viaje_col_idx else ''
+
+        df['num_servicio'] = df[tren_col].apply(clean_primary_key)
+        if df['num_servicio'].eq('').all(): df['num_servicio'] = df['nro_viaje']
+
+        df['_id'] = df['Fecha_str'] + "_" + df['num_servicio'] + "_" + df['t_ini'].astype(str)
+        df['t_fin'] = df['t_fin'].fillna(df['t_ini'] + df['km_viaje'] / 35.0 * 60.0)
+
         def calc_dwell_dynamic(row):
             try:
                 idx_orig = int(np.argmin([abs(row['km_orig'] - k) for k in KM_ACUM_SAFE]))
@@ -312,51 +342,10 @@ def procesar_thdr(data, fname, via_param=1):
         df['dwell_min'] = df.apply(calc_dwell_dynamic, axis=1)
         df['dwell_cabecera_min'] = 0.0
         
-        def _extract_nodos(row):
-            nodos_temp = []
-            for col, e_idx in est_cols.items():
-                val = _safe_get(row, col)
-                if pd.notna(val) and val > 0:
-                    nodos_temp.append((val, KM_ACUM_SAFE[e_idx]))
-            
-            nodos_validos = [n for n in nodos_temp if pd.notna(n[0])]
-            nodos_validos.sort(key=lambda x: (x[1], x[0]))
-            unique_nodos = []
-            seen_km = set()
-            for t, km in nodos_validos:
-                if km not in seen_km:
-                    unique_nodos.append((t, km))
-                    seen_km.add(km)
-                    
-            unique_nodos.sort(key=lambda x: x[0])
-            return unique_nodos if len(unique_nodos) > 1 else None
-            
-        df['nodos'] = df.apply(_extract_nodos, axis=1)
-
-        viaje_col_idx = None
-        for r in range(min(15, raw.shape[0])):
-            for c in range(raw.shape[1]):
-                val_raw = str(raw.iloc[r, c]).strip().upper()
-                val_norm = unicodedata.normalize('NFD', val_raw).encode('ascii', 'ignore').decode()
-                if ('VIAJE' in val_norm or 'N°' in val_norm or 'NRO' in val_norm) and 'TIEMPO' not in val_norm and 'MIN' not in val_norm and viaje_col_idx is None:
-                    viaje_col_idx = c
-                    break
-                    
-        if viaje_col_idx is not None and viaje_col_idx < len(df.columns):
-            col_name_v = df.columns[viaje_col_idx]
-            df['nro_viaje'] = df[col_name_v].apply(clean_primary_key)
-        else: df['nro_viaje'] = ''
-
-        serv_col = next((c for c in df.columns if 'SERVICIO' in str(c).upper()), None)
-        if serv_col: df['num_servicio'] = df[serv_col].apply(clean_primary_key)
-        elif 'nro_viaje' in df.columns: df['num_servicio'] = df['nro_viaje']
-        else: df['num_servicio'] = ''
-
-        df['_id'] = df['Fecha_str'] + "_" + df['num_servicio'] + "_" + df['t_ini'].astype(str)
-        df['t_fin'] = df['t_fin'].fillna(df['t_ini'] + df['km_viaje'] / 35.0 * 60.0)
         return df, "ok"
-    except Exception as e: 
-        return pd.DataFrame(), f"Fallo Crítico ETL: {str(e)}"
+    except Exception as e:
+        import traceback
+        return pd.DataFrame(), f"Fallo Crítico ETL: {str(e)} \n {traceback.format_exc()}"
 
 # =============================================================================
 # 3. LECTURA Y CRUCE DE PASAJEROS (FILTRO REPARADO CON FFILL)
@@ -467,7 +456,7 @@ def match_pax(row, df_pax):
             best_match = m.loc[m['diff'].idxmin()]
             return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS_SAFE}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
 
-    # 2. MATCH UNIVERSAL POR TIEMPO (Ignora el nombre del tren si es distinto en ambos archivos, tolerancia de 60 mins)
+    # 2. MATCH UNIVERSAL POR TIEMPO (Tolerancia 60 mins)
     if pd.notna(t_i):
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
         if not sub.empty:
@@ -507,6 +496,9 @@ def calcular_dwell(df1, df2):
 def get_vacios_dia(df): 
     return []
 
+def cargar_vacios_efe(data, fname):
+    return pd.DataFrame()
+
 def cargar_prevenciones(data, fname):
     try:
         raw = pd.read_csv(BytesIO(data), sep=',', encoding='latin-1')
@@ -516,6 +508,7 @@ def cargar_prevenciones(data, fname):
             try:
                 v1, v2 = float(str(r.iloc[0]).replace(',','.')), float(str(r.iloc[1]).replace(',','.'))
                 vel = float(re.search(r'\d+', str(r.iloc[2])).group())
+                # Escudo para corregir Puntos Kilométricos invertidos automáticamente
                 res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
             except: pass
         return res
