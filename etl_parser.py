@@ -44,15 +44,11 @@ def parse_time_to_mins(val):
     except: return None
 
 def parse_excel_date(val):
-    """
-    💡 FIX APLICADO: Ultra-robusto. Entiende formatos pegados de EFE si es columna Fecha.
-    """
     if pd.isna(val): return None
     if isinstance(val, (datetime, pd.Timestamp)): return val.strftime('%Y-%m-%d')
     v_str = str(val).strip()
     v_str_num = re.sub(r'\.0+$', '', v_str).split(' ')[0]
     
-    # 1. Análisis Numérico Puro (Solo si está en una columna de Fecha confirmada)
     if v_str_num.isdigit():
         if 40000 <= int(v_str_num) <= 60000:
             try: return (date(1899, 12, 30) + timedelta(days=int(v_str_num))).strftime('%Y-%m-%d')
@@ -66,7 +62,6 @@ def parse_excel_date(val):
             if m > 12 >= d: d, m = m, d
             if 1 <= d <= 31 and 1 <= m <= 12 and 20 <= y <= 99: return f"20{y:02d}-{m:02d}-{d:02d}"
 
-    # 2. Formatos Explícitos con Separadores
     for pat in [r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b', r'\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b']:
         m_dt = re.search(pat, v_str)
         if m_dt:
@@ -80,10 +75,9 @@ def parse_excel_date(val):
             
     return None
 
-def extraer_fecha_segura(df_raw, fname):
+def extraer_fecha_segura(df_raw, fname, is_thdr=False):
     """
-    💡 FIX APLICADO (El Bug 2042): Extracción aislada de bloques.
-    Prohibido leer números de 5 dígitos (cantidades de pasajeros) como fechas Excel.
+    💡 FIX APLICADO: Prohibición estricta de escanear el interior de los archivos THDR.
     """
     # 1. Buscar en el nombre del archivo patrones de 8 o 6 dígitos pegados
     bloques_numeros = re.findall(r'\d+', str(fname))
@@ -110,8 +104,11 @@ def extraer_fecha_segura(df_raw, fname):
             if mon > 12 >= d: d, mon = mon, d
             if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
 
-    # 3. ESCÁNER CIEGO SEGURO: Busca dentro del Excel, pero SOLO formatos exactos.
-    # Cero riesgo de confundir los 52168 pasajeros con el año 2042.
+    # 💡 BARRERA FÍSICA: Si es THDR, no puede mirar adentro del archivo.
+    if is_thdr:
+        return "2026-01-01"
+
+    # 3. ESCÁNER CIEGO: Busca dentro del Excel (SOLO autorizado para archivos de Pasajeros)
     if df_raw is not None:
         for i in range(min(50, len(df_raw))):
             for val in df_raw.iloc[i].values:
@@ -226,7 +223,8 @@ def procesar_thdr(data, fname, via_param=1):
         if raw is None or raw.empty or raw.shape[0] < 5: 
             return pd.DataFrame(), f"El archivo está vacío o no tiene suficientes filas."
         
-        fecha_str = extraer_fecha_segura(raw, fname)
+        # 💡 Aquí inyectamos el True, prohibiendo buscar adentro del THDR
+        fecha_str = extraer_fecha_segura(raw, fname, is_thdr=True)
 
         header_idx = -1
         for i in range(min(20, len(raw))):
@@ -422,7 +420,8 @@ def cargar_pax(data, fname, via_param=1):
             if isinstance(c_idx, int) and c_idx < full.shape[1]: 
                 df[col_name] = data_rows.iloc[:, c_idx].values
                 
-        fecha_global = extraer_fecha_segura(full, fname)
+        # 💡 A los pasajeros SÍ se les permite escanear su interior (is_thdr=False por defecto)
+        fecha_global = extraer_fecha_segura(full, fname, is_thdr=False)
         
         if 'Fecha_s_raw' in df.columns:
             df['Fecha_s'] = df['Fecha_s_raw'].apply(parse_excel_date)
@@ -480,7 +479,7 @@ def match_pax(row, df_pax):
             best_match = m.loc[m['diff'].idxmin()]
             return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS_SAFE}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
 
-    # 2. MATCH UNIVERSAL POR TIEMPO (Ignora el nombre del tren si es distinto en ambos archivos, tolerancia de 60 mins)
+    # 2. MATCH UNIVERSAL POR TIEMPO (Tolerancia 60 mins)
     if pd.notna(t_i):
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
         if not sub.empty:
