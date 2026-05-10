@@ -677,7 +677,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     pax_t  = int(df_act['pax_inst'].sum()) if not df_act.empty else 0
     kwh_t  = round(df_act['kwh_neto'].sum(),0) if (not df_act.empty and 'kwh_neto' in df_act.columns) else 0
     regen_t= round(t_regen_acum, 0)
-    trenkm = round(df_act['tren_km'].sum(),1) if (not df_act.empty and 'tren_km' in df_act.columns) else 0.0
+    trenkm = round(df_act['km_rec'].sum(),1) if (not df_act.empty and 'km_rec' in df_act.columns) else 0.0
     km_rec = df_act['km_rec'].sum() if (not df_act.empty and 'km_rec' in df_act.columns) else 0
     ide_i  = round(kwh_t/max(1, km_rec), 3) if km_rec > 0 else 0.0
 
@@ -730,8 +730,16 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     n_inic  = len(df_inic)
     n_comp  = len(df_comp)
     
-    km_ac   = round(df_comp['tren_km'].sum(), 1) if not df_comp.empty else 0.0
-    ide_ac  = round(seat_accum_1 / max(1, df_inic['tren_km'].sum() + vacio_km_total), 3) if not df_inic.empty and (df_inic['tren_km'].sum() + vacio_km_total) > 0 else 0.0
+    # Kilometraje acumulado correcto:
+    # - Viajes completados (t_fin <= hora_m1): tren_km completo
+    # - Viajes en curso (t_ini <= hora_m1 < t_fin): proporción recorrida × tren_km
+    if not df_inic.empty:
+        frac_inic = np.minimum(1.0, (hora_m1 - df_inic['t_ini']) / np.maximum(0.001, df_inic['t_fin'] - df_inic['t_ini']))
+        km_inic_real = (df_inic['tren_km'] * frac_inic).sum()
+    else:
+        km_inic_real = 0.0
+    km_ac   = round(km_inic_real, 1)
+    ide_ac  = round(seat_accum_1 / max(1, km_inic_real + vacio_km_total), 3) if (km_inic_real + vacio_km_total) > 0 else 0.0
 
     st.divider()
     st.markdown(f"#### 📊 Análisis Global Acumulado (00:00 → {hora_s1[:5]})")
