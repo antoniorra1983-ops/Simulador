@@ -92,34 +92,44 @@ def clasificar_dia(d_str):
     except: return 'Laboral'
 
 def extraer_fecha_segura(df_raw, fname):
-    """Extractor Regex Forense: Infalible ante nombres de archivo de EFE."""
-    s_fname = re.sub(r'\D', '', str(fname))
+    """
+    💡 FIX APLICADO: Extrae bloques numéricos de forma aislada 
+    evitando que "via1" se mezcle con la fecha.
+    """
+    # 1. Extraemos los bloques de números aislados (Ej: ['1', '030426'])
+    bloques_numeros = re.findall(r'\d+', str(fname))
     
-    # 1. Buscar en el nombre del archivo patrones de 8 o 6 dígitos
-    for pat in [r'(\d{4})(\d{2})(\d{2})', r'(\d{2})(\d{2})(\d{4})', r'(\d{2})(\d{2})(\d{2})']:
-        matches = re.finditer(pat, s_fname)
-        for m in matches:
-            if len(m.group(0)) == 8:
-                if int(m.group(1)) >= 2000: # AAAAMMDD
-                    y, mon, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                else: # DDMMAAAA
-                    d, mon, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                if mon > 12 >= d: d, mon = mon, d
-                if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100:
-                    return f"{y:04d}-{mon:02d}-{d:02d}"
-            elif len(m.group(0)) == 6: # DDMMAA
+    for b in bloques_numeros:
+        if len(b) == 8:
+            y, mon, d = (int(b[0:4]), int(b[4:6]), int(b[6:8])) if int(b[0:4]) >= 2000 else (int(b[4:8]), int(b[2:4]), int(b[0:2]))
+            if mon > 12 >= d: d, mon = mon, d
+            if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100:
+                return f"{y:04d}-{mon:02d}-{d:02d}"
+        elif len(b) == 6:
+            d, mon, y = int(b[0:2]), int(b[2:4]), int(b[4:6])
+            if mon > 12 >= d: d, mon = mon, d
+            if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99:
+                return f"20{y:02d}-{mon:02d}-{d:02d}"
+                
+    # 2. Si tiene formato con guiones/puntos (Ej: 03-04-2026)
+    for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
+        m = re.search(pat, str(fname))
+        if m:
+            if len(m.group(1)) == 4:
+                y, mon, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            else:
                 d, mon, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                if mon > 12 >= d: d, mon = mon, d
-                if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99:
-                    return f"20{y:02d}-{mon:02d}-{d:02d}"
-                    
-    # 2. Si falla el nombre, escanear el interior de las celdas del Excel
+            if mon > 12 >= d: d, mon = mon, d
+            if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
+
+    # 3. Si falla el nombre, escanear el interior de las celdas del Excel
     if df_raw is not None:
         for i in range(min(50, len(df_raw))):
             for val in df_raw.iloc[i].values:
                 if pd.isna(val): continue
                 dt = parse_excel_date(val)
                 if dt: return dt
+                
     return "2026-01-01"
 
 def _col_to_est_idx(col):
@@ -456,7 +466,7 @@ def match_pax(row, df_pax):
             best_match = m.loc[m['diff'].idxmin()]
             return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS_SAFE}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
 
-    # 2. MATCH UNIVERSAL POR TIEMPO (Tolerancia 60 mins)
+    # 2. MATCH UNIVERSAL POR TIEMPO (Ignora el nombre del tren si es distinto en ambos archivos, tolerancia de 60 mins)
     if pd.notna(t_i):
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
         if not sub.empty:
