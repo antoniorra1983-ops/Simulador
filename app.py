@@ -18,6 +18,7 @@ except ImportError:
     pass
 
 import etl_parser
+# Sincronización de nombres de funciones por seguridad
 if not hasattr(etl_parser, 'get_pax_at_km') and hasattr(etl_parser, 'get_pax_at_km_nativo'):
     etl_parser.get_pax_at_km = etl_parser.get_pax_at_km_nativo
 if not hasattr(etl_parser, 'get_pax_at_km_nativo') and hasattr(etl_parser, 'get_pax_at_km'):
@@ -50,8 +51,6 @@ from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 # 1. FUNCIONES DE CARGA Y AGRUPACIÓN (BLINDADAS)
 # =============================================================================
 
-# 💡 FIX APLICADO: Extrae la data de forma segura, reseteando el cursor.
-# Evita que el archivo se "vacíe" en la memoria de Streamlit al recargar.
 def leer(files): 
     res = []
     for f in (files or []):
@@ -330,7 +329,6 @@ def main():
                         st.session_state[key] = []; st.rerun()
 
         st.subheader("Carga de Planillas Locales")
-        # 💡 FIX APLICADO: Arquitectura limpia. El Orquestador ahora carga cualquier combinación.
         f_v1 = st.file_uploader("THDR Vía 1 (Puerto→Limache)", accept_multiple_files=True, key="t1")
         f_v2 = st.file_uploader("THDR Vía 2 (Limache→Puerto)", accept_multiple_files=True, key="t2")
         f_px1 = st.file_uploader("Pasajeros Vía 1", accept_multiple_files=True, key="px1")
@@ -397,9 +395,10 @@ def main():
 
     fechas = sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)]))) if not df_all.empty else []
 
-    tab_mapa, tab_datos, tab_planificador = st.tabs([
+    tab_mapa, tab_datos, tab_vacios, tab_planificador = st.tabs([
         "🗺️ Gemelo Digital (Histórico)", 
         "👥 Auditoría de Pasajeros", 
+        "🚉 Vacíos Oficiales",
         "🔮 Planificador de Escenarios"
     ])
     
@@ -484,6 +483,12 @@ def main():
                 if not df_v2.empty: 
                     st.subheader("🔴 V2 (LI → PU)")
                     st.dataframe(df_v2, use_container_width=True)
+
+    with tab_vacios:
+        if df_all.empty: 
+            st.info("Requiere archivos THDR.")
+        else: 
+            st.dataframe(pd.DataFrame(get_vacios_dia(df_all)), use_container_width=True)
 
     with tab_planificador:
         st.subheader("🔮 Proyección de Malla y Capex Operativo")
