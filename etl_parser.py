@@ -6,7 +6,7 @@ from io import BytesIO
 from datetime import datetime, date, timedelta
 
 # =============================================================================
-# CONSTANTES BLINDADAS (Protección contra fallos de caché en Streamlit Cloud)
+# CONSTANTES BLINDADAS (Protección contra fallos de caché)
 # =============================================================================
 ESTACIONES_SAFE = ['Puerto','Bellavista','Francia','Baron','Portales','Recreo','Miramar','Viña del Mar','Hospital','Chorrillos','El Salto','Valencia','Quilpue','El Sol','El Belloto','Las Americas','La Concepcion','Villa Alemana','Sargento Aldea','Peñablanca','Limache']
 EC_SAFE = ['PU','BE','FR','BA','PO','RE','MI','VM','HO','CH','ES','VAL','QU','SO','EB','AM','CO','VL','SA','PE','LI']
@@ -141,7 +141,7 @@ def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0):
 get_pax_at_km = get_pax_at_km_nativo
 
 # =============================================================================
-# 2. PROCESAMIENTO THDR (ROBUSTO - COLUMNAS FIJAS)
+# 2. PROCESAMIENTO THDR (LECTOR ESTÁNDAR DURO)
 # =============================================================================
 def procesar_thdr(data, fname, via_param=1):
     try:
@@ -151,7 +151,6 @@ def procesar_thdr(data, fname, via_param=1):
         
         fecha_str = extraer_fecha_segura(raw, fname)
         
-        # Buscar la cabecera
         header_idx = 1
         for i in range(min(15, len(raw))):
             line = ' '.join([str(x).upper() for x in raw.iloc[i].values if pd.notna(x)])
@@ -166,7 +165,6 @@ def procesar_thdr(data, fname, via_param=1):
         df['num_servicio'] = df.iloc[:, 0].apply(clean_id)
         
         times = []
-        # Tiempos desde la columna 5 en adelante
         for i in range(5, df.shape[1]):
             col_data = df.iloc[:, i].apply(parse_time_to_mins)
             if col_data.notna().any(): times.append(col_data)
@@ -300,14 +298,19 @@ def match_pax(row, df_pax):
         if not sub_date.empty:
             sub = sub_date
 
-    # MATCH UNIVERSAL POR TIEMPO (Ignorando nombres completamente, tolerancia 60 mins)
+    if num_servicio != '' and 'Tren_Clean' in sub.columns:
+        m = sub[sub['Tren_Clean'] == num_servicio]
+        if not m.empty:
+            m = m.copy()
+            m['diff'] = m['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
+            best_match = m.loc[m['diff'].idxmin()]
+            return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS_SAFE}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
+
     if pd.notna(t_i):
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
-        
         if not sub.empty:
             idx_min = sub['diff'].idxmin()
             best_match = sub.loc[idx_min]
-            
             if best_match['diff'] <= 60: 
                 return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS_SAFE}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
 
