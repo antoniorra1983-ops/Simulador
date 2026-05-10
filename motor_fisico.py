@@ -82,6 +82,10 @@ for ki, kf, r_m in _curvas:
     s_i, e_i = int(ki * 1000), min(int(kf * 1000), 44999)
     if s_i < e_i: _CURVA_ARRAY[s_i:e_i] = w_c
 
+# Constante física: factor de resistencia aerodinámica para doble tracción (acoplamiento de estelas).
+# Valor 1.35 basado en calibración IDE MERVAL. Aplicar en TODOS los cálculos Davis con n_uni==2.
+_DAVIS_DOBLE_AERO = 1.35
+
 # =============================================================================
 # 2. FUNCIONES BASE DE MOVIMIENTO Y RADAR ELÉCTRICO
 # =============================================================================
@@ -150,14 +154,16 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
         elif estacion_anio == "invierno": f_ocup = 1.0 - 0.12 * ocup
         else: f_ocup = 1.0 - 0.06 * ocup
 
-    f_marcha = f_compresor_dwell if estado_marcha == "DWELL" else 1.0
-    
-    if estado_marcha == "ACCEL": f_marcha = 0.95
-    elif estado_marcha == "BRAKE" or estado_marcha == "BRAKE_STATION": f_marcha = 1.05
-    elif estado_marcha == "COAST": f_marcha = 0.90
-    
-    frac_base = _get_val('FRAC_BASE', 0.30)
-    frac_hvac = _get_val('FRAC_HVAC', 0.70)
+    # Factor de demanda neumática según estado de marcha
+    if estado_marcha == "DWELL":       f_marcha = f_compresor_dwell  # Compresor en dwell (balonas + puertas)
+    elif estado_marcha == "ACCEL":     f_marcha = 0.95               # HVAC cede prioridad durante arranque
+    elif estado_marcha in ("BRAKE", "BRAKE_STATION"): f_marcha = 1.05  # Freno neumático activo
+    elif estado_marcha == "COAST":     f_marcha = 0.90               # HVAC al mínimo en marcha libre
+    else:                              f_marcha = 1.0                 # CRUISE y otros: nominal
+
+    # FRAC_BASE=0.12 y FRAC_HVAC=0.45 definidos en config.py (suman 0.57, resto es compresor+puertas)
+    frac_base = _get_val('FRAC_BASE', 0.12)
+    frac_hvac = _get_val('FRAC_HVAC', 0.45)
     
     aux_base = aux_kw_nominal * frac_base
     aux_hvac_val = aux_kw_nominal * frac_hvac * f_hvac * f_ocup * f_marcha
@@ -356,7 +362,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if via_op == 2 and km_actual <= 0.20: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual > 0.10 else 10.0)
             
             v_kmh = v_ms * 3.6
-            if n_uni_inst == 2: f_davis = (f.get('davis_A',1615.0) * 2) + (f.get('davis_B',0.0) * 2 * v_kmh) + (f.get('davis_C',0.54) * 1.35 * (v_kmh**2))
+            if n_uni_inst == 2: f_davis = (f.get('davis_A',1615.0) * 2) + (f.get('davis_B',0.0) * 2 * v_kmh) + (f.get('davis_C',0.54) * _DAVIS_DOBLE_AERO * (v_kmh**2))
             else: f_davis = f.get('davis_A',1615.0) + f.get('davis_B',0.0)*v_kmh + f.get('davis_C',0.54)*(v_kmh**2)
                 
             f_pend = 0.0
@@ -477,7 +483,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             v_ms = v_new
 
     n_est_mid = max(0, len(paradas_km) - 2)
-    dwell_h = (n_est_mid * _get_val('DWELL_DEF', 25.0)) / 3600.0
+    dwell_h = (n_est_mid * _get_val('DWELL_DEF', 8.0)) / 3600.0
     
     hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
     aux_kw_dwell = calcular_aux_dinamico(aux_kw_nominal_final, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni_final, estacion_anio, "DWELL", f_compresor_especifico)
@@ -598,7 +604,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                 f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
                 
                 if n_uni == 2:
-                    f_davis = (f.get('davis_A',1615) * 2) + (f.get('davis_B',0) * 2 * v_kmh) + (f.get('davis_C',0.54) * 1.35 * (v_kmh**2))
+                    f_davis = (f.get('davis_A',1615) * 2) + (f.get('davis_B',0) * 2 * v_kmh) + (f.get('davis_C',0.54) * _DAVIS_DOBLE_AERO * (v_kmh**2))
                 else:
                     f_davis = f.get('davis_A',1615) + f.get('davis_B',0)*v_kmh + f.get('davis_C',0.54)*(v_kmh**2)
                     
@@ -647,7 +653,8 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                 a_idx, a_pos, _ = min(available, key=lambda x: abs(x[1] - b_pos))
                 dist = abs(a_pos - b_pos)
                 
-                if dist <= _get_val('LAMBDA_REGEN_KM', 5.0) * 2:
+                # Umbral 3×λ: a esa distancia η = ETA_MAX × e^(-3) ≈ 5%, transferencia despreciable.
+                if dist <= _get_val('LAMBDA_REGEN_KM', 5.0) * 3:
                     p_transferred = min(p_gen * (_get_val('ETA_MAX', 0.7) * np.exp(-dist / _get_val('LAMBDA_REGEN_KM', 5.0))), current_demands[a_idx])
                     current_demands[a_idx] -= p_transferred
                     regen_util_per_trip[b_idx] += (p_transferred / p_gen)
