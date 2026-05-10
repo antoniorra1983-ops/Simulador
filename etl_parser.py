@@ -188,22 +188,37 @@ def _col_to_est_idx(col):
     return None
 
 def calc_tren_km_real_general(row):
-    # =============================================================================
-    # COCHE-KM: CÁLCULO FÍSICO INQUEBRANTABLE (DIRECCIONALIDAD ABSOLUTA)
-    # =============================================================================
     """
-    💡 Coche-Km: Multiplica por 2 para trenes dobles.
-    Algoritmo universal direccional para cortes y acoples.
+    Coche-Km: Multiplica por 2 para trenes dobles.
+    CORTE:  doble->simple  -> (dist_antes x 2) + (dist_despues x 1)
+    ACOPLE: simple->doble  -> (dist_antes x 1) + (dist_despues x 2)
     """
-    k_s, k_e = min(row['km_orig'], row['km_dest']), max(row['km_orig'], row['km_dest'])
+    k_o = row.get('km_orig', 0.0)
+    k_d = row.get('km_dest', 0.0)
+    if pd.isna(k_o) or pd.isna(k_d): return 0.0
+
     man = row.get('maniobra')
-    if man in ['CORTE_BTO','ACOPLE_BTO','CORTE_PU_SA_BTO']:
-        km_man = KM_ACUM_SAFE[14]
-        if k_s <= km_man <= k_e: return abs(km_man-k_s)*2.0 + abs(k_e-km_man)*1.0
-    elif man in ['CORTE_SA','ACOPLE_SA']:
-        km_man = KM_ACUM_SAFE[18]
-        if k_s <= km_man <= k_e: return abs(km_man-k_s)*2.0 + abs(k_e-km_man)*1.0
-    return abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0)
+    is_doble = row.get('doble', False)
+
+    if not man or pd.isna(man) or str(man).strip().lower() in ['none', '']:
+        return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
+
+    man_upper = str(man).upper()
+    km_man = None
+    if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper:
+        km_man = KM_ACUM_SAFE[14]  # 25.3 km - El Belloto
+    elif 'CORTE_SA' in man_upper or 'ACOPLE_SA' in man_upper:
+        km_man = KM_ACUM_SAFE[18]  # 29.1 km - Sargento Aldea
+
+    if km_man is not None and min(k_o, k_d) <= km_man <= max(k_o, k_d):
+        dist_antes   = abs(km_man - k_o)
+        dist_despues = abs(k_d - km_man)
+        if 'CORTE' in man_upper:
+            return (dist_antes * 2.0) + (dist_despues * 1.0)
+        elif 'ACOPLE' in man_upper:
+            return (dist_antes * 1.0) + (dist_despues * 2.0)
+
+    return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
 
 def make_unique(df):
     cols = pd.Series(df.columns)
