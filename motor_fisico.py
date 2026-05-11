@@ -251,7 +251,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
         dist_total_km = abs(k_e - k_s)
         v_promedio_kmh = dist_total_km / duracion_real_h
         v_limit_thdr = v_promedio_kmh * 1.35 # Techo orgánico para forzar Coasting
-        pct_trac = 100.0 # El Piloto Automático toma el control
+        # pct_trac se preserva (75% laboral / 50% finde) — norma operativa EFE
     
     trc, aux, reg, t_horas = 0.0, 0.0, 0.0, 0.0
     
