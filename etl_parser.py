@@ -64,9 +64,6 @@ def parse_time_to_mins(val):
         return None
 
 def parse_excel_date(val):
-    """
-    💡 FIX APLICADO: Ultra-robusto. Entiende formatos pegados de EFE, incluyendo el formato corto DMMAA (5 dígitos).
-    """
     if pd.isna(val):
         return None
     if isinstance(val, (datetime, pd.Timestamp)):
@@ -131,10 +128,6 @@ def parse_excel_date(val):
     return None
 
 def extraer_fecha_segura(df_raw, fname, is_thdr=False):
-    """
-    💡 FIX APLICADO: Prioridad absoluta a la celda A1 para THDR (formato DMMAA).
-    """
-    # 1. REGLA DE ORO THDR: Buscar en la celda A1 (iloc[0,0]) formato DMMAA o DDMMAA
     if is_thdr and df_raw is not None and not df_raw.empty:
         try:
             a1_val = str(df_raw.iloc[0, 0]).strip()
@@ -161,7 +154,6 @@ def extraer_fecha_segura(df_raw, fname, is_thdr=False):
         except:
             pass
 
-    # 2. Buscar en el nombre del archivo patrones de 8 o 6 digitos pegados
     s_fname = re.sub(r'\D', '', str(fname))
     for pat in [r'(\d{4})(\d{2})(\d{2})', r'(\d{2})(\d{2})(\d{4})', r'(\d{2})(\d{2})(\d{2})']:
         matches = re.finditer(pat, s_fname)
@@ -188,28 +180,9 @@ def extraer_fecha_segura(df_raw, fname, is_thdr=False):
                 if 1 <= d <= 31 and 1 <= mon <= 12:
                     return f"20{y:02d}-{mon:02d}-{d:02d}"
 
-    # 3. Buscar en el nombre del archivo formatos con guiones o puntos
-    for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
-        m = re.search(pat, str(fname))
-        if m:
-            if len(m.group(1)) == 4:
-                y = int(m.group(1))
-                mon = int(m.group(2))
-                d = int(m.group(3))
-            else:
-                d = int(m.group(1))
-                mon = int(m.group(2))
-                y = int(m.group(3))
-            if mon > 12 and d <= 12:
-                d, mon = mon, d
-            if 1 <= d <= 31 and 1 <= mon <= 12:
-                return f"{y:04d}-{mon:02d}-{d:02d}"
-
-    # 4. BARRERA FISICA: Si es THDR y fallo A1 y el nombre, corta aqui.
     if is_thdr:
         return "2026-01-01"
 
-    # 5. ESCANER CIEGO: Busca dentro del Excel (SOLO autorizado para archivos de Pasajeros)
     if df_raw is not None:
         for i in range(min(50, len(df_raw))):
             for val in df_raw.iloc[i].values:
@@ -274,10 +247,6 @@ def _col_to_est_idx(col):
     return None
 
 def calc_tren_km_real_general(row):
-    """
-    💡 Coche-Km: Multiplica por 2 para trenes dobles.
-    Algoritmo universal direccional para cortes y acoples.
-    """
     k_s = min(row['km_orig'], row['km_dest'])
     k_e = max(row['km_orig'], row['km_dest'])
     man = row.get('maniobra')
@@ -322,8 +291,7 @@ get_pax_at_km = get_pax_at_km_nativo
 # 2. PROCESAMIENTO THDR (ESCANER HIBRIDO A PRUEBA DE FALLOS)
 # =============================================================================
 def procesar_thdr(data, fname, via_param=1):
-    # 💡 CORRECCIÓN: Inicializacion temprana para evitar AttributeError
-    # si la extraccion dinamica de tiempos falla parcialmente
+    # CORRECCION: Inicializacion temprana para evitar AttributeError
     est_llegada = {}
     est_salida = {}
     
@@ -390,7 +358,6 @@ def procesar_thdr(data, fname, via_param=1):
         df.columns = new_cols
         df = df.dropna(how='all').reset_index(drop=True)
 
-        # EXTRACCION DINAMICA DE TIEMPOS
         est_cols = {}
         
         for i, col in enumerate(df.columns):
@@ -407,7 +374,6 @@ def procesar_thdr(data, fname, via_param=1):
                         elif 'LLEGADA' in col_str:
                             est_llegada[idx_est] = f"T_{i}"
                             
-        # FALLBACK DE SEGURIDAD EXTREMA: Si la cabecera esta rota
         if len(est_cols) < 5:
             est_cols = {}
             est_llegada = {}
@@ -443,10 +409,6 @@ def procesar_thdr(data, fname, via_param=1):
         df['t_fin'] = df.apply(lambda row: max([_safe_get(row, c) for c in est_cols.keys() if pd.notna(_safe_get(row, c))] or [np.nan]), axis=1)
         
         def _construir_nodos(row):
-            """
-            Construye nodos (t_abs_min, km) desde timestamps reales del THDR.
-            Origen: solo salida | Intermedias: llegada + salida | Destino: solo llegada.
-            """
             est_presentes = sorted(set(list(est_llegada.keys()) + list(est_salida.keys())))
             if via_param == 2:
                 est_presentes = list(reversed(est_presentes))
@@ -707,7 +669,6 @@ def match_pax(row, df_pax):
         if not sub_date.empty:
             sub = sub_date
 
-    # 1. Busqueda Exacta
     if num_servicio != '' and 'Tren_Clean' in sub.columns:
         m = sub[sub['Tren_Clean'] == num_servicio]
         if not m.empty:
@@ -720,7 +681,6 @@ def match_pax(row, df_pax):
             nro = str(best_match.get('Nro_THDR_raw', best_match.get('Tren', '')))
             return pax_d, pax_abordo, hora, nro, best_match.name
 
-    # 2. MATCH UNIVERSAL POR TIEMPO
     if pd.notna(t_i):
         sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
         if not sub.empty:
@@ -782,7 +742,6 @@ def cargar_prevenciones(data, fname):
                 v1 = float(str(r.iloc[0]).replace(',', '.'))
                 v2 = float(str(r.iloc[1]).replace(',', '.'))
                 vel = float(re.search(r'\d+', str(r.iloc[2])).group())
-                # Escudo para corregir Puntos Kilometricos invertidos automaticamente
                 res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
             except:
                 pass
@@ -804,16 +763,17 @@ def cargar_prevenciones(data, fname):
             return []
 
 # =============================================================================
-# 5. PARSEO DE PLANILLA MAESTRA (CORREGIDO)
+# 5. PARSEO DE PLANILLA MAESTRA (CORREGIDO - DESTINO POR CODIGO EXPLICITO)
 # =============================================================================
 def parsear_planilla_maestra(data, fname):
     """
     💡 CORRECCIONES APLICADAS:
-    1. Rangos de servicio corregidos: 200-399=EB, 400-599=SA, 600+=LI
-    2. Nodos para Via 2: range(idx_orig, idx_dest - 1, -1) corregido
-    3. Deteccion de dobles: busqueda ampliada de palabras clave
-    4. Rutas con nombres correctos: PU-SA, SA-PU, EB-PU, PU-EB, LI-EB, EB-LI
+    1. Rangos de servicio: 200-399=EB, 400-599=SA, 600+=LI
+    2. Nodos para Via 2 corregidos
+    3. Deteccion de dobles ampliada (MULT, DOB, DOBLE, ACOPL, 2 UNID, 2UNID, 2UND)
+    4. Rutas con nombres correctos: PU-SA, SA-PU, EB-PU, PU-EB, LI-EB, EB-LI, PU-LI, LI-PU
     5. Rangos de busqueda de columnas ampliados
+    6. 💡 NUEVO: Deteccion de destino desde codigo explicito en texto del servicio (ej: "501-LI")
     """
     try:
         ext = fname.lower()
@@ -848,7 +808,6 @@ def parsear_planilla_maestra(data, fname):
                 hora_cols = [c for c, val in enumerate(headers) if 'HR PARTIDA' in val or 'HORA' in val or 'PARTIDA' in val or 'SALIDA' in val]
                 config_cols = [c for c, val in enumerate(headers) if 'CONF' in val or 'TIPO' in val or 'FORMA' in val or 'UNIDAD' in val or 'OBS' in val]
 
-                # 💡 CORRECCION: Rangos de busqueda ampliados para detectar columnas mas separadas
                 pairs = []
                 for vc in viaje_cols:
                     sc_cands = [sc for sc in srv_cols if sc > vc and sc - vc <= 3]
@@ -869,21 +828,31 @@ def parsear_planilla_maestra(data, fname):
                         hora_str = str(row[col_hora]).strip()
                         srv_str = str(row[col_srv]).strip()
                         
-                        # Validar formato de hora
                         if not re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', hora_str):
                             continue
                         
-                        # Extraer numero de servicio
-                        m_srv = re.search(r'(\d{3,4})', srv_str)
-                        if not m_srv:
+                        # 💡 NUEVO: Extraer numero de servicio Y posible codigo de destino
+                        servicio_num = None
+                        destino_cod = None
+                        
+                        # Buscar patron como "501-LI", "501 LI", "501LI"
+                        m_srv_dest = re.search(r'(\d{3,4})\s*[-]?\s*(LI|SA|EB|PU)', srv_str.upper())
+                        if m_srv_dest:
+                            servicio_num = int(m_srv_dest.group(1))
+                            destino_cod = m_srv_dest.group(2)
+                        else:
+                            # Buscar solo numero
+                            m_srv = re.search(r'(\d{3,4})', srv_str)
+                            if m_srv:
+                                servicio_num = int(m_srv.group(1))
+                        
+                        if servicio_num is None:
                             continue
-                        servicio_num = int(m_srv.group(1))
                         
                         t_ini = parse_time_to_mins(hora_str)
                         if t_ini is None:
                             continue
 
-                        # Extraer numero de viaje (puede no existir)
                         viaje_num = None
                         if not pd.isna(row.get(col_viaje)):
                             viaje_str = str(row[col_viaje]).strip()
@@ -891,14 +860,12 @@ def parsear_planilla_maestra(data, fname):
                             if m_viaje:
                                 viaje_num = int(m_viaje.group(1))
 
-                        # 💡 CORRECCION: Deteccion ampliada de trenes dobles
                         es_doble = False
                         if col_config is not None and pd.notna(row.get(col_config)):
                             config_str = str(row[col_config]).strip().upper()
                             if any(kw in config_str for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', '2 UNID', '2UNID', '2UND']):
                                 es_doble = True
 
-                        # Determinar via
                         if viaje_num is not None:
                             via = 1 if viaje_num % 2 == 0 else 2
                         else:
@@ -911,40 +878,51 @@ def parsear_planilla_maestra(data, fname):
                                 via = 1 if servicio_num % 2 == 0 else 2
                         
                         # ======================================================
-                        # 💡 CORRECCION: Determinar origen/destino segun rango de servicio
-                        # Rangos correctos:
-                        #   200-399 = El Belloto (EB)
-                        #   400-599 = Sargento Aldea (SA)  
-                        #   600+   = Limache (LI)
+                        # 💡 CORRECCION MEJORADA: Origen/Destino
+                        # Prioridad 1: Codigo explicito en texto (LI, SA, EB, PU)
+                        # Prioridad 2: Rango del numero de servicio
                         # ======================================================
-                        if via == 1:
-                            km_orig = KM_ACUM_SAFE[0]  # Puerto
-                            if servicio_num >= 600:
-                                km_dest = KM_ACUM_SAFE[20]  # Limache
-                            elif 400 <= servicio_num < 600:
-                                km_dest = KM_ACUM_SAFE[18]  # Sargento Aldea
-                            elif 200 <= servicio_num < 400:
-                                km_dest = KM_ACUM_SAFE[14]  # El Belloto
-                            else:
-                                km_dest = KM_ACUM_SAFE[14]  # El Belloto (default)
-                        else:
-                            km_dest = KM_ACUM_SAFE[0]  # Puerto
-                            if servicio_num >= 600:
-                                km_orig = KM_ACUM_SAFE[20]  # Limache
-                            elif 400 <= servicio_num < 600:
-                                km_orig = KM_ACUM_SAFE[18]  # Sargento Aldea
-                            elif 200 <= servicio_num < 400:
-                                km_orig = KM_ACUM_SAFE[14]  # El Belloto
-                            else:
-                                km_orig = KM_ACUM_SAFE[14]  # El Belloto (default)
+                        km_limache = KM_ACUM_SAFE[20]
+                        km_sargento = KM_ACUM_SAFE[18]
+                        km_belloto = KM_ACUM_SAFE[14]
+                        km_puerto = KM_ACUM_SAFE[0]
                         
-                        # Construir ruta y nodos
+                        if via == 1:
+                            km_orig = km_puerto
+                            if destino_cod == 'LI':
+                                km_dest = km_limache
+                            elif destino_cod == 'SA':
+                                km_dest = km_sargento
+                            elif destino_cod == 'EB':
+                                km_dest = km_belloto
+                            else:
+                                if servicio_num >= 600:
+                                    km_dest = km_limache
+                                elif 400 <= servicio_num < 600:
+                                    km_dest = km_sargento
+                                else:
+                                    km_dest = km_belloto
+                        else:
+                            km_dest = km_puerto
+                            if destino_cod == 'LI':
+                                km_orig = km_limache
+                            elif destino_cod == 'SA':
+                                km_orig = km_sargento
+                            elif destino_cod == 'EB':
+                                km_orig = km_belloto
+                            else:
+                                if servicio_num >= 600:
+                                    km_orig = km_limache
+                                elif 400 <= servicio_num < 600:
+                                    km_orig = km_sargento
+                                else:
+                                    km_orig = km_belloto
+                        
                         try:
                             idx_orig = KM_ACUM_SAFE.index(km_orig)
                             idx_dest = KM_ACUM_SAFE.index(km_dest)
                             ruta = f"{EC_SAFE[idx_orig]}-{EC_SAFE[idx_dest]}"
                             
-                            # 💡 CORRECCION: Nodos para Via 2 ahora incluyen correctamente el destino
                             if via == 1:
                                 nodos_via = [(0.0, KM_ACUM_SAFE[j]) for j in range(idx_orig, idx_dest + 1)]
                             else:
@@ -979,18 +957,25 @@ def parsear_planilla_maestra(data, fname):
                             if t_ini is None:
                                 continue
                             
-                            # Buscar numero de servicio (3-4 digitos, rango 200-1999)
                             servicio_num = None
+                            destino_cod = None
                             sc_idx = -1
+                            
                             for offset in range(1, 6):
                                 if c_idx - offset >= 0:
-                                    check_val = row_vals[c_idx - offset].strip()
-                                    if check_val.isdigit() and 200 <= int(check_val) <= 1999:
-                                        servicio_num = int(check_val)
+                                    check_val = row_vals[c_idx - offset].strip().upper()
+                                    m_srv_dest = re.search(r'(\d{3,4})\s*[-]?\s*(LI|SA|EB|PU)', check_val)
+                                    if m_srv_dest:
+                                        servicio_num = int(m_srv_dest.group(1))
+                                        destino_cod = m_srv_dest.group(2)
+                                        sc_idx = c_idx - offset
+                                        break
+                                    m_srv = re.search(r'(\d{3,4})', check_val)
+                                    if m_srv and 200 <= int(m_srv.group(1)) <= 1999:
+                                        servicio_num = int(m_srv.group(1))
                                         sc_idx = c_idx - offset
                                         break
                             
-                            # Buscar numero de viaje
                             viaje_num = None
                             if sc_idx != -1:
                                 for offset in range(1, 4):
@@ -1003,7 +988,6 @@ def parsear_planilla_maestra(data, fname):
                             if servicio_num is None:
                                 continue
 
-                            # 💡 CORRECCION: Deteccion ampliada de dobles
                             es_doble = False
                             for offset_unidad in range(1, 4):
                                 if c_idx + offset_unidad < len(row_vals):
@@ -1012,7 +996,6 @@ def parsear_planilla_maestra(data, fname):
                                         es_doble = True
                                         break
 
-                            # Determinar via
                             if viaje_num is not None:
                                 via = 1 if viaje_num % 2 == 0 else 2
                             else:
@@ -1024,27 +1007,41 @@ def parsear_planilla_maestra(data, fname):
                                 else:
                                     via = 1 if servicio_num % 2 == 0 else 2
                             
-                            # 💡 CORRECCION: Origen/Destino segun rango de servicio
+                            km_limache = KM_ACUM_SAFE[20]
+                            km_sargento = KM_ACUM_SAFE[18]
+                            km_belloto = KM_ACUM_SAFE[14]
+                            km_puerto = KM_ACUM_SAFE[0]
+                            
                             if via == 1:
-                                km_orig = KM_ACUM_SAFE[0]
-                                if servicio_num >= 600:
-                                    km_dest = KM_ACUM_SAFE[20]
-                                elif 400 <= servicio_num < 600:
-                                    km_dest = KM_ACUM_SAFE[18]
-                                elif 200 <= servicio_num < 400:
-                                    km_dest = KM_ACUM_SAFE[14]
+                                km_orig = km_puerto
+                                if destino_cod == 'LI':
+                                    km_dest = km_limache
+                                elif destino_cod == 'SA':
+                                    km_dest = km_sargento
+                                elif destino_cod == 'EB':
+                                    km_dest = km_belloto
                                 else:
-                                    km_dest = KM_ACUM_SAFE[14]
+                                    if servicio_num >= 600:
+                                        km_dest = km_limache
+                                    elif 400 <= servicio_num < 600:
+                                        km_dest = km_sargento
+                                    else:
+                                        km_dest = km_belloto
                             else:
-                                km_dest = KM_ACUM_SAFE[0]
-                                if servicio_num >= 600:
-                                    km_orig = KM_ACUM_SAFE[20]
-                                elif 400 <= servicio_num < 600:
-                                    km_orig = KM_ACUM_SAFE[18]
-                                elif 200 <= servicio_num < 400:
-                                    km_orig = KM_ACUM_SAFE[14]
+                                km_dest = km_puerto
+                                if destino_cod == 'LI':
+                                    km_orig = km_limache
+                                elif destino_cod == 'SA':
+                                    km_orig = km_sargento
+                                elif destino_cod == 'EB':
+                                    km_orig = km_belloto
                                 else:
-                                    km_orig = KM_ACUM_SAFE[14]
+                                    if servicio_num >= 600:
+                                        km_orig = km_limache
+                                    elif 400 <= servicio_num < 600:
+                                        km_orig = km_sargento
+                                    else:
+                                        km_orig = km_belloto
                             
                             try:
                                 idx_orig = KM_ACUM_SAFE.index(km_orig)
