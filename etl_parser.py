@@ -1,916 +1,729 @@
-import numpy as np
 import pandas as pd
-from datetime import datetime
-
-# Escudo Defensivo Cloud: Evita NameErrors si Streamlit limpia la memoria
-try:
-    import config
-except ImportError:
-    pass
-
-def _get_val(name, default):
-    try: return getattr(config, name, default)
-    except Exception: return default
-
-# Importación segura de la lógica de pasajeros desde el módulo ETL
-try:
-    from etl_parser import get_pax_at_km_nativo
-except ImportError:
-    def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0): 
-        return pax_max_fallback
+import numpy as np
+import re
+import unicodedata
+from io import BytesIO
+from datetime import datetime, date, timedelta
 
 # =============================================================================
-# 0. GOBERNADOR OPERATIVO (CALENDARIO DE TRACCIÓN EFE)
+# CONSTANTES BLINDADAS (Protección contra fallos de caché en Streamlit Cloud)
 # =============================================================================
+ESTACIONES_SAFE = ['Puerto','Bellavista','Francia','Baron','Portales','Recreo','Miramar','Viña del Mar','Hospital','Chorrillos','El Salto','Valencia','Quilpue','El Sol','El Belloto','Las Americas','La Concepcion','Villa Alemana','Sargento Aldea','Peñablanca','Limache']
+EC_SAFE = ['PU','BE','FR','BA','PO','RE','MI','VM','HO','CH','ES','VAL','QU','SO','EB','AM','CO','VL','SA','PE','LI']
+PAX_COLS_SAFE = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
+KM_ACUM_SAFE = [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13]
+KM_TOTAL_SAFE = 43.13
+N_EST_SAFE = 21
 FERIADOS_SAFE = ['2026-01-01', '2026-04-03', '2026-04-04', '2026-05-01', '2026-05-21', '2026-06-21', '2026-07-16', '2026-08-15', '2026-09-18', '2026-09-19', '2026-10-12', '2026-10-31', '2026-12-08', '2026-12-25']
 
-def obtener_pct_traccion_operativo(row, pct_trac_ui):
-    """
-    Regla de Conducción Oficial EFE:
-    - Lunes a Viernes (Laboral): 75%
-    - Sábados, Domingos y Festivos: 50%
-    """
-    fecha_str = str(row.get('Fecha_str', '')).strip()
+# =============================================================================
+# 1. UTILIDADES Y PARSEOS BÁSICOS
+# =============================================================================
+
+def mins_to_time_str(mins):
+    if pd.isna(mins) or np.isinf(mins): return '--:--:--'
+    try:
+        m_val = float(mins)
+        h, m = int((m_val // 60) % 24), int(m_val % 60)
+        s = int(round((m_val * 60) % 60))
+        if s == 60: s, m = 0, m + 1
+        if m == 60: m, h = 0, h + 1
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    except: return '--:--:--'
+
+def parse_time_to_mins(val):
+    if pd.isna(val): return None
+    sv = str(val).strip().lower()
+    if sv in ('', 'nan', 'none', 'nat'): return None
+    if ' ' in sv: sv = sv.split(' ')[-1]
+    m = re.search(r'(\d{1,2}):(\d{2})(?::(\d{2}))?', sv)
+    if m: return int(m.group(1)) * 60.0 + int(m.group(2)) + (int(m.group(3)) / 60.0 if m.group(3) else 0.0)
+    try:
+        f = float(sv)
+        return f * 1440.0 if f < 1.0 else (int(f // 100) * 60.0) + (f % 100) if f < 2400.0 else None
+    except: return None
+
+def parse_excel_date(val):
+    if pd.isna(val): return None
+    if isinstance(val, (datetime, pd.Timestamp)): return val.strftime('%Y-%m-%d')
+    v_str = str(val).strip()
+    v_str_num = re.sub(r'\.0+$', '', v_str).split(' ')[0]
     
-    if fecha_str and fecha_str.lower() not in ('nan', 'none', ''):
+    if v_str_num.isdigit():
+        if 40000 <= int(v_str_num) <= 60000:
+            try: return (date(1899, 12, 30) + timedelta(days=int(v_str_num))).strftime('%Y-%m-%d')
+            except: pass
+        elif len(v_str_num) == 8:
+            y, m, d = (int(v_str_num[0:4]), int(v_str_num[4:6]), int(v_str_num[6:8])) if int(v_str_num[0:4]) >= 2000 else (int(v_str_num[4:8]), int(v_str_num[2:4]), int(v_str_num[0:2]))
+            if m > 12 >= d: d, m = m, d
+            if 1 <= d <= 31 and 1 <= m <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{m:02d}-{d:02d}"
+        elif len(v_str_num) == 6:
+            d, m, y = int(v_str_num[0:2]), int(v_str_num[2:4]), int(v_str_num[4:6])
+            if m > 12 >= d: d, m = m, d
+            if 1 <= d <= 31 and 1 <= m <= 12 and 20 <= y <= 99: return f"20{y:02d}-{m:02d}-{d:02d}"
+        elif len(v_str_num) == 5:
+            d, m, y = int(v_str_num[0:1]), int(v_str_num[1:3]), int(v_str_num[3:5])
+            if m > 12 >= d: d, m = m, d
+            if 1 <= d <= 31 and 1 <= m <= 12 and 20 <= y <= 99: return f"20{y:02d}-{m:02d}-{d:02d}"
+
+    for pat in [r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b', r'\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b']:
+        m_dt = re.search(pat, v_str)
+        if m_dt:
+            if len(m_dt.group(1)) == 4:
+                y, m_val, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+            else:
+                d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+            if y < 100: y += 2000
+            if m_val > 12 >= d: d, m_val = m_val, d
+            if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
+            
+    return None
+
+def extraer_fecha_segura(df_raw, fname, is_thdr=False):
+    if is_thdr and df_raw is not None and not df_raw.empty:
         try:
-            if fecha_str in FERIADOS_SAFE:
-                return 50.0
-            d = datetime.strptime(fecha_str, '%Y-%m-%d')
-            if d.weekday() >= 5:  # 5 es Sábado, 6 es Domingo
-                return 50.0
-            return 75.0
-        except:
-            pass
-            
-    # Fallback al slider de la interfaz solo si no hay fecha (ej. Modo Laboratorio)
-    return pct_trac_ui
+            a1_val = str(df_raw.iloc[0, 0]).strip()
+            a1_num = re.sub(r'\.0+$', '', a1_val)
+            if a1_num.isdigit():
+                if len(a1_num) == 5: 
+                    d, m, y = int(a1_num[0:1]), int(a1_num[1:3]), int(a1_num[3:5])
+                    if 1 <= d <= 31 and 1 <= m <= 12: return f"20{y:02d}-{m:02d}-{d:02d}"
+                elif len(a1_num) == 6: 
+                    d, m, y = int(a1_num[0:2]), int(a1_num[2:4]), int(a1_num[4:6])
+                    if 1 <= d <= 31 and 1 <= m <= 12: return f"20{y:02d}-{m:02d}-{d:02d}"
+                elif 40000 <= int(a1_num) <= 60000:
+                    return (date(1899, 12, 30) + timedelta(days=int(a1_num))).strftime('%Y-%m-%d')
+            dt = parse_excel_date(a1_val)
+            if dt: return dt
+        except: pass
 
-# =============================================================================
-# 1. OPTIMIZACIÓN EXTREMA: MATRICES PRE-CALCULADAS O(1)
-# =============================================================================
-_VEL_ARRAY_NORM = np.zeros(45000, dtype=float)
-_VEL_ARRAY_RM = np.zeros(45000, dtype=float)
-_profile = _get_val('SPEED_PROFILE', [])
-for ki, kf, _, vn, vr in _profile:
-    start_idx = int(ki)
-    end_idx = min(int(kf) + 1, 45000)
-    _VEL_ARRAY_NORM[start_idx:end_idx] = vn
-    _VEL_ARRAY_RM[start_idx:end_idx] = vr
+    s_fname = re.sub(r'\D', '', str(fname))
+    for pat in [r'(\d{4})(\d{2})(\d{2})', r'(\d{2})(\d{2})(\d{4})', r'(\d{2})(\d{2})(\d{2})']:
+        matches = re.finditer(pat, s_fname)
+        for m in matches:
+            if len(m.group(0)) == 8:
+                y, mon, d = (int(m.group(1)), int(m.group(2)), int(m.group(3))) if int(m.group(1)) >= 2000 else (int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                if mon > 12 >= d: d, mon = mon, d
+                if 1 <= d <= 31 and 1 <= mon <= 12 and 2000 <= y <= 2100: return f"{y:04d}-{mon:02d}-{d:02d}"
+            elif len(m.group(0)) == 6:
+                d, mon, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if mon > 12 >= d: d, mon = mon, d
+                if 1 <= d <= 31 and 1 <= mon <= 12 and 20 <= y <= 99: return f"20{y:02d}-{mon:02d}-{d:02d}"
 
-_PEND_ARRAY_V1 = np.zeros(45000, dtype=float)
-_PEND_ARRAY_V2 = np.zeros(45000, dtype=float)
-_e_km = _get_val('_ELEV_KM', [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13])
-_e_m = _get_val('_ELEV_M', [12, 10, 10, 10, 18, 15, 12, 15, 35, 50, 55, 88, 122, 132, 142, 148, 155, 162, 175, 198, 216])
+    for pat in [r'\b(\d{1,2})[-_\.](\d{1,2})[-_\.](\d{4})\b', r'\b(\d{4})[-_\.](\d{1,2})[-_\.](\d{1,2})\b']:
+        m = re.search(pat, str(fname))
+        if m:
+            if len(m.group(1)) == 4:
+                y, mon, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            else:
+                d, mon, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if mon > 12 >= d: d, mon = mon, d
+            if 1 <= d <= 31 and 1 <= mon <= 12: return f"{y:04d}-{mon:02d}-{d:02d}"
 
-if len(_e_km) == len(_e_m) and len(_e_km) > 1:
-    for j in range(1, len(_e_km)):
-        s_m = int(_e_km[j-1] * 1000)
-        e_m = min(int(_e_km[j] * 1000), 44999)
-        if e_m > s_m:
-            pend = ((_e_m[j] - _e_m[j-1]) / max(0.001, (_e_km[j] - _e_km[j-1])*1000)) * 1000.0
-            _PEND_ARRAY_V1[s_m:e_m] = pend
-            _PEND_ARRAY_V2[s_m:e_m] = -pend
+    if is_thdr: return "2026-01-01"
 
-# 💡 INYECCIÓN FRONTERA 2: Arreglo de Curvaturas de Alta Velocidad (Von Röckl)
-_CURVA_ARRAY = np.zeros(45000, dtype=float)
-_curvas = _get_val('CURVAS_KM', [])
-for ki, kf, r_m in _curvas:
-    if r_m <= 0: continue
-    if r_m >= 300: w_c = 600.0 / (r_m - 55.0)
-    else: w_c = 500.0 / (r_m - 30.0)
-    s_i, e_i = int(ki * 1000), min(int(kf * 1000), 44999)
-    if s_i < e_i: _CURVA_ARRAY[s_i:e_i] = w_c
-
-# =============================================================================
-# 1.5 TABLA DE RESISTENCIAS DE CATENARIA POR SECCIÓN (Ω/km)
-# =============================================================================
-def _get_resistencia_catenaria_km(km):
-    """
-    Retorna la resistencia de catenaria en Ω/km para una posición km dada.
-    Datos reales de MERVAL - coinciden con red_electrica.py
-    """
-    if km < 2.25:
-        return 0.0638
-    elif km < 6.80:
-        return 0.0530
-    elif km < 10.92:
-        return 0.0495
-    elif km < 21.41:
-        return 0.0417
-    elif km < 30.36:
-        return 0.0399
-    else:
-        return 0.0355
-
-def _calcular_resistencia_catenaria(km1, km2):
-    """
-    Calcula la resistencia total (Ω) del segmento de catenaria entre dos puntos.
-    Considera que puede cruzar múltiples secciones con diferente resistividad.
-    """
-    if abs(km1 - km2) < 0.001:
-        return 0.0
-    
-    k_min, k_max = min(km1, km2), max(km1, km2)
-    
-    # Puntos de transición de sección
-    transiciones = [0.0, 2.25, 6.80, 10.92, 21.41, 30.36, 43.13]
-    
-    r_total = 0.0
-    for i in range(len(transiciones) - 1):
-        t_ini = transiciones[i]
-        t_fin = transiciones[i+1]
-        
-        # Solapar con el segmento [k_min, k_max]
-        s_ini = max(k_min, t_ini)
-        s_fin = min(k_max, t_fin)
-        
-        if s_fin > s_ini:
-            r_km = _get_resistencia_catenaria_km((s_ini + s_fin) / 2.0)
-            r_total += r_km * (s_fin - s_ini)
-    
-    return r_total
-
-# =============================================================================
-# 2. FUNCIONES BASE DE MOVIMIENTO Y RADAR ELÉCTRICO
-# =============================================================================
-def vel_at_km(km_km, via, use_rm):
-    idx = min(44999, max(0, int(km_km * 1000.0)))
-    return _VEL_ARRAY_RM[idx] if use_rm else _VEL_ARRAY_NORM[idx]
-
-def km_at_t(t_ini, t_fin, t, via, use_rm=False, km_orig=0.0, km_dest=0.0, nodos=None, t_arr=None):
-    """
-    💡 FIX APLICADO (Curva S): Reemplaza la velocidad constante lineal por una interpolación 
-    trigonométrica no-lineal. Esto reactiva las tasas de aceleración y frenado para la red eléctrica.
-    """
-    if nodos and len(nodos) >= 2:
-        if t <= nodos[0][0]: return nodos[0][1]
-        if t >= nodos[-1][0]: return nodos[-1][1]
-        
-        for i in range(len(nodos) - 1):
-            t1, k1 = nodos[i]
-            t2, k2 = nodos[i+1]
-            if t1 <= t <= t2:
-                if t2 == t1: return k1
-                frac = (t - t1) / (t2 - t1)
-                # Curva-S trigonométrica (Suave en los extremos, rápido al medio)
-                frac_smooth = (1.0 - np.cos(frac * np.pi)) / 2.0
-                return k1 + (k2 - k1) * frac_smooth
-                
-    dur = t_fin - t_ini
-    if dur <= 0: return km_orig
-    frac = max(0.0, min(1.0, (t - t_ini) / dur))
-    frac_smooth = (1.0 - np.cos(frac * np.pi)) / 2.0
-    return km_orig + (km_dest - km_orig) * frac_smooth
-
-def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos=None, t_arr=None):
-    if not nodos or len(nodos) < 2: return "CRUISE", 60.0
-    if t_arr is None: t_arr = [n[0] for n in nodos]
-    
-    if t <= t_arr[0] or t >= t_arr[-1]: return "DWELL", 0.0
-    
-    dt_sample = 0.5
-    km_now = km_at_t(t_arr[0], t_arr[-1], t, r_via, use_rm, km_orig, km_dest, nodos, t_arr)
-    km_prev = km_at_t(t_arr[0], t_arr[-1], t - dt_sample, r_via, use_rm, km_orig, km_dest, nodos, t_arr)
-    km_next = km_at_t(t_arr[0], t_arr[-1], t + dt_sample, r_via, use_rm, km_orig, km_dest, nodos, t_arr)
-    
-    v_now = abs(km_now - km_prev) * 1000.0 / dt_sample 
-    v_next = abs(km_next - km_now) * 1000.0 / dt_sample
-    
-    a_ms2 = (v_next - v_now) / dt_sample
-    v_kmh = v_now * 3.6
-    
-    if a_ms2 > 0.15: return "ACCEL", v_kmh
-    elif a_ms2 < -0.15: return "BRAKE", v_kmh
-    elif v_kmh < 1.0: return "DWELL", 0.0
-    else: return "CRUISE", v_kmh
-
-def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", f_compresor_dwell=1.08):
-    hora_int = int(hora_decimal) % 24
-    try: perfil = _get_val('AUX_HVAC_HORA', {}).get(estacion_anio, [0.5]*24)
-    except: perfil = [0.5]*24
-    if not perfil or len(perfil) < 24: perfil = [0.5]*24
-    
-    f_hvac = perfil[hora_int]
-    f_ocup = 1.0
-    if cap_max > 0:
-        ocup = min(1.0, pax_abordo / cap_max)
-        if estacion_anio == "verano": f_ocup = 1.0 + 0.05 * ocup
-        elif estacion_anio == "invierno": f_ocup = 1.0 - 0.12 * ocup
-        else: f_ocup = 1.0 - 0.06 * ocup
-
-    # Factor de demanda neumática según estado de marcha
-    if estado_marcha == "DWELL":       f_marcha = f_compresor_dwell
-    elif estado_marcha == "ACCEL":     f_marcha = 0.95
-    elif estado_marcha in ("BRAKE", "BRAKE_STATION"): f_marcha = 1.05
-    elif estado_marcha == "COAST":     f_marcha = 0.90
-    else:                              f_marcha = 1.0
-
-    frac_base = _get_val('FRAC_BASE', 0.21)
-    frac_hvac = _get_val('FRAC_HVAC', 0.89)
-
-    aux_base = aux_kw_nominal * frac_base
-    aux_hvac_val = aux_kw_nominal * frac_hvac * f_hvac * f_ocup * f_marcha
-    return aux_base + aux_hvac_val
-
-# =============================================================================
-# 3. KILOMETRAJE ROBUSTO (Tren-km) E INMUNE A DIRECCIÓN
-# =============================================================================
-def _calc_tren_km_real_motor(row):
-    """
-    💡 FIX APLICADO: Algoritmo universal de cálculo de Kilometraje.
-    Evalúa matemáticamente si es un Corte o un Acople respetando Vía 1 y Vía 2.
-    """
-    k_o = row.get('km_orig', 0.0)
-    k_d = row.get('km_dest', 0.0)
-    if pd.isna(k_o) or pd.isna(k_d): return 0.0
-    
-    man = row.get('maniobra')
-    is_doble = row.get('doble', False)
-    
-    if not man or pd.isna(man) or str(man).strip().lower() in ['none', '']:
-        return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
-    
-    km_man = None
-    man_upper = str(man).upper()
-    if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper:
-        km_man = 25.3
-    elif 'CORTE_SA' in man_upper or 'ACOPLE_SA' in man_upper:
-        km_man = 29.1
-        
-    if km_man is None:
-        return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
-    
-    if min(k_o, k_d) <= km_man <= max(k_o, k_d):
-        dist_antes_maniobra = abs(km_man - k_o)
-        dist_despues_maniobra = abs(k_d - km_man)
-        
-        if 'CORTE' in man_upper:
-            return (dist_antes_maniobra * 2.0) + (dist_despues_maniobra * 1.0)
-        elif 'ACOPLE' in man_upper:
-            return (dist_antes_maniobra * 1.0) + (dist_despues_maniobra * 2.0)
-            
-    return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
-
-# =============================================================================
-# 4. MOTOR CINEMÁTICO-TERMODINÁMICO (W = F * d | DINÁMICO)
-# =============================================================================
-def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False, prevenciones=None):
-    flota_db = _get_val('FLOTA', {})
-    f = flota_db.get(tipo_tren, {})
-    if not f: return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    
-    # 💡 PRE-CÁLCULO DEL HITO DE MANIOBRA CON UPPERCASE
-    km_man = None
-    man_upper = str(maniobra).upper() if maniobra and not pd.isna(maniobra) else ''
-    if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper:
-        km_man = 25.3
-    elif 'CORTE_SA' in man_upper or 'ACOPLE_SA' in man_upper:
-        km_man = 29.1
-    dist_to_maniobra = abs(km_man - km_ini) * 1000.0 if km_man is not None else -1
-    
-    a_freno_op = f.get('a_freno_ms2', 1.2) * 0.9 
-    v_freno_min = f.get('v_freno_min', 3.81)
-    f_compresor_especifico = f.get('f_compresor_dwell', 1.08)
-    
-    k_s, k_e = km_ini, km_fin
-    dist_total_m = abs(k_e - k_s) * 1000.0
-    if dist_total_m <= 0: return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    
-    es_sintetico = True
-    duracion_real_h = 0.0
-    if nodos and len(nodos) >= 2:
-        if nodos[-1][0] > 0.0:
-            es_sintetico = False
-            duracion_real_h = (nodos[-1][0] - nodos[0][0]) / 60.0
-            
-    v_limit_thdr = 120.0
-    if not es_sintetico and duracion_real_h > 0:
-        dist_total_km = abs(k_e - k_s)
-        v_promedio_kmh = dist_total_km / duracion_real_h
-        v_limit_thdr = v_promedio_kmh * 1.35
-    
-    trc, aux, reg, t_horas = 0.0, 0.0, 0.0, 0.0
-    
-    paradas_km = [n[1] for n in nodos] if nodos else [k_s, k_e]
-    k_min, k_max = min(k_s, k_e), max(k_s, k_e)
-    paradas_km = [k for k in paradas_km if k_min <= k <= k_max]
-    if k_s not in paradas_km: paradas_km.append(k_s)
-    if k_e not in paradas_km: paradas_km.append(k_e)
-    paradas_km = list(set(paradas_km))
-    paradas_km.sort(reverse=(via_op == 2))
-    
-    ser_data = _get_val('SER_DATA', [(4.9, "SER PO"), (12.7, "SER ES"), (25.5, "SER EB"), (28.7, "SER VA")])
-    dt = 1.0  
-    
-    n_uni_final = 2 if doble else 1
-    aux_kw_nominal_final = 0.0
-    
-    for i in range(len(paradas_km)-1):
-        p_ini, p_fin = paradas_km[i], paradas_km[i+1]
-        es_ultima_parada = (i == len(paradas_km) - 2)
-        dist_tramo = abs(p_fin - p_ini) * 1000.0
-        if dist_tramo <= 0: continue
-        
-        pos_m = p_ini * 1000.0
-        dist_recorrida = 0.0
-        v_ms = 0.0
-        a_prev = 0.0 
-        estado_marcha = "ACCEL"
-        
-        while dist_recorrida < dist_tramo:
-            dist_restante = dist_tramo - dist_recorrida
-            if dist_restante < 0.1: break
-            
-            km_actual = (pos_m + dist_recorrida) / 1000.0 if via_op == 1 else (pos_m - dist_recorrida) / 1000.0
-            idx_km = min(44999, max(0, int(km_actual * 1000)))
-            
-            # 💡 Inyección Dinámica de Masa (n_uni) EN EL BUCLE
-            dist_recorrida_total = abs(km_actual - km_ini) * 1000.0
-            es_doble = doble
-            
-            if km_man is not None and min(km_ini, km_fin) <= km_man <= max(km_ini, km_fin) and man_upper:
-                if 'CORTE' in man_upper:
-                    es_doble = True if dist_recorrida_total <= dist_to_maniobra else False
-                elif 'ACOPLE' in man_upper:
-                    es_doble = False if dist_recorrida_total <= dist_to_maniobra else True
-                    
-            n_uni_inst = 2 if es_doble else 1
-            n_uni_final = n_uni_inst
-            
-            long_tren_km = (0.070 if tipo_tren == 'SFE' else 0.046) * n_uni_inst
-            
-            pax_mid = get_pax_at_km_nativo(pax_dict, km_actual, via_op, pax_abordo) if pax_dict else pax_abordo
-            pax_kg_total = pax_mid * _get_val('PAX_KG', 75.0)
-            
-            masa_estatica_kg = (f.get('tara_t', 86.1) * 1000 * n_uni_inst) + pax_kg_total
-            masa_dinamica_kg = masa_estatica_kg + (f.get('m_iner_t', 7.2) * 1000 * n_uni_inst)
-            
-            f_trac_max_n_nominal = f.get('f_trac_max_kn', 110.0) * 1000 * n_uni_inst
-            p_max_w_nominal = f.get('p_max_kw', 720.0) * 1000 * n_uni_inst
-            f_freno_max_n = f.get('f_freno_max_kn', 105.0) * 1000 * n_uni_inst
-            p_freno_max_w = f.get('p_freno_max_kw', f.get('p_max_kw', 720.0)*1.2) * 1000 * n_uni_inst
-            
-            if estacion_anio == "invierno": aux_kw_nominal = f.get('aux_kw_heat', 65.16) * n_uni_inst
-            else: aux_kw_nominal = f.get('aux_kw_cool', 58.76) * n_uni_inst
-            aux_kw_nominal_final = aux_kw_nominal
-            
-            v_cons_kmh = max(5.0, _VEL_ARRAY_RM[idx_km] if use_rm else _VEL_ARRAY_NORM[idx_km])
-            if v_consigna_override is not None: v_cons_kmh = min(v_cons_kmh, v_consigna_override)
-            v_cons_kmh = min(v_cons_kmh, v_limit_thdr)
-            
-            if prevenciones:
-                for p in prevenciones:
-                    if p['via'] == via_op:
-                        if via_op == 1:
-                            km_inicio_restriccion = p['km_min']
-                            km_fin_restriccion = p['km_max'] + long_tren_km
-                            km_aviso = p['km_min'] - 1.5
-                            if km_aviso <= km_actual <= km_fin_restriccion:
-                                if km_inicio_restriccion <= km_actual <= km_fin_restriccion:
-                                    v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
-                                else:
-                                    dist_a_prev = (km_inicio_restriccion - km_actual) * 1000.0
-                                    v_p_ms = p['v_kmh'] / 3.6
-                                    if v_ms > v_p_ms:
-                                        d_freno_prev = (v_ms**2 - v_p_ms**2) / (2 * a_freno_op)
-                                        if dist_a_prev <= d_freno_prev + 50: 
-                                            v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+    if df_raw is not None:
+        for i in range(min(50, len(df_raw))):
+            for val in df_raw.iloc[i].values:
+                if pd.isna(val): continue
+                v_str = str(val).strip()
+                for pat in [r'\b(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b', r'\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b']:
+                    m_dt = re.search(pat, v_str)
+                    if m_dt:
+                        if len(m_dt.group(1)) == 4:
+                            y, m_val, d = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
                         else:
-                            km_inicio_restriccion = p['km_max']
-                            km_fin_restriccion = p['km_min'] - long_tren_km
-                            km_aviso = p['km_max'] + 1.5
-                            if km_fin_restriccion <= km_actual <= km_aviso:
-                                if km_fin_restriccion <= km_actual <= km_inicio_restriccion:
-                                    v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
-                                else:
-                                    dist_a_prev = (km_actual - km_inicio_restriccion) * 1000.0
-                                    v_p_ms = p['v_kmh'] / 3.6
-                                    if v_ms > v_p_ms:
-                                        d_freno_prev = (v_ms**2 - v_p_ms**2) / (2 * a_freno_op)
-                                        if dist_a_prev <= d_freno_prev + 50: 
-                                            v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+                            d, m_val, y = int(m_dt.group(1)), int(m_dt.group(2)), int(m_dt.group(3))
+                        if y < 100: y += 2000
+                        if m_val > 12 >= d: d, m_val = m_val, d
+                        if 1 <= d <= 31 and 1 <= m_val <= 12: return f"{y:04d}-{m_val:02d}-{d:02d}"
+                        
+    return "2026-01-01"
 
-            # Restricciones Toperas
-            if via_op == 1 and km_actual >= 42.93: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual < 43.03 else 10.0)
-            if via_op == 2 and km_actual <= 0.20: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual > 0.10 else 10.0)
-            
-            v_kmh = v_ms * 3.6
-            if n_uni_inst == 2: f_davis = (f.get('davis_A',1615.0) * 2) + (f.get('davis_B',0.0) * 2 * v_kmh) + (f.get('davis_C',0.54) * 1.35 * (v_kmh**2))
-            else: f_davis = f.get('davis_A',1615.0) + f.get('davis_B',0.0)*v_kmh + f.get('davis_C',0.54)*(v_kmh**2)
-                
-            f_pend = 0.0
-            if use_pend:
-                pend_permil = _PEND_ARRAY_V1[idx_km] if via_op == 1 else _PEND_ARRAY_V2[idx_km]
-                f_pend = masa_estatica_kg * 9.81 * (pend_permil / 1000.0)
-                
-            f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
-            f_res_total = f_davis + f_pend + f_curva
-            
-            # 💡 SQUEEZE CONTROL MEJORADO: Usa resistencia real de catenaria por sección
-            dist_ser = min([abs(km_actual - s[0]) for s in ser_data]) if ser_data else 5.0
-            r_linea = _get_resistencia_catenaria_km(km_actual) * dist_ser  # ← Resistencia real
-            i_req = (f_trac_max_n_nominal * max(0.1, v_ms)) / 3000.0
-            v_pantografo = 3000.0 - (i_req * r_linea)
-            
-            factor_squeeze = 1.0
-            if v_pantografo < 2800.0:
-                factor_squeeze = max(0.0, (v_pantografo - 2000.0) / 800.0)
-                
-            f_disp_trac_real = f_trac_max_n_nominal * factor_squeeze
-            p_max_op_w_real = p_max_w_nominal * factor_squeeze
-            
-            d_freno_req = (v_ms**2) / (2 * a_freno_op) if v_ms > 0 else 0
-            f_disp_freno = min(f_freno_max_n, p_freno_max_w / max(0.1, v_ms)) if v_kmh >= v_freno_min else 0.0
-            
-            # 💡 CORRECCIÓN DE LÓGICA DE FRENADO: Parada forzada en el último metro
-            if es_ultima_parada and dist_restante < 1.0:
-                estado_marcha = "BRAKE_STATION"
-                # Forzar fin de tramo sin consumir más tiempo
-                t_horas += 0.1 / 3600.0
-                dist_recorrida += dist_restante
-                v_ms = 0.0
+def clean_id(x):
+    try:
+        nums = re.findall(r'\d+', str(x).strip().lower().replace(".0", ""))
+        return str(int(nums[0])) if nums else str(x).strip().upper()
+    except: return str(x).strip().upper()
+
+def clean_primary_key(x):
+    if pd.isna(x): return ''
+    s = re.sub(r'[^A-Z0-9]', '', str(x).strip().upper().replace('.0', ''))
+    return s.lstrip('0') if s not in ['NAN', ''] else ''
+
+def clasificar_dia(d_str):
+    try:
+        d = datetime.strptime(d_str, '%Y-%m-%d')
+        if d_str in FERIADOS_SAFE or d.weekday() == 6: return 'Domingo/Festivo'
+        if d.weekday() == 5: return 'Sábado'
+        return 'Laboral'
+    except: return 'Laboral'
+
+def _col_to_est_idx(col):
+    cu = re.sub(r'[^a-z0-9]','', str(col).lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
+    for i, est in enumerate(ESTACIONES_SAFE):
+        ne = re.sub(r'[^a-z0-9]','', est.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n'))
+        if ne in cu: return i
+    return None
+
+def calc_tren_km_real_general(row):
+    k_s, k_e = min(row['km_orig'], row['km_dest']), max(row['km_orig'], row['km_dest'])
+    man = row.get('maniobra')
+    if man in ['CORTE_BTO','ACOPLE_BTO','CORTE_PU_SA_BTO']:
+        km_man = KM_ACUM_SAFE[14]
+        if k_s <= km_man <= k_e: return abs(km_man-k_s)*2.0 + abs(k_e-km_man)*1.0
+    elif man in ['CORTE_SA','ACOPLE_SA']:
+        km_man = KM_ACUM_SAFE[18]
+        if k_s <= km_man <= k_e: return abs(km_man-k_s)*2.0 + abs(k_e-km_man)*1.0
+    return abs(k_e-k_s) * (2.0 if row.get('doble',False) else 1.0)
+
+def get_pax_at_km_nativo(pax_d, km_pos, via, pax_max_fallback=0):
+    if not pax_d or not isinstance(pax_d, dict): return pax_max_fallback
+    if sum(pax_d.values()) == 0 and pax_max_fallback > 0: return pax_max_fallback
+    pax_val = 0
+    if via == 1:
+        for i in range(N_EST_SAFE):
+            if km_pos >= KM_ACUM_SAFE[i]:
+                val = pax_d.get(PAX_COLS_SAFE[i])
+                if val is not None: pax_val = val
+            else: break
+    else:
+        for i in range(N_EST_SAFE - 1, -1, -1):
+            if km_pos <= KM_ACUM_SAFE[i]:
+                val = pax_d.get(PAX_COLS_SAFE[i])
+                if val is not None: pax_val = val
+            else: break
+    return int(pax_val)
+
+get_pax_at_km = get_pax_at_km_nativo
+
+# =============================================================================
+# 2. PROCESAMIENTO THDR
+# =============================================================================
+def procesar_thdr(data, fname, via_param=1):
+    # 💡 CORRECCIÓN: Inicialización temprana para evitar AttributeError
+    est_llegada = {}
+    est_salida = {}
+    
+    try:
+        ext = fname.lower()
+        if ext.endswith('.csv'):
+            try: raw = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)
+            except: raw = pd.read_csv(BytesIO(data), header=None, sep=';', encoding='latin-1', dtype=str)
+        else:
+            try:
+                eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
+                raw = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
+            except Exception as e:
+                if any(x in str(e).lower() for x in ["html", "xml", "format", "token", "unsupported"]):
+                    try:
+                        dfs = pd.read_html(BytesIO(data))
+                        raw = dfs[0].astype(str)
+                    except Exception as html_e:
+                        return pd.DataFrame(), f"Fallo al leer XLS como HTML: {str(html_e)}"
+                else:
+                    return pd.DataFrame(), f"Error al abrir Excel: {str(e)}"
+
+        if raw is None or raw.empty or raw.shape[0] < 5: 
+            return pd.DataFrame(), f"El archivo está vacío o no tiene suficientes filas."
+        
+        fecha_str = extraer_fecha_segura(raw, fname, is_thdr=True)
+
+        header_idx = -1
+        for i in range(min(20, len(raw))):
+            row_str = ' '.join([str(x).upper() for x in raw.iloc[i].values if pd.notna(x)])
+            if ('MOTRIZ' in row_str or 'MAQUINISTA' in row_str) and any(k in row_str for k in ['VIAJE', 'TREN', 'SERVICIO']):
+                header_idx = i
                 break
-            elif dist_restante <= d_freno_req + (v_ms * dt * 1.2) and (es_ultima_parada or not es_sintetico):
-                estado_marcha = "BRAKE_STATION"
-            elif v_kmh > v_cons_kmh + 1.5:
-                estado_marcha = "BRAKE_OVERSPEED"
-            elif estado_marcha == "BRAKE_OVERSPEED" and v_kmh <= v_cons_kmh:
-                estado_marcha = "CRUISE"
-            elif estado_marcha == "ACCEL" and v_kmh >= v_cons_kmh - 0.5:
-                estado_marcha = "CRUISE"
-            elif estado_marcha == "CRUISE" and v_kmh < v_cons_kmh - 1.5:
-                estado_marcha = "ACCEL"
-            elif estado_marcha == "COAST"  and v_kmh < v_cons_kmh - 2.0:
-                estado_marcha = "ACCEL"
-            elif estado_marcha not in ["ACCEL","CRUISE","COAST","BRAKE_STATION","BRAKE_OVERSPEED"]:
-                estado_marcha = "ACCEL"
+        
+        if header_idx == -1: header_idx = 1
+            
+        r0 = raw.iloc[header_idx - 1].copy() if header_idx > 0 else raw.iloc[0].copy()
+        r0.iloc[0] = np.nan 
+        h1 = r0.ffill().astype(str)
+        h2 = raw.iloc[header_idx].fillna('').astype(str)
+        
+        cols = []
+        for s, t in zip(h1, h2):
+            s_val = str(s).strip().upper()
+            t_val = str(t).strip().upper()
+            if s_val in ['NAN', 'NONE'] or not s_val: cols.append(t_val)
+            elif t_val and t_val not in ['NAN', 'NONE']: cols.append(f"{s_val}_{t_val}")
+            else: cols.append(s_val)
+            
+        df = raw.iloc[header_idx + 1:].copy().reset_index(drop=True)
+        df.columns = [f"Col_{i}_{c}" for i, c in enumerate(cols)] + [f"Col_{i}_EXTRA" for i in range(len(cols), df.shape[1])]
+        df = df.dropna(how='all').reset_index(drop=True)
 
-            f_motor, f_regen_tramo, a_net_target = 0.0, 0.0, 0.0
-            
-            if estado_marcha == "BRAKE_STATION":
-                f_req_freno = max(0.0, masa_dinamica_kg * a_freno_op - f_res_total)
-                f_regen_tramo = min(f_req_freno, f_disp_freno)
-                a_net_target = (-f_regen_tramo - f_res_total) / masa_dinamica_kg
-                if a_net_target > -a_freno_op: a_net_target = -a_freno_op 
-            elif estado_marcha == "BRAKE_OVERSPEED":
-                f_req_freno = max(0.0, masa_dinamica_kg * 0.4 - f_res_total)
-                f_regen_tramo = min(f_req_freno, f_disp_freno)
-                a_net_target = min((-f_regen_tramo - f_res_total) / masa_dinamica_kg, -0.15)
-            elif estado_marcha == "ACCEL":
-                f_limite_potencia = p_max_op_w_real / max(0.1, v_ms)
-                f_absoluta_disp = min(f_disp_trac_real, f_limite_potencia)
-                
-                f_piloto = f_trac_max_n_nominal * (pct_trac / 100.0)
-                p_piloto = p_max_w_nominal * (pct_trac / 100.0)
-                f_piloto_disp = min(f_piloto, p_piloto / max(0.1, v_ms))
-                
-                f_motor = max(f_piloto_disp, f_res_total + (masa_dinamica_kg * 0.1))
-                f_motor = min(f_motor, f_absoluta_disp)
-                
-                a_net_target = (f_motor - f_res_total) / masa_dinamica_kg
-            elif estado_marcha == "CRUISE":
-                f_motor = max(0.0, f_res_total)
-                f_motor = min(f_motor, f_disp_trac_real * (pct_trac / 100.0))
-                a_net_target = (f_motor - f_res_total) / masa_dinamica_kg
-            elif estado_marcha == "COAST":
-                a_net_target = (-f_res_total) / masa_dinamica_kg
-                
-            jerk_limit = f.get('jerk_ms3', 0.8) * dt
-            if a_net_target > a_prev + jerk_limit: a_net = a_prev + jerk_limit
-            elif a_net_target < a_prev - jerk_limit: a_net = a_prev - jerk_limit
-            else: a_net = a_net_target
-            a_prev = a_net
-            
-            v_new, dt_actual = v_ms + a_net * dt, dt
-            if v_new < 0:
-                dt_actual = v_ms / abs(a_net) if a_net < -0.001 else dt
-                v_new = 0.0
-                
-            if f_motor > 0 and v_new * 3.6 > v_cons_kmh:
-                v_new = v_cons_kmh / 3.6
-                a_req = (v_new - v_ms) / dt_actual if dt_actual > 0 else 0.0
-                f_motor_req = masa_dinamica_kg * a_req + f_res_total
-                f_motor = max(0.0, min(f_motor_req, f_disp_trac_real))
-                a_net = a_req
-                
-            if v_new < 0.1 and v_ms < 0.1:
-                if dist_restante > 10.0:
-                    v_new = 2.0 
-                    a_net = (v_new - v_ms) / dt_actual if dt_actual > 0 else 0.0
-                else:
-                    t_horas += (dist_restante / 1.0) / 3600.0
+        est_cols = {}
+        
+        for i, col in enumerate(df.columns):
+            col_str = str(col).upper()
+            if any(k in col_str for k in ['LLEGADA','SALIDA','HORA']) or any(est[:3].upper() in col_str for est in ESTACIONES_SAFE):
+                parsed_times = df[col].apply(parse_time_to_mins)
+                if parsed_times.notna().any():
+                    df[f"T_{i}"] = parsed_times
+                    idx_est = _col_to_est_idx(col_str)
+                    if idx_est is not None:
+                        est_cols[f"T_{i}"] = idx_est
+                        if 'SALIDA' in col_str:
+                            est_salida[idx_est] = f"T_{i}"
+                        elif 'LLEGADA' in col_str:
+                            est_llegada[idx_est] = f"T_{i}"
+                            
+        if len(est_cols) < 5:
+            est_cols = {}
+            est_llegada = {}
+            est_salida = {}
+            col_start_time = 5
+            for c in range(2, min(12, df.shape[1])):
+                muestras = df.iloc[:, c].dropna().head(10).apply(parse_time_to_mins)
+                if muestras.notna().any():
+                    col_start_time = c
                     break
+                    
+            for i in range(col_start_time, min(col_start_time + N_EST_SAFE, df.shape[1])):
+                col_name = df.columns[i]
+                parsed_times = df[col_name].apply(parse_time_to_mins)
+                if parsed_times.notna().any():
+                    df[f"T_{i}"] = parsed_times
+                    idx_est = i - col_start_time if via_param == 1 else (N_EST_SAFE - 1) - (i - col_start_time)
+                    est_cols[f"T_{i}"] = idx_est
 
-            step_m = (v_ms + v_new) / 2.0 * dt_actual
-            if step_m > dist_restante:
-                step_m = dist_restante
-                if v_ms + v_new > 0: dt_actual = step_m / ((v_ms + v_new) / 2.0)
-            if step_m < 0.1: step_m = 0.5 
-                
-            f_real_total = (masa_dinamica_kg * a_net) + f_res_total
-            
-            if f_real_total > 0 and estado_marcha != "BRAKE_STATION":
-                f_limite_potencia_inst = p_max_op_w_real / max(0.1, v_ms)
-                f_absoluta_disp_inst = min(f_disp_trac_real, f_limite_potencia_inst)
-                f_motor_real = min(f_real_total, f_absoluta_disp_inst)
-                
-                carga_pct = f_motor_real / max(1.0, f_absoluta_disp_inst) 
-                eta_base = f.get('eta_motor', 0.92)
-                eta_din = eta_base * (1.0 - 0.2 * (1.0 - max(0.1, carga_pct))**3)
-                
-                trabajo_j_trac = f_motor_real * step_m
-                trc += (trabajo_j_trac / 3_600_000.0) / eta_din
-                
-            elif f_real_total < 0 and estado_marcha in ["BRAKE_STATION", "BRAKE_OVERSPEED"]:
-                f_freno_real = min(abs(f_real_total), f_disp_freno)
-                trabajo_j_regen = f_freno_real * step_m
-                # 💡 CORRECCIÓN: Cadena de eficiencia correcta
-                # Potencia Mecánica → Eficiencia Motor (generador) → Eficiencia Red
-                reg += (trabajo_j_regen / 3_600_000.0) * f.get('eta_motor', 0.92) * _get_val('ETA_REGEN_NETA', 0.38)
-                
-            hora_actual = (t_ini_mins + t_horas * 60.0) / 60.0
-            aux_kw_inst = calcular_aux_dinamico(aux_kw_nominal, hora_actual, pax_mid, f.get('cap_max', 398) * n_uni_inst, estacion_anio, estado_marcha, f_compresor_especifico)
-            
-            aux += (aux_kw_inst * dt_actual) / 3600.0
-            t_horas += dt_actual / 3600.0
-            dist_recorrida += step_m
-            v_ms = v_new
+        if not est_cols:
+            return pd.DataFrame(), f"Formato irlegible. No se encontraron tiempos válidos."
 
-    # Dwell: solo en modo sintético — en modo real el dwell ya está en los timestamps
-    n_est_mid = max(0, len(paradas_km) - 2) if es_sintetico else 0
-    dwell_h = (n_est_mid * _get_val('DWELL_DEF', 25.0)) / 3600.0
-    
-    hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
-    aux_kw_dwell = calcular_aux_dinamico(aux_kw_nominal_final, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni_final, estacion_anio, "DWELL", f_compresor_especifico)
-    
-    aux += aux_kw_dwell * dwell_h
-    t_horas += dwell_h
-    
-    neto_ideal = max(0.0, trc + aux - reg)
-    return trc, aux, reg, 0.0, neto_ideal, t_horas
+        def _safe_get(r, col):
+            val = r.get(col)
+            return val if pd.notna(val) else np.nan
+
+        df['t_ini'] = df.apply(lambda row: min([_safe_get(row, c) for c in est_cols.keys() if pd.notna(_safe_get(row, c))] or [np.nan]), axis=1)
+        df['t_fin'] = df.apply(lambda row: max([_safe_get(row, c) for c in est_cols.keys() if pd.notna(_safe_get(row, c))] or [np.nan]), axis=1)
+        
+        def _construir_nodos(row):
+            est_presentes = sorted(set(list(est_llegada.keys()) + list(est_salida.keys())))
+            if via_param == 2: est_presentes = list(reversed(est_presentes))
+
+            def get_t(col):
+                if col is None: return None
+                v = row.get(col)
+                return float(v) if pd.notna(v) and float(v) > 0 else None
+
+            nodos = []
+            for e_idx in est_presentes:
+                t_lleg = get_t(est_llegada.get(e_idx))
+                t_sal  = get_t(est_salida.get(e_idx))
+                km     = KM_ACUM_SAFE[e_idx]
+                if not any([t_lleg, t_sal]): continue
+                if not nodos:
+                    if t_sal:  nodos.append((t_sal,  km))
+                    elif t_lleg: nodos.append((t_lleg, km))
+                else:
+                    if t_lleg: nodos.append((t_lleg, km))
+                    if t_sal:  nodos.append((t_sal,  km))
+
+            if len(nodos) >= 2:
+                nodos.sort(key=lambda x: x[0])
+                return nodos
+            return None
+
+        df['nodos'] = df.apply(_construir_nodos, axis=1)
+
+        c_m1 = next((c for c in df.columns if 'MOTRIZ' in str(c).upper() and '1' in str(c).upper()), None)
+        c_m2 = next((c for c in df.columns if 'MOTRIZ' in str(c).upper() and '2' in str(c).upper()), None)
+        tren_col = next((c for c in df.columns if str(c).strip().upper() in ('TREN', 'SERVICIO', 'MOTRIZ')), df.columns[0])
+
+        def _get_fleet_info(r):
+            def extract_n(c_name):
+                if c_name and pd.notna(r.get(c_name)):
+                    val = str(r.get(c_name)).strip()
+                    if val.lower() not in ('nan', '', '0', '0.0'):
+                        m = re.search(r'(\d+)', val)
+                        if m: return int(m.group(1))
+                return None
+            n1 = extract_n(c_m1)
+            n2 = extract_n(c_m2)
+            n_tren = extract_n(tren_col)
+            
+            n_eval = n1 or n2 or n_tren
+            if n_eval is not None:
+                if 1 <= n_eval <= 27: tipo = "XT-100"
+                elif 28 <= n_eval <= 35: tipo = "XT-M"
+                elif 410 <= n_eval <= 414: tipo = "SFE"
+                else: tipo = "XT-100" 
+            else:
+                tipo = "XT-100"
+                
+            motriz_str = f"{n1}+{n2}" if n1 and n2 else str(n_eval or "")
+            return pd.Series([motriz_str, tipo])
+            
+        df[['motriz_num', 'tipo_tren']] = df.apply(_get_fleet_info, axis=1)
+
+        if c_m2:
+            df['doble'] = df[c_m2].apply(lambda x: pd.notna(x) and str(x).strip() not in ('0', '0.0', '', 'nan', 'none'))
+        else:
+            df['doble'] = df['motriz_num'].astype(str).str.contains(r'\+', regex=True)
+            
+        df['Via'] = via_param
+        df['Fecha_str'] = fecha_str
+
+        def _get_real_orig_dest(row):
+            valid_est = []
+            for col, e_idx in est_cols.items():
+                val = _safe_get(row, col)
+                if pd.notna(val) and val > 0:
+                    valid_est.append(e_idx)
+            if not valid_est:
+                return pd.Series([0.0 if via_param == 1 else KM_TOTAL_SAFE, KM_TOTAL_SAFE if via_param == 1 else 0.0])
+            
+            if via_param == 1:
+                return pd.Series([KM_ACUM_SAFE[min(valid_est)], KM_ACUM_SAFE[max(valid_est)]])
+            else:
+                return pd.Series([KM_ACUM_SAFE[max(valid_est)], KM_ACUM_SAFE[min(valid_est)]])
+
+        df[['km_orig', 'km_dest']] = df.apply(_get_real_orig_dest, axis=1)
+        df = df.dropna(subset=['t_ini'])
+        
+        df['km_viaje'] = abs(df['km_dest'] - df['km_orig'])
+        df['svc_type'] = df.apply(lambda r: f"{EC_SAFE[KM_ACUM_SAFE.index(r['km_orig'])]}-{EC_SAFE[KM_ACUM_SAFE.index(r['km_dest'])]}", axis=1)
+
+        viaje_col_idx = next((c for c in df.columns if 'VIAJE' in str(c).upper() or 'NRO' in str(c).upper() or 'N°' in str(c).upper()), None)
+        df['nro_viaje'] = df[viaje_col_idx].apply(clean_primary_key) if viaje_col_idx else ''
+
+        df['num_servicio'] = df[tren_col].apply(clean_primary_key)
+        if df['num_servicio'].eq('').all(): df['num_servicio'] = df['nro_viaje']
+
+        df['_id'] = df['Fecha_str'] + "_V" + df['Via'].astype(str) + "_" + df['num_servicio'] + "_" + df['t_ini'].astype(str)
+        df['t_fin'] = df['t_fin'].fillna(df['t_ini'] + df['km_viaje'] / 35.0 * 60.0)
+
+        def calc_dwell_dynamic(row):
+            try:
+                idx_orig = int(np.argmin([abs(row['km_orig'] - k) for k in KM_ACUM_SAFE]))
+                idx_dest = int(np.argmin([abs(row['km_dest'] - k) for k in KM_ACUM_SAFE]))
+                n_stops = max(0, abs(idx_dest - idx_orig) - 1)
+                return round(n_stops * (8.0 / 19.0), 3)
+            except: return 8.0 
+                
+        df['dwell_min'] = df.apply(calc_dwell_dynamic, axis=1)
+        df['dwell_cabecera_min'] = 0.0
+        
+        return df, "ok"
+    except Exception as e:
+        import traceback
+        return pd.DataFrame(), f"Fallo Crítico ETL: {str(e)} \n {traceback.format_exc()}"
 
 # =============================================================================
-# 5. PRE-CALCULADORES DE RED (MACRO)
+# 3. LECTURA Y CRUCE DE PASAJEROS
 # =============================================================================
-def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
-    if df_dia.empty: return {}
-    result = {}
-    for via in [1, 2]:
-        sub = df_dia[df_dia["Via"] == via].sort_values("t_ini")
-        if sub.empty: continue
-        indices = list(sub.index)
-        t_ini_vals = sub["t_ini"].values
-        for i, idx in enumerate(indices):
-            headways = []
-            if i > 0: headways.append(t_ini_vals[i] - t_ini_vals[i-1])
-            if i < len(indices)-1: headways.append(t_ini_vals[i+1] - t_ini_vals[i])
-            if not headways: 
-                result[idx] = 0.10
-                continue
-            hw = min(headways)
-            if hw < 5.0: eta = 0.90
-            elif hw < 10.0: eta = 0.75 - ((hw - 5.0) / 5.0) * 0.45
-            else: eta = max(0.10, 0.30 - ((hw - 10.0) / 20.0) * 0.20)
-            result[idx] = min(eta, 0.90)
-    return result
-
-def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="primavera"):
-    """
-    Pre-calculador de red eléctrica con regeneración entre múltiples trenes.
-    
-    Principios físicos:
-    1. Solo entre trenes de la MISMA vía (circuitos independientes)
-    2. Las SERs NO reciben energía de regeneración (diodos)
-    3. Transferencia con caída de tensión real (I²R) usando resistencias de catenaria
-    4. Límite: cuando la tensión en el receptor cae por debajo de la tensión de SER
-    """
-    regen_util_per_trip = {idx: 0.0 for idx in df_dia.index}
-    braking_ticks_per_trip = {idx: 0.0 for idx in df_dia.index}
-    
-    if df_dia.empty:
-        return regen_util_per_trip
-    
-    t_min = int(df_dia['t_ini'].min())
-    t_max = int(df_dia['t_fin'].max())
-    dt_step = 10.0 / 60.0  # Timestep de 10 segundos
-    time_steps = np.arange(t_min, t_max + 1, dt_step)
-    
-    V_NOMINAL_DC = _get_val('V_NOMINAL_DC', 3000.0)
-    V_MAX_REGENERACION = 3100.0  # Límite de seguridad en catenaria
-    ETA_MAX_VAL = _get_val('ETA_MAX', 0.70)
-    
-    for via_ in [1, 2]:
-        via_trains = df_dia[df_dia['Via'] == via_]
-        if via_trains.empty:
-            continue
-        
-        via_indices = set(via_trains.index)
-        
-        # Preparar datos de trenes de esta vía
-        trains_data = []
-        for idx, r in via_trains.iterrows():
-            nodos = r.get('nodos')
-            pct_operativo = obtener_pct_traccion_operativo(r, pct_trac_ui)
-            trains_data.append({
-                'idx': idx,
-                't_ini': r['t_ini'],
-                't_fin': r['t_fin'],
-                'Via': r['Via'],
-                'km_orig': r['km_orig'],
-                'km_dest': r['km_dest'],
-                'nodos': nodos,
-                't_arr': [n[0] for n in nodos] if nodos and len(nodos) >= 2 else None,
-                'tipo_tren': r.get('tipo_tren', 'XT-100'),
-                'doble': r.get('doble', False),
-                'pax_abordo': r.get('pax_abordo', 0),
-                'pct_trac': pct_operativo,
-                'maniobra': r.get('maniobra')
-            })
-        
-        braking_by_idx = [[] for _ in range(len(time_steps))]
-        accel_by_idx = [[] for _ in range(len(time_steps))]
-        
-        for tr in trains_data:
-            idx_start = np.searchsorted(time_steps, max(t_min, tr['t_ini']))
-            idx_end = np.searchsorted(time_steps, min(t_max, tr['t_fin']), side='right')
-            f = _get_val('FLOTA', {}).get(tr['tipo_tren'], {})
-            if not f:
-                continue
-            
-            eta_m = f.get('eta_motor', 0.92)
-            eta_regen_neta = _get_val('ETA_REGEN_NETA', 0.38)
-            
-            km_man = None
-            maniobra_tr = str(tr.get('maniobra', '')).upper()
-            if 'CORTE_BTO' in maniobra_tr or 'ACOPLE_BTO' in maniobra_tr or 'CORTE_PU_SA_BTO' in maniobra_tr:
-                km_man = 25.3
-            elif 'CORTE_SA' in maniobra_tr or 'ACOPLE_SA' in maniobra_tr:
-                km_man = 29.1
-            
-            dist_to_maniobra = abs(km_man - tr['km_orig']) if km_man is not None else -1
-            
-            for i in range(idx_start, idx_end):
-                m = time_steps[i]
-                state, v_kmh = get_train_state_and_speed(m, tr['Via'], use_rm, tr['km_orig'], tr['km_dest'], tr['nodos'], tr['t_arr'])
-                pos = km_at_t(tr['t_ini'], tr['t_fin'], m, tr['Via'], use_rm, tr['km_orig'], tr['km_dest'], tr['nodos'], tr['t_arr'])
-                v_ms = v_kmh / 3.6
-                
-                dist_recorrida_total = abs(pos - tr['km_orig'])
-                es_doble = tr['doble']
-                
-                if km_man is not None and min(tr['km_orig'], tr['km_dest']) <= km_man <= max(tr['km_orig'], tr['km_dest']) and maniobra_tr:
-                    if 'CORTE' in maniobra_tr:
-                        es_doble = True if dist_recorrida_total <= dist_to_maniobra else False
-                    elif 'ACOPLE' in maniobra_tr:
-                        es_doble = False if dist_recorrida_total <= dist_to_maniobra else True
-                
-                n_uni = 2 if es_doble else 1
-                masa_estatica_kg = (f.get('tara_t', 86.1) * 1000 * n_uni) + (tr['pax_abordo'] * _get_val('PAX_KG', 75.0))
-                masa_dinamica_kg = masa_estatica_kg + (f.get('m_iner_t', 7.2) * 1000 * n_uni)
-                
-                if estacion_anio == "invierno":
-                    aux_nom = f.get('aux_kw_heat', 65.16) * n_uni
-                else:
-                    aux_nom = f.get('aux_kw_cool', 58.76) * n_uni
-                
-                p_aux_kw = calcular_aux_dinamico(aux_nom, m / 60.0, tr['pax_abordo'], f.get('cap_max', 398) * n_uni, estacion_anio, state)
-                
-                idx_km = min(44999, max(0, int(pos * 1000)))
-                pend_permil = _PEND_ARRAY_V1[idx_km] if tr['Via'] == 1 else _PEND_ARRAY_V2[idx_km]
-                f_pend = masa_estatica_kg * 9.81 * (pend_permil / 1000.0)
-                f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
-                
-                if n_uni == 2:
-                    f_davis = (f.get('davis_A',1615) * 2) + (f.get('davis_B',0) * 2 * v_kmh) + (f.get('davis_C',0.54) * 1.35 * (v_kmh**2))
-                else:
-                    f_davis = f.get('davis_A',1615) + f.get('davis_B',0)*v_kmh + f.get('davis_C',0.54)*(v_kmh**2)
-                
-                f_res_total = f_davis + f_pend + f_curva
-                
-                if state in ("BRAKE", "BRAKE_STATION", "BRAKE_OVERSPEED"):
-                    f_req_freno = max(0.0, masa_dinamica_kg * (f.get('a_freno_ms2', 1.2) * 0.9) - f_res_total)
-                    f_disp_freno = min(f.get('f_freno_max_kn', 105.0)*1000*n_uni, (f.get('p_freno_max_kw', f.get('p_max_kw',720)*1.2)*1000*n_uni)/max(0.1, v_ms)) if v_kmh >= f.get('v_freno_min', 3.81) else 0.0
-                    
-                    potencia_mecanica_frenado_kw = (min(f_req_freno, f_disp_freno) * v_ms) / 1000.0
-                    potencia_electrica_generada_kw = potencia_mecanica_frenado_kw * eta_m
-                    p_gen_kw = potencia_electrica_generada_kw * eta_regen_neta - p_aux_kw
-                    
-                    if p_gen_kw > 0:
-                        braking_by_idx[i].append((tr['idx'], pos, p_gen_kw))
-                    braking_ticks_per_trip[tr['idx']] += 1
-                
-                elif state in ("ACCEL", "CRUISE"):
-                    p_dem_kw = p_aux_kw
-                    if state == "ACCEL":
-                        f_piloto = f.get('f_trac_max_kn', 110.0)*1000*n_uni*(tr['pct_trac']/100.0)
-                        p_piloto = f.get('p_max_kw', 720.0)*1000*n_uni*(tr['pct_trac']/100.0)
-                        f_piloto_disp = min(f_piloto, p_piloto/max(0.1, v_ms)) if v_ms > 0 else f_piloto
-                        
-                        f_motor = max(f_piloto_disp, f_res_total + (masa_dinamica_kg * 0.1))
-                        f_limite_total_abs = min(f.get('f_trac_max_kn', 110.0)*1000*n_uni, (f.get('p_max_kw', 720.0)*1000*n_uni)/max(0.1, v_ms))
-                        f_motor = min(f_motor, f_limite_total_abs)
-                        
-                        carga_pct = f_motor / max(1.0, f_limite_total_abs)
-                        eta_din = eta_m * (1.0 - 0.2 * (1.0 - max(0.1, carga_pct))**3)
-                        
-                        p_dem_kw += ((f_motor * v_ms) / 1000.0 / eta_din)
-                    elif state == "CRUISE" and f_res_total > 0:
-                        p_dem_kw += (((f_res_total * v_ms) / 1000.0) / eta_m)
-                    
-                    accel_by_idx[i].append((tr['idx'], pos, p_dem_kw))
-        
-        # ======================================================================
-        # DISTRIBUCIÓN DE REGENERACIÓN CON CAÍDA DE TENSIÓN REAL (I²R)
-        # ======================================================================
-        for i in range(len(time_steps)):
-            braking_via = [b for b in braking_by_idx[i] if b[0] in via_indices]
-            accel_via = [a for a in accel_by_idx[i] if a[0] in via_indices]
-            
-            if not braking_via or not accel_via:
-                continue
-            
-            current_demands = {a[0]: a[2] for a in accel_via}
-            
-            for b_idx, b_pos, p_gen in braking_via:
-                if p_gen <= 0:
-                    continue
-                
-                # --------------------------------------------------------------
-                # PASO 1: Calcular tensión en el pantógrafo del tren que frena
-                # --------------------------------------------------------------
-                # La regeneración eleva la tensión local. El límite de seguridad
-                # es 3100V. La tensión real depende de cuánta corriente se inyecta.
-                I_generada = (p_gen * 1000.0) / V_NOMINAL_DC  # Corriente aproximada
-                
-                # Resistencia equivalente vista desde el tren (a la SER más cercana)
-                # Simplificación: asumimos que la SER está a una distancia típica
-                dist_a_SER = min([abs(b_pos - s[0]) for s in _get_val('SER_DATA', [(4.9, "SER PO"), (12.7, "SER ES"), (25.5, "SER EB"), (28.7, "SER VA")])])
-                R_equivalente = _get_resistencia_catenaria_km(b_pos) * dist_a_SER
-                
-                V_frenante = min(V_MAX_REGENERACION, V_NOMINAL_DC + I_generada * R_equivalente * 0.5)
-                
-                # --------------------------------------------------------------
-                # PASO 2: Identificar candidatos que pueden recibir energía
-                # --------------------------------------------------------------
-                candidates = []
-                for a_idx, a_pos, a_demand in accel_via:
-                    if current_demands[a_idx] <= 0:
-                        continue
-                    
-                    # Calcular resistencia de catenaria entre frenante y receptor
-                    R_catenaria = _calcular_resistencia_catenaria(b_pos, a_pos)
-                    
-                    # Caída de tensión I²R
-                    V_caida = I_generada * R_catenaria
-                    
-                    # Tensión en el pantógrafo del tren receptor
-                    V_receptor = V_frenante - V_caida
-                    
-                    # ⚠️ CONDICIÓN DE CORTE FÍSICO:
-                    # Si la tensión en el receptor cae por debajo de la tensión
-                    # nominal de la SER más cercana, los diodos de la SER conducen
-                    # y la energía "se pierde" (no puede fluir más lejos)
-                    V_SER_local = V_NOMINAL_DC  # Simplificación: tensión nominal
-                    
-                    if V_receptor <= V_SER_local:
-                        continue  # Este tren está fuera de alcance eléctrico
-                    
-                    # Eficiencia de transferencia: proporción de la diferencia
-                    # de tensión disponible vs la máxima posible
-                    eta_transferencia = (V_receptor - V_SER_local) / (V_frenante - V_SER_local)
-                    eta_transferencia = min(ETA_MAX_VAL, max(0.0, eta_transferencia))
-                    
-                    # Peso por distancia para distribución equitativa
-                    peso = 1.0 / max(0.1, abs(a_pos - b_pos))
-                    
-                    candidates.append({
-                        'idx': a_idx,
-                        'demand': current_demands[a_idx],
-                        'peso': peso,
-                        'eta_transferencia': eta_transferencia,
-                        'V_receptor': V_receptor,
-                        'dist': abs(a_pos - b_pos)
-                    })
-                
-                if not candidates:
-                    # NADIE puede recibir esta energía → TODO al reóstato
-                    continue
-                
-                # --------------------------------------------------------------
-                # PASO 3: Distribuir energía entre candidatos
-                # --------------------------------------------------------------
-                total_peso = sum(c['peso'] for c in candidates)
-                energia_asignada_total = 0.0
-                
-                for c in candidates:
-                    # Energía ofrecida: generación × eficiencia × fracción por proximidad
-                    fraccion_peso = c['peso'] / total_peso if total_peso > 0 else 1.0 / len(candidates)
-                    p_ofrecida = p_gen * c['eta_transferencia'] * fraccion_peso
-                    
-                    # Transferencia real limitada por la demanda del receptor
-                    p_transferida = min(p_ofrecida, c['demand'])
-                    
-                    # Actualizar demanda residual
-                    current_demands[c['idx']] -= p_transferida
-                    energia_asignada_total += p_transferida
-                
-                # --------------------------------------------------------------
-                # PASO 4: Registrar eficiencia de regeneración para este frenado
-                # --------------------------------------------------------------
-                if p_gen > 0:
-                    regen_util_per_trip[b_idx] += min(1.0, energia_asignada_total / p_gen)
-    
-    # Normalizar por ticks de frenado
-    for idx in df_dia.index:
-        if braking_ticks_per_trip[idx] > 0:
-            regen_util_per_trip[idx] = min(1.0, regen_util_per_trip[idx] / braking_ticks_per_trip[idx])
+def cargar_pax(data, fname, via_param=1):
+    try:
+        eng = "xlrd" if fname.lower().endswith(".xls") else "openpyxl"
+        if fname.lower().endswith('.csv'):
+            try: full = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)
+            except: full = pd.read_csv(BytesIO(data), header=None, sep=';', encoding='latin-1', dtype=str)
         else:
-            regen_util_per_trip[idx] = 0.0
-    
-    return regen_util_per_trip
+            full = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str)
 
-def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use_regen, dict_regen, estacion_anio="primavera", prevenciones=None):
-    df_e = df_dia.copy()
-    if df_e.empty: return df_e
-    def _wrapper(r):
-        pct_real = obtener_pct_traccion_operativo(r, pct_trac_ui)
-        trc, aux, reg_bruta, reg_panto_push, neto_ideal, t_h = simular_tramo_termodinamico(
-            r['tipo_tren'], r.get('doble', False), r['km_orig'], r['km_dest'], r['Via'], 
-            pct_real, use_rm, use_pend, r.get('nodos'), r.get('pax_d', {}), r.get('pax_abordo', 0), 
-            None, r.get('maniobra'), estacion_anio, r.get('t_ini', 0.0), False, prevenciones
-        )
+        if full is None or full.empty or len(full) <= 10: return pd.DataFrame()
         
-        eta_red = dict_regen.get(r.name, 0.0) if (use_regen and dict_regen) else 0.0
-        reg_util = reg_bruta * eta_red
-        kwh_reostato = max(0.0, reg_bruta - reg_util)
-        neto = max(0.0, trc + aux - reg_util)
-        
-        return pd.Series([trc, aux, reg_util, kwh_reostato, neto, t_h])
-        
-    df_e[['kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto', 't_viaje_h']] = df_e.apply(_wrapper, axis=1)
-    # Actualizar t_fin con el tiempo real simulado (incluye efecto de prevenciones)
-    df_e['t_fin'] = df_e['t_ini'] + df_e['t_viaje_h'] * 60.0
-    
-    # 💡 FIX 1 ABSOLUTO: La Ecuación Físicamente Perfecta para el Kilometraje Real del WTT
-    df_e['tren_km'] = df_e.apply(_calc_tren_km_real_motor, axis=1)
-        
-    # ==========================================================================
-    # PRE/POST SERVICIO: Consumo auxiliar de encendido y apagado por motriz
-    # Pre: ~1h auxiliares (HVAC arrancando f_hvac=0.30)
-    # Post: ~10min auxiliares (HVAC apagandose f_hvac=0.10)
-    # ==========================================================================
-    import re as _re
-    T_PRE_H  = 1.0
-    T_POST_H = 10.0/60.0
-    F_HVAC_PRE  = 0.30
-    F_HVAC_POST = 0.10
-    frac_base_pp = _get_val('FRAC_BASE', 0.21)
-    frac_hvac_pp = _get_val('FRAC_HVAC', 0.89)
-    flota_db_pp  = _get_val('FLOTA', {})
+        header_idx = -1
+        for r in range(min(20, len(full))):
+            row_str = ' '.join(full.iloc[r].fillna('').astype(str).str.upper())
+            if ('PUE' in row_str or 'PUERTO' in row_str) and ('LIM' in row_str or 'LIMACHE' in row_str) or 'TOTAL' in row_str:
+                header_idx = r
+                break
+        if header_idx == -1: header_idx = 9
 
-    motrices_viajes = {}
-    for idx, row in df_e.iterrows():
-        mn = str(row.get('motriz_num', ''))
-        nums = _re.findall(r'\d+', mn)
-        for n in nums:
-            if n not in motrices_viajes: motrices_viajes[n] = []
-            motrices_viajes[n].append(idx)
+        col_mapping = {}
+        for c_idx in range(full.shape[1]):
+            vals = [str(full.iloc[r, c_idx]).strip().upper() for r in range(max(0, header_idx-3), header_idx+1)]
+            combo = " ".join(vals)
+            combo_norm = unicodedata.normalize('NFD', combo).encode('ascii', 'ignore').decode().replace('.', '').replace(':', '')
 
-    aux_prepost_por_idx = {idx: 0.0 for idx in df_e.index}
-    if not motrices_viajes:
-        # Sin motriz_num (planificador): estimar pre/post desde pico de flota
-        if 't_fin' in df_e.columns and 't_ini' in df_e.columns:
-            import numpy as np
-            t_vals = np.arange(300, 1380, 5)
-            t_fin_est = df_e['t_fin'].fillna(df_e['t_ini'] + 70)
-            pico = max(int(((df_e['t_ini'] <= t) & (t_fin_est >= t)).sum()) for t in t_vals)
+            if 'HORA' in combo_norm and 'ORIG' in combo_norm: col_mapping[c_idx] = 'Hora Origen'
+            elif 'THDR' in combo_norm and 'TREN' not in combo_norm: col_mapping[c_idx] = 'Nro_THDR_raw'
+            elif 'TREN' in combo_norm or 'SERVICIO' in combo_norm: col_mapping[c_idx] = 'Tren'
+            elif 'FECHA' in combo_norm and 'Fecha_s_raw' not in col_mapping.values(): col_mapping[c_idx] = 'Fecha_s_raw'
+            elif 'CargaMax' not in col_mapping.values() and any(w in combo_norm for w in ['TOTAL', 'BORDO', 'CARGA', 'PASAJERO']) and not any(exc in combo_norm for exc in ['THDR', 'TREN', 'HORA', 'VIA', 'FECHA']):
+                col_mapping[c_idx] = 'CargaMax'
+            else:
+                for k in PAX_COLS_SAFE:
+                    if k == vals[-1] or k == vals[-2] or f" {k} " in f" {combo_norm} " or f"_{k}_" in f"_{combo_norm}_":
+                        col_mapping[c_idx] = k
+                        break
+
+        data_rows = full.iloc[header_idx + 1:].copy()
+        df = pd.DataFrame()
+        for c_idx, col_name in col_mapping.items():
+            if isinstance(c_idx, int) and c_idx < full.shape[1]: 
+                df[col_name] = data_rows.iloc[:, c_idx].values
+                
+        fecha_global = extraer_fecha_segura(full, fname, is_thdr=False)
+        
+        if 'Fecha_s_raw' in df.columns:
+            df['Fecha_s'] = df['Fecha_s_raw'].apply(parse_excel_date)
+            df['Fecha_s'] = df['Fecha_s'].ffill().fillna(fecha_global)
         else:
-            pico = max(1, len(df_e) // 7)
-        tipo_predominante = df_e['tipo_tren'].mode()[0] if 'tipo_tren' in df_e.columns else 'XT-100'
-        f_pp = _get_val('FLOTA', {}).get(tipo_predominante, {})
-        aux_nom_pp = f_pp.get('aux_kw_heat', 65.16)
-        frac_b = _get_val('FRAC_BASE', 0.21); frac_h = _get_val('FRAC_HVAC', 0.89)
-        aux_pre_pp  = aux_nom_pp * frac_b + aux_nom_pp * frac_h * F_HVAC_PRE
-        aux_post_pp = aux_nom_pp * frac_b + aux_nom_pp * frac_h * F_HVAC_POST
-        kwh_total_pp = (aux_pre_pp * T_PRE_H + aux_post_pp * T_POST_H) * pico
-        kwh_por_viaje_pp = kwh_total_pp / max(1, len(df_e))
-        for idx in df_e.index:
-            aux_prepost_por_idx[idx] = kwh_por_viaje_pp
-    for motriz, idxs in motrices_viajes.items():
-        if not idxs: continue
-        tipo = df_e.loc[idxs[0], 'tipo_tren'] if idxs[0] in df_e.index else 'XT-100'
-        f_pp = flota_db_pp.get(tipo, {})
-        aux_nom = f_pp.get('aux_kw_heat', 65.16)
-        aux_pre  = aux_nom * frac_base_pp + aux_nom * frac_hvac_pp * F_HVAC_PRE
-        aux_post = aux_nom * frac_base_pp + aux_nom * frac_hvac_pp * F_HVAC_POST
-        kwh_motriz = aux_pre * T_PRE_H + aux_post * T_POST_H
-        kwh_por_viaje = kwh_motriz / len(idxs)
-        for idx in idxs:
-            aux_prepost_por_idx[idx] = aux_prepost_por_idx.get(idx, 0.0) + kwh_por_viaje
+            df['Fecha_s'] = fecha_global
+                
+        for col in ['Hora Origen', 'Nro_THDR_raw', 'Tren', 'CargaMax']:
+            if col not in df.columns: df[col] = ''
+        
+        for c in PAX_COLS_SAFE:
+            if c not in df.columns: df[c] = '0'
 
-    df_e['kwh_prepost'] = pd.Series(aux_prepost_por_idx)
-    df_e['kwh_viaje_aux']  = df_e['kwh_viaje_aux']  + df_e['kwh_prepost'].fillna(0.0)
-    df_e['kwh_viaje_neto'] = df_e['kwh_viaje_neto'] + df_e['kwh_prepost'].fillna(0.0)
+        df['Nro_THDR'] = df['Nro_THDR_raw'].apply(clean_primary_key)
+        df['Tren_Clean'] = df['Tren'].apply(clean_id)
+        df['t_ini_p'] = df['Hora Origen'].apply(parse_time_to_mins)
+        df['Via'] = via_param
+        df = df.dropna(subset=['t_ini_p'])
+        
+        if df.empty: return pd.DataFrame()
+        
+        for c in PAX_COLS_SAFE + ['CargaMax']: 
+            df[c] = df[c].apply(lambda x: int(re.sub(r'[^\d]', '', str(x).replace('.', '').replace(',', '')) or 0))
+        return df
+    except Exception as e: 
+        return pd.DataFrame()
 
-    return df_e
+def match_pax(row, df_pax):
+    EMPTY = ({c: 0 for c in PAX_COLS_SAFE}, 0, '--:--:--', 'No Detectado', -1)
+    if df_pax.empty: return EMPTY
+    
+    def _to_int(v):
+        try: return int(float(v)) if pd.notna(v) else 0
+        except: return 0
+        
+    t_i = row.get('t_ini')
+    via = row.get('via_op', row.get('Via', 1))
+    num_servicio = clean_id(row.get('num_servicio', ''))
+    thdr_date = str(row.get('Fecha_str', '')).strip()
+    
+    sub = df_pax[df_pax['Via'] == via].copy()
+    if sub.empty: return EMPTY
+    
+    if 'Fecha_s' in sub.columns and thdr_date and thdr_date != '2026-01-01':
+        sub_date = sub[sub['Fecha_s'].astype(str).str.strip() == thdr_date]
+        if not sub_date.empty:
+            sub = sub_date
+
+    if num_servicio != '' and 'Tren_Clean' in sub.columns:
+        m = sub[sub['Tren_Clean'] == num_servicio]
+        if not m.empty:
+            m = m.copy()
+            m['diff'] = m['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
+            best_match = m.loc[m['diff'].idxmin()]
+            return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS_SAFE}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
+
+    if pd.notna(t_i):
+        sub['diff'] = sub['t_ini_p'].apply(lambda x: min(abs(float(x) - float(t_i)), 1440 - abs(float(x) - float(t_i))) if pd.notna(x) and pd.notna(t_i) else 9999)
+        if not sub.empty:
+            idx_min = sub['diff'].idxmin()
+            best_match = sub.loc[idx_min]
+            if best_match['diff'] <= 60: 
+                return {c: _to_int(best_match.get(c, 0)) for c in PAX_COLS_SAFE}, _to_int(best_match.get('CargaMax', 0)), mins_to_time_str(best_match.get('t_ini_p')), str(best_match.get('Nro_THDR_raw', best_match.get('Tren', ''))), best_match.name
+
+    return EMPTY
+
+# =============================================================================
+# 4. FUNCIONES AUXILIARES
+# =============================================================================
+def calcular_dwell(df1, df2):
+    if df1.empty or df2.empty: return df1, df2
+    if 'num_servicio' not in df1.columns or 'num_servicio' not in df2.columns: return df1, df2
+    for fecha in df1['Fecha_str'].unique():
+        d1 = df1[df1['Fecha_str']==fecha]
+        d2 = df2[df2['Fecha_str']==fecha]
+        if d2.empty: continue
+        for idx1, r1 in d1.iterrows():
+            s = r1.get('num_servicio')
+            if pd.isna(s) or s == '': continue
+            m = d2[(d2['num_servicio']==s) & (d2['t_ini']>r1['t_fin'])]
+            if not m.empty:
+                dw = m['t_ini'].min()-r1['t_fin']
+                if 0<dw<60: df2.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(dw,1)
+        for idx2, r2 in d2.iterrows():
+            s = r2.get('num_servicio')
+            if pd.isna(s) or s == '': continue
+            m = d1[(d1['num_servicio']==s) & (d1['t_ini']>r2['t_fin'])]
+            if not m.empty:
+                dw = m['t_ini'].min()-r2['t_fin']
+                if 0<dw<60: df1.at[m['t_ini'].idxmin(),'dwell_cabecera_min']=round(dw,1)
+    return df1, df2
+
+def get_vacios_dia(df): 
+    return []
+
+def cargar_prevenciones(data, fname):
+    try:
+        raw = pd.read_csv(BytesIO(data), sep=',', encoding='latin-1')
+        if raw.shape[1] < 2: raw = pd.read_csv(BytesIO(data), sep=';', encoding='latin-1')
+        res = []
+        for _, r in raw.iterrows():
+            try:
+                v1, v2 = float(str(r.iloc[0]).replace(',','.')) , float(str(r.iloc[1]).replace(',','.'))
+                vel = float(re.search(r'\d+', str(r.iloc[2])).group())
+                res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
+            except: pass
+        return res
+    except: 
+        try:
+            raw = pd.read_excel(BytesIO(data), engine="openpyxl")
+            res = []
+            for _, r in raw.iterrows():
+                try:
+                    v1, v2 = float(str(r.iloc[0]).replace(',','.')) , float(str(r.iloc[1]).replace(',','.'))
+                    vel = float(re.search(r'\d+', str(r.iloc[2])).group())
+                    res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
+                except: pass
+            return res
+        except: return []
+
+def parsear_planilla_maestra(data, fname):
+    try:
+        ext = fname.lower()
+        dfs = {}
+        if ext.endswith('.csv'):
+            try: raw = pd.read_csv(BytesIO(data), header=None, sep=',', encoding='utf-8', dtype=str)
+            except: raw = pd.read_csv(BytesIO(data), header=None, sep=';', encoding='latin-1', dtype=str)
+            dfs["CSV"] = raw
+        else:
+            eng = "xlrd" if ext.endswith(".xls") else "openpyxl"
+            dfs = pd.read_excel(BytesIO(data), header=None, engine=eng, dtype=str, sheet_name=None)
+            
+        viajes = []
+        for sheet_name, df in dfs.items():
+            header_idx = -1
+            for i in range(min(20, len(df))):
+                row_str = ' '.join(df.iloc[i].fillna('').astype(str).str.upper())
+                if ('VIAJE' in row_str or 'N°' in row_str or 'N ' in row_str) and ('SERVICIO' in row_str or 'TREN' in row_str) and ('HR PARTIDA' in row_str or 'HORA' in row_str or 'PARTIDA' in row_str or 'SALIDA' in row_str):
+                    header_idx = i
+                    break
+                    
+            if header_idx != -1:
+                headers = df.iloc[header_idx].fillna('').astype(str).str.upper()
+                viaje_cols = [c for c, val in enumerate(headers) if 'VIAJE' in val or val == 'N°' or val == 'N']
+                srv_cols = [c for c, val in enumerate(headers) if 'SERV' in val or 'TREN' in val]
+                hora_cols = [c for c, val in enumerate(headers) if 'HR PARTIDA' in val or 'HORA' in val or 'PARTIDA' in val or 'SALIDA' in val]
+                config_cols = [c for c, val in enumerate(headers) if 'CONF' in val or 'TIPO' in val or 'FORMA' in val or 'UNIDAD' in val or 'OBS' in val]
+
+                pairs = []
+                for vc in viaje_cols:
+                    sc_cands = [sc for sc in srv_cols if sc > vc and sc - vc <= 2]
+                    if sc_cands:
+                        sc = sc_cands[0]
+                        hc_cands = [hc for hc in hora_cols if hc > sc and hc - sc <= 3]
+                        if hc_cands:
+                            hc = hc_cands[0]
+                            cc_cands = [cc for cc in config_cols if cc > sc and cc - sc <= 6]
+                            pairs.append((vc, sc, hc, cc_cands[0] if cc_cands else None))
+
+                for i in range(header_idx + 1, len(df)):
+                    row = df.iloc[i]
+                    for col_viaje, col_srv, col_hora, col_config in pairs:
+                        if pd.isna(row.get(col_hora)) or pd.isna(row.get(col_srv)) or pd.isna(row.get(col_viaje)): continue
+                        hora_str = str(row[col_hora]).strip()
+                        srv_str = str(row[col_srv]).strip()
+                        viaje_str = str(row[col_viaje]).strip()
+                        config_str = str(row[col_config]).strip().upper() if col_config is not None and pd.notna(row.get(col_config)) else ''
+
+                        m_viaje = re.search(r'(\d+)', viaje_str)
+                        m_srv = re.search(r'(\d{3,4})', srv_str)
+                        if not m_viaje or not m_srv or not re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', hora_str): continue
+                        
+                        viaje_num = int(m_viaje.group(1))
+                        servicio_num = int(m_srv.group(1))
+                        t_ini = parse_time_to_mins(hora_str)
+                        if t_ini is None: continue
+
+                        es_doble = False
+                        if 'MÚLT' in config_str or 'MULT' in config_str or 'DOB' in config_str or '2' in config_str:
+                            es_doble = True
+
+                        via = 1 if viaje_num % 2 == 0 else 2
+                        if via == 1:
+                            km_orig = KM_ACUM_SAFE[0] 
+                            if servicio_num >= 600: km_dest = KM_ACUM_SAFE[20] 
+                            elif 400 <= servicio_num < 600: km_dest = KM_ACUM_SAFE[18] 
+                            else: km_dest = KM_ACUM_SAFE[14] 
+                        else:
+                            km_dest = KM_ACUM_SAFE[0] 
+                            if servicio_num >= 600: km_orig = KM_ACUM_SAFE[20] 
+                            elif 400 <= servicio_num < 600: km_orig = KM_ACUM_SAFE[18] 
+                            elif 200 <= servicio_num < 400: km_orig = KM_ACUM_SAFE[14] 
+                            else: km_orig = KM_ACUM_SAFE[14] 
+                            
+                        ruta = f"{EC_SAFE[KM_ACUM_SAFE.index(km_orig)]}-{EC_SAFE[KM_ACUM_SAFE.index(km_dest)]}"
+                        nodos_via = [(0.0, k) for k in (KM_ACUM_SAFE[KM_ACUM_SAFE.index(km_orig):KM_ACUM_SAFE.index(km_dest)+1] if via==1 else KM_ACUM_SAFE[KM_ACUM_SAFE.index(km_dest):KM_ACUM_SAFE.index(km_orig)+1][::-1])]
+                        
+                        viajes.append({
+                            '_id': f"PLAN_{servicio_num}_{int(t_ini)}", 't_ini': t_ini, 'Via': via,
+                            'km_orig': km_orig, 'km_dest': km_dest, 'nodos': nodos_via,
+                            'tipo_tren': 'XT-100', 'doble': es_doble, 'num_servicio': str(servicio_num), 'svc_type': ruta,
+                            'maniobra': None
+                        })
+            else:
+                for i in range(len(df)):
+                    row_vals = df.iloc[i].fillna('').astype(str).tolist()
+                    for c_idx, val in enumerate(row_vals):
+                        val = val.strip()
+                        if re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', val):
+                            t_ini = parse_time_to_mins(val)
+                            if t_ini is None: continue
+                            
+                            servicio_num, sc_idx = None, -1
+                            for offset in range(1, 5):
+                                if c_idx - offset >= 0:
+                                    check_val = row_vals[c_idx - offset].strip()
+                                    if check_val.isdigit() and 200 <= int(check_val) <= 1999:
+                                        servicio_num = int(check_val)
+                                        sc_idx = c_idx - offset
+                                        break
+                            
+                            viaje_num = None
+                            if sc_idx != -1:
+                                for offset in range(1, 3):
+                                    if sc_idx - offset >= 0:
+                                        check_val = row_vals[sc_idx - offset].strip()
+                                        if check_val.isdigit() and 1 <= int(check_val) <= 300:
+                                            viaje_num = int(check_val)
+                                            break
+                                        
+                            if servicio_num is None: continue
+
+                            es_doble = False
+                            for offset_unidad in range(1, 3):
+                                if c_idx + offset_unidad < len(row_vals):
+                                    val_unidad = row_vals[c_idx + offset_unidad].strip().upper()
+                                    if 'MÚLT' in val_unidad or 'MULT' in val_unidad or 'DOB' in val_unidad or '2' in val_unidad:
+                                        es_doble = True
+                                        break
+
+                            if viaje_num is None:
+                                sheet_upper = str(sheet_name).upper()
+                                if 'V1' in sheet_upper or 'VIA 1' in sheet_upper: via = 1
+                                elif 'V2' in sheet_upper or 'VIA 2' in sheet_upper: via = 2
+                                else: via = 1 if servicio_num % 2 == 0 else 2
+                            else: via = 1 if viaje_num % 2 == 0 else 2
+                            
+                            if via == 1:
+                                km_orig = KM_ACUM_SAFE[0] 
+                                if servicio_num >= 600: km_dest = KM_ACUM_SAFE[20] 
+                                elif 400 <= servicio_num < 600: km_dest = KM_ACUM_SAFE[18] 
+                                elif 200 <= servicio_num < 400: km_dest = KM_ACUM_SAFE[14] 
+                                else: km_dest = KM_ACUM_SAFE[14] 
+                            else:
+                                km_dest = KM_ACUM_SAFE[0] 
+                                if servicio_num >= 600: km_orig = KM_ACUM_SAFE[20] 
+                                elif 400 <= servicio_num < 600: km_orig = KM_ACUM_SAFE[18] 
+                                elif 200 <= servicio_num < 400: km_orig = KM_ACUM_SAFE[14] 
+                                else: km_orig = KM_ACUM_SAFE[14] 
+                                
+                            ruta = f"{EC_SAFE[KM_ACUM_SAFE.index(km_orig)]}-{EC_SAFE[KM_ACUM_SAFE.index(km_dest)]}"
+                            nodos_via = [(0.0, k) for k in (KM_ACUM_SAFE[KM_ACUM_SAFE.index(km_orig):KM_ACUM_SAFE.index(km_dest)+1] if via==1 else KM_ACUM_SAFE[KM_ACUM_SAFE.index(km_dest):KM_ACUM_SAFE.index(km_orig)+1][::-1])]
+                            viajes.append({'_id': f"PLAN_{servicio_num}_{int(t_ini)}", 't_ini': t_ini, 'Via': via, 'km_orig': km_orig, 'km_dest': km_dest, 'nodos': nodos_via, 'tipo_tren': 'XT-100', 'doble': es_doble, 'num_servicio': str(servicio_num), 'svc_type': ruta, 'maniobra': None})
+                            
+        df_viajes = pd.DataFrame(viajes)
+        if not df_viajes.empty: df_viajes = df_viajes.drop_duplicates(subset=['_id'])
+        return df_viajes, "ok"
+    except Exception as e: return pd.DataFrame(), str(e)
