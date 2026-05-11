@@ -680,7 +680,7 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
             None, r.get('maniobra'), estacion_anio, r.get('t_ini', 0.0), False, prevenciones
         )
         
-        eta_red = dict_regen.get(r.name, 1.0) if use_regen else 0.0
+        eta_red = dict_regen.get(r.name, 0.0) if (use_regen and dict_regen) else 0.0
         reg_util = reg_bruta * eta_red
         kwh_reostato = max(0.0, reg_bruta - reg_util)
         neto = max(0.0, trc + aux - reg_util)
