@@ -692,4 +692,49 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     # 💡 FIX 1 ABSOLUTO: La Ecuación Físicamente Perfecta para el Kilometraje Real del WTT
     df_e['tren_km'] = df_e.apply(_calc_tren_km_real_motor, axis=1)
         
+    # ==========================================================================
+    # PRE/POST SERVICIO: Consumo auxiliar de encendido y apagado por motriz única
+    # Pre-servicio: ~1h de auxiliares (HVAC arrancando f_hvac=0.30)
+    # Post-servicio: ~10min de auxiliares (HVAC apagándose f_hvac=0.10)
+    # Se distribuye equitativamente entre los viajes de cada motriz.
+    # ==========================================================================
+    import re as _re
+    T_PRE_H  = 1.0        # 1 hora pre-servicio
+    T_POST_H = 10.0/60.0  # 10 minutos post-servicio
+    F_HVAC_PRE  = 0.30    # HVAC arrancando
+    F_HVAC_POST = 0.10    # HVAC apagándose
+    frac_base = _get_val('FRAC_BASE', 0.21)
+    frac_hvac = _get_val('FRAC_HVAC', 0.89)
+    flota_db  = _get_val('FLOTA', {})
+
+    # Identificar motrices únicas y cuántos viajes hace cada una
+    motrices_viajes = {}  # motriz_num -> [idx, ...]
+    for idx, row in df_e.iterrows():
+        mn = str(row.get('motriz_num', ''))
+        nums = _re.findall(r'\d+', mn)
+        for n in nums:
+            if n not in motrices_viajes: motrices_viajes[n] = []
+            motrices_viajes[n].append(idx)
+
+    # Calcular kwh pre/post por motriz y distribuir entre sus viajes
+    aux_prepost_por_idx = {idx: 0.0 for idx in df_e.index}
+    for motriz, idxs in motrices_viajes.items():
+        if not idxs: continue
+        # Inferir tipo desde el primer viaje de esta motriz
+        tipo = df_e.loc[idxs[0], 'tipo_tren'] if idxs[0] in df_e.index else 'XT-100'
+        f = flota_db.get(tipo, {})
+        aux_nom = f.get('aux_kw_heat', 65.16)  # otoño = calefacción
+        aux_pre  = aux_nom * frac_base + aux_nom * frac_hvac * F_HVAC_PRE
+        aux_post = aux_nom * frac_base + aux_nom * frac_hvac * F_HVAC_POST
+        kwh_motriz = aux_pre * T_PRE_H + aux_post * T_POST_H
+        # Distribuir entre todos los viajes de esta motriz
+        kwh_por_viaje = kwh_motriz / len(idxs)
+        for idx in idxs:
+            aux_prepost_por_idx[idx] = aux_prepost_por_idx.get(idx, 0.0) + kwh_por_viaje
+
+    # Agregar al aux y neto de cada viaje
+    df_e['kwh_prepost'] = pd.Series(aux_prepost_por_idx)
+    df_e['kwh_viaje_aux']  = df_e['kwh_viaje_aux']  + df_e['kwh_prepost'].fillna(0.0)
+    df_e['kwh_viaje_neto'] = df_e['kwh_viaje_neto'] + df_e['kwh_prepost'].fillna(0.0)
+
     return df_e
