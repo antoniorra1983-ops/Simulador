@@ -655,7 +655,13 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         t_regen_acum = df_acum['kwh_viaje_regen'].sum()
         for f_type in ['XT-100', 'XT-M', 'SFE']:
             sub = df_acum[df_acum['tipo_tren'] == f_type]
-            if not sub.empty: energy_by_fleet[f_type] += sub['kwh_viaje_neto'].sum()
+            if not sub.empty:
+                energy_by_fleet[f_type] += sub['kwh_viaje_neto'].sum()
+        # Energía solo comercial por flota (para IDE correcto)
+        energy_by_fleet_comercial = {}
+        for f_type in ['XT-100', 'XT-M', 'SFE']:
+            sub = df_acum[df_acum['tipo_tren'] == f_type]
+            energy_by_fleet_comercial[f_type] = sub['kwh_viaje_neto'].sum() if not sub.empty else 0.0
 
     total_ser_kwh_44kv = sum(max(0.0, val) for val in ser_accum_visual.values()) / ETA_SER_RECTIFICADOR
     t_elap = max(0.001, hora_m1 / 60.0)
@@ -677,7 +683,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     pax_t  = int(df_act['pax_inst'].sum()) if not df_act.empty else 0
     kwh_t  = round(df_act['kwh_neto'].sum(),0) if (not df_act.empty and 'kwh_neto' in df_act.columns) else 0
     regen_t= round(t_regen_acum, 0)
-    trenkm = round(df_act['km_rec'].sum(),1) if (not df_act.empty and 'km_rec' in df_act.columns) else 0.0
+    trenkm = round(df_act['tren_km'].sum(),1) if (not df_act.empty and 'tren_km' in df_act.columns) else 0.0
     km_rec = df_act['km_rec'].sum() if (not df_act.empty and 'km_rec' in df_act.columns) else 0
     ide_i  = round(kwh_t/max(1, km_rec), 3) if km_rec > 0 else 0.0
 
@@ -730,16 +736,8 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     n_inic  = len(df_inic)
     n_comp  = len(df_comp)
     
-    # Kilometraje acumulado correcto:
-    # - Viajes completados (t_fin <= hora_m1): tren_km completo
-    # - Viajes en curso (t_ini <= hora_m1 < t_fin): proporción recorrida × tren_km
-    if not df_inic.empty:
-        frac_inic = np.minimum(1.0, (hora_m1 - df_inic['t_ini']) / np.maximum(0.001, df_inic['t_fin'] - df_inic['t_ini']))
-        km_inic_real = (df_inic['tren_km'] * frac_inic).sum()
-    else:
-        km_inic_real = 0.0
-    km_ac   = round(km_inic_real, 1)
-    ide_ac  = round(seat_accum_1 / max(1, km_inic_real + vacio_km_total), 3) if (km_inic_real + vacio_km_total) > 0 else 0.0
+    km_ac   = round(df_comp['tren_km'].sum(), 1) if not df_comp.empty else 0.0
+    ide_ac  = round(seat_accum_1 / max(1, df_inic['tren_km'].sum() + vacio_km_total), 3) if not df_inic.empty and (df_inic['tren_km'].sum() + vacio_km_total) > 0 else 0.0
 
     st.divider()
     st.markdown(f"#### 📊 Análisis Global Acumulado (00:00 → {hora_s1[:5]})")
@@ -760,26 +758,28 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         st.markdown("##### ⚡ Consumo Energético Acumulado por Tipo de Tren (Neto Pantógrafo)")
         e_cols = st.columns(3)
         for i, f_type in enumerate(['XT-100', 'XT-M', 'SFE']):
-            tot_e = energy_by_fleet.get(f_type, 0.0)
-            subset_flota = df_inic[df_inic['tipo_tren'] == f_type]
-            cnt_v = subset_flota.shape[0]
-            # Kilometraje proporcional por flota (consistente con km_inic_real global)
-            frac_flota = np.minimum(1.0, (hora_m1 - subset_flota['t_ini']) / np.maximum(0.001, subset_flota['t_fin'] - subset_flota['t_ini'])) if not subset_flota.empty else pd.Series([], dtype=float)
-            km_flota_real = (subset_flota['tren_km'] * frac_flota).sum() if not subset_flota.empty else 0.0
-            e_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; text-align:center; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333;'>Flota {f_type}</div><div style='font-size:22px; font-weight:bold; color:#2E7D32; margin:10px 0;'>{tot_e:,.0f} kWh</div><div style='font-size:12px; color:#666;'>Viajes comerciales despachados: {cnt_v}</div><div style='font-size:13px; color:#1565C0; font-weight:bold; margin-top:5px;'>Promedio: {(tot_e/cnt_v) if cnt_v > 0 else 0.0:,.1f} kWh/v</div><div style='font-size:14px; color:#E65100; font-weight:bold; margin-top:4px;'>IDE: {(tot_e/km_flota_real) if km_flota_real > 0 else 0.0:,.2f} kWh/km</div></div>", unsafe_allow_html=True)
+            tot_e_com = energy_by_fleet_comercial.get(f_type, 0.0)
+            tot_e_tot = energy_by_fleet.get(f_type, 0.0)
+            subset_acum = df_acum[df_acum['tipo_tren'] == f_type] if not df_acum.empty else pd.DataFrame()
+            subset_inic = df_inic[df_inic['tipo_tren'] == f_type] if not df_inic.empty else pd.DataFrame()
+            cnt_v   = subset_inic.shape[0]
+            km_flota = subset_acum['tren_km'].sum() if not subset_acum.empty else 0.0
+            ide_flota = tot_e_com / km_flota if km_flota > 0 else 0.0
+            prom_flota = tot_e_com / cnt_v if cnt_v > 0 else 0.0
+            e_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; text-align:center; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333;'>Flota {f_type}</div><div style='font-size:22px; font-weight:bold; color:#2E7D32; margin:10px 0;'>{tot_e_com:,.0f} kWh</div><div style='font-size:12px; color:#666;'>Viajes iniciados: {cnt_v}</div><div style='font-size:13px; color:#1565C0; font-weight:bold; margin-top:5px;'>Promedio: {prom_flota:,.1f} kWh/v</div><div style='font-size:14px; color:#E65100; font-weight:bold; margin-top:4px;'>IDE: {ide_flota:,.2f} kWh/km</div></div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
-        km_total_red = km_inic_real + vacio_km_total
+        km_total_red = df_inic['tren_km'].sum() + vacio_km_total
         st.markdown("##### ⚡ Consumo Acumulado por Subestación Rectificadora (SER a 44kV)")
         if active_sers:
             ser_cols = st.columns(len(active_sers))
             for i, ser_info in enumerate(active_sers):
                 e_44 = max(0.0, ser_accum_visual.get(ser_info[1], 0.0)) / ETA_SER_RECTIFICADOR
-                ser_cols[i].markdown(f"<div style='background-color:#FFF3E0; border-radius:8px; padding:15px; text-align:center; border: 1px solid #FFCC80;'><div style='font-size:14px; font-weight:bold; color:#E65100;'>{ser_info[1]}</div><div style='font-size:22px; font-weight:bold; color:#E65100; margin:10px 0;'>{e_44:,.0f} kWh</div><div style='font-size:12px; color:#666;'>Km Total Red: {km_total_red:,.1f} km</div><div style='font-size:14px; color:#C62828; font-weight:bold; margin-top:4px;'>Aporte IDE: {e_44/max(1.0, km_total_red):,.3f} kWh/km</div></div>", unsafe_allow_html=True)
+                ser_cols[i].markdown(f"<div style='background-color:#FFF3E0; border-radius:8px; padding:15px; text-align:center; border: 1px solid #FFCC80;'><div style='font-size:14px; font-weight:bold; color:#E65100;'>{ser_info[1]}</div><div style='font-size:22px; font-weight:bold; color:#E65100; margin:10px 0;'>{e_44:,.0f} kWh</div><div style='font-size:12px; color:#666;'>Km Total Red: {km_total_red:,.3f} km</div><div style='font-size:14px; color:#C62828; font-weight:bold; margin-top:4px;'>Aporte IDE: {e_44/max(1.0, km_total_red):,.3f} kWh/km</div></div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
         st.markdown("##### ⚡ Consumo Acumulado Subestación de Alta Tensión (SEAT 110/44kV)")
-        st.markdown(f"<div style='background-color:#FFFDE7; border-radius:8px; padding:15px; text-align:center; border: 1px solid #FFF59D;'><div style='font-size:16px; font-weight:bold; color:#F57F17;'>SEAT EL SOL (Total Red + Pérdidas AC)</div><div style='font-size:26px; font-weight:bold; color:#F57F17; margin:10px 0;'>{seat_accum_1:,.0f} kWh</div><div style='font-size:13px; color:#666;'>Km Comercial: {km_inic_real:,.1f} km | Km Vacío: {vacio_km_total:,.1f} km</div><div style='font-size:14px; color:#333; font-weight:bold; margin-top:4px;'>Km Total Red: {km_total_red:,.1f} km</div><div style='font-size:16px; color:#C62828; font-weight:bold; margin-top:6px;'>IDE Global Real: {seat_accum_1/max(1.0, km_total_red):,.3f} kWh/km</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='background-color:#FFFDE7; border-radius:8px; padding:15px; text-align:center; border: 1px solid #FFF59D;'><div style='font-size:16px; font-weight:bold; color:#F57F17;'>SEAT EL SOL (Total Red + Pérdidas AC)</div><div style='font-size:26px; font-weight:bold; color:#F57F17; margin:10px 0;'>{seat_accum_1:,.0f} kWh</div><div style='font-size:13px; color:#666;'>Km Comercial: {df_inic['tren_km'].sum():,.1f} km | Km Vacío: {vacio_km_total:,.3f} km</div><div style='font-size:14px; color:#333; font-weight:bold; margin-top:4px;'>Km Total Red: {km_total_red:,.3f} km</div><div style='font-size:16px; color:#C62828; font-weight:bold; margin-top:6px;'>IDE Global Real: {seat_accum_1/max(1.0, km_total_red):,.3f} kWh/km</div></div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
         a1,a2,a3,a4,a5,a6 = st.columns(6)
