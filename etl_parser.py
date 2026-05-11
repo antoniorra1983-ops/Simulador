@@ -289,7 +289,10 @@ def procesar_thdr(data, fname, via_param=1):
         df = df.dropna(how='all').reset_index(drop=True)
 
         # 💡 EXTRACCIÓN DINÁMICA DE TIEMPOS
-        est_cols = {}
+        # Clasificar columnas en llegada/salida por estación para construcción de nodos
+        est_cols    = {}  # T_col -> est_idx (todos los tiempos, para t_ini/t_fin)
+        est_llegada = {}  # est_idx -> T_col (Hora Llegada)
+        est_salida  = {}  # est_idx -> T_col (Hora Salida)
         for i, col in enumerate(df.columns):
             col_str = str(col).upper()
             if any(k in col_str for k in ['LLEGADA','SALIDA','HORA']) or any(est[:3].upper() in col_str for est in ESTACIONES_SAFE):
@@ -299,7 +302,10 @@ def procesar_thdr(data, fname, via_param=1):
                     idx_est = _col_to_est_idx(col_str)
                     if idx_est is not None:
                         est_cols[f"T_{i}"] = idx_est
-
+                        if 'SALIDA' in col_str:
+                            est_salida[idx_est] = f"T_{i}"
+                        elif 'LLEGADA' in col_str:
+                            est_llegada[idx_est] = f"T_{i}"
         # 💡 FALLBACK DE SEGURIDAD EXTREMA: Si la cabecera está rota
         if len(est_cols) < 5:
             est_cols = {}
@@ -327,6 +333,40 @@ def procesar_thdr(data, fname, via_param=1):
 
         df['t_ini'] = df.apply(lambda row: min([_safe_get(row, c) for c in est_cols.keys() if pd.notna(_safe_get(row, c))] or [np.nan]), axis=1)
         df['t_fin'] = df.apply(lambda row: max([_safe_get(row, c) for c in est_cols.keys() if pd.notna(_safe_get(row, c))] or [np.nan]), axis=1)
+        def _construir_nodos(row):
+            """Construye nodos (t_abs_min, km) desde timestamps reales del THDR.
+            Origen: solo salida | Intermedias: llegada + salida | Destino: solo llegada.
+            """
+            est_presentes = sorted(set(list(est_llegada.keys()) + list(est_salida.keys())))
+            if via_param == 2: est_presentes = list(reversed(est_presentes))
+
+            def get_t(col):
+                if col is None: return None
+                v = row.get(col)
+                return float(v) if pd.notna(v) and float(v) > 0 else None
+
+            nodos = []
+            for e_idx in est_presentes:
+                t_lleg = get_t(est_llegada.get(e_idx))
+                t_sal  = get_t(est_salida.get(e_idx))
+                km     = KM_ACUM_SAFE[e_idx]
+                if not any([t_lleg, t_sal]): continue
+                if not nodos:
+                    # Estacion origen: solo salida
+                    if t_sal:  nodos.append((t_sal,  km))
+                    elif t_lleg: nodos.append((t_lleg, km))
+                else:
+                    # Intermedias y destino: llegada primero, luego salida
+                    if t_lleg: nodos.append((t_lleg, km))
+                    if t_sal:  nodos.append((t_sal,  km))
+
+            if len(nodos) >= 2:
+                nodos.sort(key=lambda x: x[0])
+                return nodos
+            return None
+
+        df['nodos'] = df.apply(_construir_nodos, axis=1)
+
 
         c_m1 = next((c for c in df.columns if 'MOTRIZ' in str(c).upper() and '1' in str(c).upper()), None)
         c_m2 = next((c for c in df.columns if 'MOTRIZ' in str(c).upper() and '2' in str(c).upper()), None)
