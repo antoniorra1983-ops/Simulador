@@ -140,34 +140,47 @@ def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos=None, t_
     elif v_kmh < 1.0: return "DWELL", 0.0
     else: return "CRUISE", v_kmh
 
-def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", f_compresor_dwell=1.08):
+def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", f_compresor_dwell=1.08, flota_params=None):
     hora_int = int(hora_decimal) % 24
     try: perfil = _get_val('AUX_HVAC_HORA', {}).get(estacion_anio, [0.5]*24)
     except: perfil = [0.5]*24
     if not perfil or len(perfil) < 24: perfil = [0.5]*24
-    
+
     f_hvac = perfil[hora_int]
     f_ocup = 1.0
     if cap_max > 0:
         ocup = min(1.0, pax_abordo / cap_max)
-        if estacion_anio == "verano": f_ocup = 1.0 + 0.05 * ocup
+        if estacion_anio == "verano":   f_ocup = 1.0 + 0.05 * ocup
         elif estacion_anio == "invierno": f_ocup = 1.0 - 0.12 * ocup
-        else: f_ocup = 1.0 - 0.06 * ocup
+        else:                            f_ocup = 1.0 - 0.06 * ocup
 
-    # Factor de demanda neumática según estado de marcha
-    if estado_marcha == "DWELL":       f_marcha = f_compresor_dwell  # Compresor en dwell (balonas + puertas)
-    elif estado_marcha == "ACCEL":     f_marcha = 0.95               # HVAC cede prioridad durante arranque
-    elif estado_marcha in ("BRAKE", "BRAKE_STATION"): f_marcha = 1.05  # Freno neumático activo
-    elif estado_marcha == "COAST":     f_marcha = 0.90               # HVAC al mínimo en marcha libre
-    else:                              f_marcha = 1.0                 # CRUISE y otros: nominal
+    # Factor de demanda según estado de marcha
+    if estado_marcha == "DWELL":                          f_marcha = f_compresor_dwell
+    elif estado_marcha == "ACCEL":                        f_marcha = 0.95
+    elif estado_marcha in ("BRAKE", "BRAKE_STATION"):     f_marcha = 1.05
+    elif estado_marcha == "COAST":                        f_marcha = 0.90
+    else:                                                  f_marcha = 1.0
 
-    # FRAC_BASE=0.12 y FRAC_HVAC=0.45 definidos en config.py (suman 0.57, resto es compresor+puertas)
     frac_base = _get_val('FRAC_BASE', 0.12)
     frac_hvac = _get_val('FRAC_HVAC', 0.45)
-    
-    aux_base = aux_kw_nominal * frac_base
+
+    aux_base     = aux_kw_nominal * frac_base
     aux_hvac_val = aux_kw_nominal * frac_hvac * f_hvac * f_ocup * f_marcha
-    return aux_base + aux_hvac_val
+
+    # Componentes fijas: compresor, puertas, ventilacion traccion
+    # Activas siempre que el tren circula — no dependen de perfil horario ni ocupacion
+    aux_fija = 0.0
+    if flota_params:
+        cap_unit = flota_params.get('cap_max', 1)
+        n_uni = max(1, round(cap_max / max(1, cap_unit))) if cap_max > 0 and cap_unit > 0 else 1
+        f_dwell_comp = flota_params.get('f_compresor_dwell', 1.0) if estado_marcha == "DWELL" else 1.0
+        aux_fija = (
+            flota_params.get('p_compresor_kw', 0.0) +
+            flota_params.get('p_puertas_kw',   0.0) +
+            flota_params.get('p_vent_trac_kw', 0.0)
+        ) * n_uni * f_dwell_comp
+
+    return aux_base + aux_hvac_val + aux_fija
 
 # =============================================================================
 # 3. KILOMETRAJE ROBUSTO (Tren-km) E INMUNE A DIRECCIÓN
@@ -475,7 +488,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 reg += (trabajo_j_regen / 3_600_000.0) * _get_val('ETA_REGEN_NETA', 0.72)
                 
             hora_actual = (t_ini_mins + t_horas * 60.0) / 60.0
-            aux_kw_inst = calcular_aux_dinamico(aux_kw_nominal, hora_actual, pax_mid, f.get('cap_max', 398) * n_uni_inst, estacion_anio, estado_marcha, f_compresor_especifico)
+            aux_kw_inst = calcular_aux_dinamico(aux_kw_nominal, hora_actual, pax_mid, f.get('cap_max', 398) * n_uni_inst, estacion_anio, estado_marcha, f_compresor_especifico, flota_params=f)
             
             aux += (aux_kw_inst * dt_actual) / 3600.0
             t_horas += dt_actual / 3600.0
@@ -486,7 +499,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     dwell_h = (n_est_mid * _get_val('DWELL_DEF', 8.0)) / 3600.0
     
     hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
-    aux_kw_dwell = calcular_aux_dinamico(aux_kw_nominal_final, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni_final, estacion_anio, "DWELL", f_compresor_especifico)
+    aux_kw_dwell = calcular_aux_dinamico(aux_kw_nominal_final, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni_final, estacion_anio, "DWELL", f_compresor_especifico, flota_params=f)
     
     aux += aux_kw_dwell * dwell_h
     t_horas += dwell_h
@@ -596,7 +609,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                 if estacion_anio == "invierno": aux_nom = f.get('aux_kw_heat', 65.16) * n_uni
                 else: aux_nom = f.get('aux_kw_cool', 58.76) * n_uni
                 
-                p_aux_kw = calcular_aux_dinamico(aux_nom, m / 60.0, tr['pax_abordo'], f.get('cap_max', 398) * n_uni, estacion_anio, state)
+                p_aux_kw = calcular_aux_dinamico(aux_nom, m / 60.0, tr['pax_abordo'], f.get('cap_max', 398) * n_uni, estacion_anio, state, flota_params=f)
                 
                 idx_km = min(44999, max(0, int(pos * 1000)))
                 pend_permil = _PEND_ARRAY_V1[idx_km] if tr['Via'] == 1 else _PEND_ARRAY_V2[idx_km]
