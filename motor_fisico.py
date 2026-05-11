@@ -692,6 +692,8 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
         return pd.Series([trc, aux, reg_util, kwh_reostato, neto, t_h])
         
     df_e[['kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto', 't_viaje_h']] = df_e.apply(_wrapper, axis=1)
+    # Actualizar t_fin con el tiempo real simulado (incluye efecto de prevenciones)
+    df_e['t_fin'] = df_e['t_ini'] + df_e['t_viaje_h'] * 60.0
     
     # 💡 FIX 1 ABSOLUTO: La Ecuación Físicamente Perfecta para el Kilometraje Real del WTT
     df_e['tren_km'] = df_e.apply(_calc_tren_km_real_motor, axis=1)
