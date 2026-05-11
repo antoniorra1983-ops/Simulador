@@ -282,7 +282,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
 # TABLA THDR SINTÉTICA — Horario simulado por estación para el Planificador
 # =============================================================================
 @st.cache_data(show_spinner=False, ttl=1)
-def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio, km_orig, km_dest):
+def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio, km_orig, km_dest, prevenciones=None):
     """Una fila por servicio: columnas EstX_Llegada / EstX_Salida solo para estaciones del recorrido real."""
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
     from motor_fisico import simular_tramo_termodinamico
@@ -322,7 +322,7 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
         try:
             _,_,_,_,_,t_h = simular_tramo_termodinamico(
                 tipo_tren, doble, km_ini_tr, km_fin_tr, via, pct_trac,
-                True, True, None, {}, 150, None, None, estacion_anio, t_actual, False, None
+                True, True, None, {}, 150, None, None, estacion_anio, t_actual, False, prevenciones
             )
         except Exception:
             t_h = 0.0
@@ -344,7 +344,7 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
     return fila
 
 
-def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio):
+def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, prevenciones=None):
     """
     Tabla estilo THDR por Vía: una fila por servicio, columnas por estación
     con Llegada/Salida. Minimizable con expander.
@@ -373,7 +373,8 @@ def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio):
                     str(estacion_anio),
                     str(row.get('num_servicio', '')),
                     float(row.get('km_orig', 0.0)),
-                    float(row.get('km_dest', 43.13))
+                    float(row.get('km_dest', 43.13)),
+                    prevenciones
                 )
                 filas.append(fila)
 
@@ -799,7 +800,7 @@ def main():
                 try:
                     render_gemelo_digital(df_sint_final, df_sint_e, active_sers, f"Simulación: {nombre_perfil}", pct_trac_plan, use_rm, use_pend, estacion_anio_plan, "plan", gap_vias, pax_dia_total=int(df_sint_final['pax_abordo'].sum()))
                     render_dashboard_energia_v112(df_sint_e, active_sers, "Planificador", st.session_state.get('sl_ui_plan', 480.0))
-                    render_tablas_thdr_planificador(df_sint_final, pct_trac_plan, estacion_anio_plan)
+                    render_tablas_thdr_planificador(df_sint_final, pct_trac_plan, estacion_anio_plan, prevenciones_list)
                 except Exception as e:
                     st.error(f"Fallo al graficar UI del Planificador: {e}")
 
