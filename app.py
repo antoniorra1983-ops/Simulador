@@ -17,18 +17,59 @@ try:
 except ImportError:
     pass
 
+# =============================================================================
+# IMPORTACIONES BLINDADAS - Tolerancia a fallos de caché en Streamlit Cloud
+# =============================================================================
 import etl_parser
+
+# Diccionario de funciones requeridas con inicialización segura
+_required_etl_funcs = [
+    'procesar_thdr',
+    'calcular_dwell', 
+    'cargar_pax',
+    'match_pax',
+    'calc_tren_km_real_general',
+    'clean_id',
+    'mins_to_time_str',
+    'clasificar_dia',
+    'cargar_prevenciones',
+    'get_vacios_dia',
+    'parsear_planilla_maestra',
+]
+
+# Verificar y asignar cada función
+_missing = []
+for func_name in _required_etl_funcs:
+    if not hasattr(etl_parser, func_name):
+        _missing.append(func_name)
+
+if _missing:
+    st.error(f"🚨 Funciones faltantes en etl_parser.py: {', '.join(_missing)}")
+    st.info("Verifica que el archivo etl_parser.py contenga todas las funciones requeridas y que no haya errores de sintaxis.")
+    st.stop()
+
+# Asignar funciones a variables locales
+procesar_thdr = etl_parser.procesar_thdr
+calcular_dwell = etl_parser.calcular_dwell
+cargar_pax = etl_parser.cargar_pax
+match_pax = etl_parser.match_pax
+calc_tren_km_real_general = etl_parser.calc_tren_km_real_general
+clean_id = etl_parser.clean_id
+mins_to_time_str = etl_parser.mins_to_time_str
+clasificar_dia = etl_parser.clasificar_dia
+cargar_prevenciones = etl_parser.cargar_prevenciones
+get_vacios_dia = etl_parser.get_vacios_dia
+parsear_planilla_maestra = etl_parser.parsear_planilla_maestra
+
 # Sincronización de nombres de funciones por seguridad
 if not hasattr(etl_parser, 'get_pax_at_km') and hasattr(etl_parser, 'get_pax_at_km_nativo'):
     etl_parser.get_pax_at_km = etl_parser.get_pax_at_km_nativo
 if not hasattr(etl_parser, 'get_pax_at_km_nativo') and hasattr(etl_parser, 'get_pax_at_km'):
     etl_parser.get_pax_at_km_nativo = etl_parser.get_pax_at_km
 
-from etl_parser import (
-    procesar_thdr, calcular_dwell, cargar_pax, match_pax, 
-    calc_tren_km_real_general, clean_id, mins_to_time_str, clasificar_dia,
-    cargar_prevenciones, get_vacios_dia, parsear_planilla_maestra
-)
+# =============================================================================
+# IMPORTACIONES DE MOTOR FÍSICO Y RED ELÉCTRICA
+# =============================================================================
 from motor_fisico import (
     calcular_termodinamica_flota_v111, simular_tramo_termodinamico
 )
@@ -134,7 +175,6 @@ def procesar_datos_completos(_b1, _b2, _bx1, _bx2, sig_pesada):
             df_all['pax_row_idx'] = -1
             
         df_all['maniobra'] = None
-        # tren_km ya viene correcto desde procesar_thdr; solo calcular si falta
         if 'tren_km' not in df_all.columns:
             df_all['tren_km'] = df_all.apply(calc_tren_km_real_general, axis=1)
     return df_all, df_px, err_t, err_p
@@ -152,9 +192,12 @@ def simular_dia_historico_cached(_df_dia, pct_trac_hist, use_rm, use_pend, use_r
     dict_regen = {}
     if use_regen:
         try:
-            if "Probabilístico" in tipo_regen: dict_regen = calcular_receptividad_por_headway(_df_dia)
-            else: dict_regen = precalcular_red_electrica_v111(_df_dia, pct_trac_hist, use_rm, estacion_anio)
-        except Exception: pass
+            if "Probabilístico" in tipo_regen:
+                dict_regen = calcular_receptividad_por_headway(_df_dia)
+            else:
+                dict_regen = precalcular_red_electrica_v111(_df_dia, pct_trac_hist, use_rm, estacion_anio)
+        except Exception:
+            pass
         
     return calcular_termodinamica_flota_v111(_df_dia, pct_trac_hist, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=_prevenciones)
 
@@ -254,7 +297,6 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         viajes_completos.append(viaje_final)
         
     df_sint_final = pd.DataFrame(viajes_completos)
-    # tren_km ya viene correcto desde procesar_thdr via viaje_final = r.to_dict(); no recalcular
     if 'tren_km' not in df_sint_final.columns:
         df_sint_final['tren_km'] = df_sint_final.apply(calc_tren_km_real_general, axis=1)
     df_sint_final.index = df_sint_final['_id']
@@ -275,10 +317,6 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
     return df_sint_final, df_sint_e
 
 # =============================================================================
-# 3. APLICACIÓN PRINCIPAL (MAIN ORCHESTRATOR)
-# =============================================================================
-
-# =============================================================================
 # TABLA THDR SINTÉTICA — Horario simulado por estación para el Planificador
 # =============================================================================
 @st.cache_data(show_spinner=False, ttl=1)
@@ -288,17 +326,13 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
     from motor_fisico import simular_tramo_termodinamico
     from etl_parser import mins_to_time_str
 
-    # Determinar estaciones del recorrido real desde km_orig y km_dest
-    # Encontrar índices de estaciones que están entre km_orig y km_dest
     km_min = min(km_orig, km_dest)
     km_max = max(km_orig, km_dest)
 
-    # Índices de estaciones dentro del recorrido
     est_en_recorrido = [i for i, km in enumerate(KM_ACUM[:N_EST])
                         if km_min - 0.01 <= km <= km_max + 0.01]
 
-    # Ordenar según dirección de viaje
-    if via == 2:  # LI→PU: orden descendente de km
+    if via == 2:
         est_en_recorrido = list(reversed(est_en_recorrido))
 
     if len(est_en_recorrido) < 2:
@@ -308,7 +342,6 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
     t_actual = t_ini_mins
     t_inicio_viaje = t_ini_mins
 
-    # Estación origen: solo salida
     est_orig_nombre = ESTACIONES[est_en_recorrido[0]]
     fila[f"{est_orig_nombre}\nSalida"] = mins_to_time_str(t_actual)
 
@@ -337,7 +370,6 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
 
         t_actual = t_llegada if es_destino else t_salida
 
-    # Tiempo total HH:MM:SS
     t_total = t_actual - t_inicio_viaje
     h = int(t_total // 60); m = int(t_total % 60); s = int((t_total % 1) * 60)
     fila['Tiempo Viaje'] = f"{h:02d}:{m:02d}:{s:02d}"
@@ -345,10 +377,7 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
 
 
 def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, prevenciones=None):
-    """
-    Tabla estilo THDR por Vía: una fila por servicio, columnas por estación
-    con Llegada/Salida. Minimizable con expander.
-    """
+    """Tabla estilo THDR por Vía: una fila por servicio, columnas por estación con Llegada/Salida."""
     from config import N_EST, ESTACIONES, KM_TOTAL
     from etl_parser import mins_to_time_str
 
