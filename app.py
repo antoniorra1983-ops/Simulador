@@ -287,6 +287,7 @@ def generar_tabla_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, es
     Simula tramo a tramo y devuelve tabla con hora de llegada y salida
     por estación, al estilo del archivo THDR de EFE Valparaíso.
     """
+    from config import N_EST, ESTACIONES, KM_ACUM, KM_TOTAL, DWELL_DEF
     from motor_fisico import simular_tramo_termodinamico
     from etl_parser import mins_to_time_str
 
@@ -339,8 +340,8 @@ def generar_tabla_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, es
 def render_tablas_thdr_planificador(df_sint_final):
     """
     Muestra tablas estilo THDR por Vía, con expander minimizable.
-    Toma el primer servicio de cada vía como representativo.
     """
+    from config import N_EST, ESTACIONES, KM_ACUM, KM_TOTAL, DWELL_DEF
     st.markdown("---")
     st.markdown("#### 📋 Horario Simulado por Estación (estilo THDR)")
 
