@@ -747,6 +747,15 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
             if n not in motrices_viajes: motrices_viajes[n] = []
             motrices_viajes[n].append(idx)
 
+    # Fallback para planificador sintético: sin motriz_num, usar num_servicio único
+    # Cada servicio único representa un tren físico distinto en la programación
+    if not motrices_viajes and 'num_servicio' in df_e.columns:
+        for idx, row in df_e.iterrows():
+            srv = str(row.get('num_servicio', '')).strip()
+            if srv and srv not in ('nan', 'none', ''):
+                if srv not in motrices_viajes: motrices_viajes[srv] = []
+                motrices_viajes[srv].append(idx)
+
     # Calcular kwh pre/post por motriz y distribuir entre sus viajes
     aux_prepost_por_idx = {idx: 0.0 for idx in df_e.index}
     for motriz, idxs in motrices_viajes.items():
