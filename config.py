@@ -61,7 +61,7 @@ R_AC_44KV = 0.17
 V_NOMINAL_AC = 44000.0
 
 ETA_TRAC_SISTEMA = 0.92  
-ETA_REGEN_NETA = 0.85  
+ETA_REGEN_NETA = 0.38  # Eficiencia neta regeneracion MERVAL: ~18% traccion (calibrado TRA305 + topografia real)
 LAMBDA_REGEN_KM  = 5.0     
 ETA_SER_RECTIFICADOR = 0.96 
 ETA_MAX   = 0.70
@@ -83,8 +83,8 @@ AUX_HVAC_HORA = {
 }
 
 # Fracciones de carga (Componentes Vitales)
-FRAC_BASE = 0.12  # Carga Vital y TCMS
-FRAC_HVAC = 0.45  # Climatización Máxima Instalada
+FRAC_BASE = 0.21  # Carga Fija: Base TCMS + Ventilacion traccion + Compresor + Iluminacion (TRA 305 Alstom)
+FRAC_HVAC = 0.89  # Climatizacion: 4 grupos x potencia media (TRA 305 Alstom, calef/refrig al 50% uso promedio anual)
 
 # =============================================================================
 # 4. PERFIL DE VELOCIDADES DE VÍA
