@@ -282,27 +282,46 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
 # TABLA THDR SINTÉTICA — Horario simulado por estación para el Planificador
 # =============================================================================
 @st.cache_data(show_spinner=False, ttl=1)
-def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio):
-    """Una fila por servicio: columnas EstX_Llegada / EstX_Salida para cada estación."""
+def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio, km_orig, km_dest):
+    """Una fila por servicio: columnas EstX_Llegada / EstX_Salida solo para estaciones del recorrido real."""
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
     from motor_fisico import simular_tramo_termodinamico
     from etl_parser import mins_to_time_str
 
-    est_idx = list(range(N_EST)) if via == 1 else list(range(N_EST-1, -1, -1))
+    # Determinar estaciones del recorrido real desde km_orig y km_dest
+    # Encontrar índices de estaciones que están entre km_orig y km_dest
+    km_min = min(km_orig, km_dest)
+    km_max = max(km_orig, km_dest)
+
+    # Índices de estaciones dentro del recorrido
+    est_en_recorrido = [i for i, km in enumerate(KM_ACUM[:N_EST])
+                        if km_min - 0.01 <= km <= km_max + 0.01]
+
+    # Ordenar según dirección de viaje
+    if via == 2:  # LI→PU: orden descendente de km
+        est_en_recorrido = list(reversed(est_en_recorrido))
+
+    if len(est_en_recorrido) < 2:
+        return {'Servicio': str(num_servicio), 'Error': 'Sin estaciones en recorrido'}
+
     fila = {'Servicio': str(num_servicio), 'Tipo': tipo_tren, 'Config': 'Doble' if doble else 'Simple'}
     t_actual = t_ini_mins
     t_inicio_viaje = t_ini_mins
 
     # Estación origen: solo salida
-    fila[f"{ESTACIONES[est_idx[0]]}\nSalida"] = mins_to_time_str(t_actual)
+    est_orig_nombre = ESTACIONES[est_en_recorrido[0]]
+    fila[f"{est_orig_nombre}\nSalida"] = mins_to_time_str(t_actual)
 
-    for j in range(len(est_idx)-1):
-        km_ini = KM_ACUM[est_idx[j]]
-        km_fin = KM_ACUM[est_idx[j+1]]
-        es_destino = (j == len(est_idx)-2)
+    for j in range(len(est_en_recorrido)-1):
+        idx_ini = est_en_recorrido[j]
+        idx_fin = est_en_recorrido[j+1]
+        km_ini_tr = KM_ACUM[idx_ini]
+        km_fin_tr = KM_ACUM[idx_fin]
+        es_destino = (j == len(est_en_recorrido)-2)
+
         try:
             _,_,_,_,_,t_h = simular_tramo_termodinamico(
-                tipo_tren, doble, km_ini, km_fin, via, pct_trac,
+                tipo_tren, doble, km_ini_tr, km_fin_tr, via, pct_trac,
                 True, True, None, {}, 150, None, None, estacion_anio, t_actual, False, None
             )
         except Exception:
@@ -310,7 +329,7 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
 
         t_llegada = t_actual + t_h * 60
         t_salida  = t_llegada + DWELL_DEF / 60
-        est_sig   = ESTACIONES[est_idx[j+1]]
+        est_sig   = ESTACIONES[idx_fin]
 
         fila[f"{est_sig}\nLlegada"] = mins_to_time_str(t_llegada)
         if not es_destino:
@@ -352,7 +371,9 @@ def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio):
                     float(pct_trac),
                     float(row.get('t_ini', 360.0)),
                     str(estacion_anio),
-                    str(row.get('num_servicio', ''))
+                    str(row.get('num_servicio', '')),
+                    float(row.get('km_orig', 0.0)),
+                    float(row.get('km_dest', 43.13))
                 )
                 filas.append(fila)
 
