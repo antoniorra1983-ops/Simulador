@@ -236,6 +236,11 @@ get_pax_at_km = get_pax_at_km_nativo
 # 2. PROCESAMIENTO THDR (ESCÁNER HÍBRIDO A PRUEBA DE FALLOS)
 # =============================================================================
 def procesar_thdr(data, fname, via_param=1):
+    # 💡 CORRECCIÓN DE SEGURIDAD: Inicialización temprana de variables de scope
+    # para evitar AttributeError si la extracción dinámica falla parcialmente.
+    est_llegada = {}
+    est_salida = {}
+    
     try:
         ext = fname.lower()
         if ext.endswith('.csv'):
@@ -291,8 +296,8 @@ def procesar_thdr(data, fname, via_param=1):
         # 💡 EXTRACCIÓN DINÁMICA DE TIEMPOS
         # Clasificar columnas en llegada/salida por estación para construcción de nodos
         est_cols    = {}  # T_col -> est_idx (todos los tiempos, para t_ini/t_fin)
-        est_llegada = {}  # est_idx -> T_col (Hora Llegada)
-        est_salida  = {}  # est_idx -> T_col (Hora Salida)
+        # est_llegada y est_salida ya están inicializados al inicio de la función
+        
         for i, col in enumerate(df.columns):
             col_str = str(col).upper()
             if any(k in col_str for k in ['LLEGADA','SALIDA','HORA']) or any(est[:3].upper() in col_str for est in ESTACIONES_SAFE):
@@ -306,9 +311,12 @@ def procesar_thdr(data, fname, via_param=1):
                             est_salida[idx_est] = f"T_{i}"
                         elif 'LLEGADA' in col_str:
                             est_llegada[idx_est] = f"T_{i}"
+                            
         # 💡 FALLBACK DE SEGURIDAD EXTREMA: Si la cabecera está rota
         if len(est_cols) < 5:
             est_cols = {}
+            est_llegada = {}
+            est_salida = {}
             col_start_time = 5
             for c in range(2, min(12, df.shape[1])):
                 muestras = df.iloc[:, c].dropna().head(10).apply(parse_time_to_mins)
@@ -333,10 +341,12 @@ def procesar_thdr(data, fname, via_param=1):
 
         df['t_ini'] = df.apply(lambda row: min([_safe_get(row, c) for c in est_cols.keys() if pd.notna(_safe_get(row, c))] or [np.nan]), axis=1)
         df['t_fin'] = df.apply(lambda row: max([_safe_get(row, c) for c in est_cols.keys() if pd.notna(_safe_get(row, c))] or [np.nan]), axis=1)
+        
         def _construir_nodos(row):
             """Construye nodos (t_abs_min, km) desde timestamps reales del THDR.
             Origen: solo salida | Intermedias: llegada + salida | Destino: solo llegada.
             """
+            # Ahora est_llegada y est_salida están garantizados (inicializados al inicio)
             est_presentes = sorted(set(list(est_llegada.keys()) + list(est_salida.keys())))
             if via_param == 2: est_presentes = list(reversed(est_presentes))
 
@@ -366,7 +376,6 @@ def procesar_thdr(data, fname, via_param=1):
             return None
 
         df['nodos'] = df.apply(_construir_nodos, axis=1)
-
 
         c_m1 = next((c for c in df.columns if 'MOTRIZ' in str(c).upper() and '1' in str(c).upper()), None)
         c_m2 = next((c for c in df.columns if 'MOTRIZ' in str(c).upper() and '2' in str(c).upper()), None)
