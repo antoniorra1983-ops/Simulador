@@ -277,6 +277,126 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
 # =============================================================================
 # 3. APLICACIÓN PRINCIPAL (MAIN ORCHESTRATOR)
 # =============================================================================
+
+# =============================================================================
+# TABLA THDR SINTÉTICA — Horario simulado por estación para el Planificador
+# =============================================================================
+@st.cache_data(show_spinner=False, ttl=1)
+def generar_tabla_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio):
+    """
+    Simula tramo a tramo y devuelve tabla con hora de llegada y salida
+    por estación, al estilo del archivo THDR de EFE Valparaíso.
+    """
+    from motor_fisico import simular_tramo_termodinamico
+    from etl_parser import mins_to_time_str
+
+    if via == 1:
+        est_idx = list(range(N_EST))
+    else:
+        est_idx = list(range(N_EST-1, -1, -1))
+
+    filas = []
+    t_actual = t_ini_mins
+
+    # Estación origen: solo salida
+    filas.append({
+        'Estación': ESTACIONES[est_idx[0]],
+        'Llegada':  '—',
+        'Salida':   mins_to_time_str(t_actual),
+        'Tiempo tramo': '—',
+        'kWh tramo': '—'
+    })
+
+    for j in range(len(est_idx)-1):
+        km_ini = KM_ACUM[est_idx[j]]
+        km_fin = KM_ACUM[est_idx[j+1]]
+        es_destino = (j == len(est_idx)-2)
+
+        try:
+            _,_,_,_,neto,t_h = simular_tramo_termodinamico(
+                tipo_tren, doble, km_ini, km_fin, via, pct_trac,
+                True, True, None, {}, 150, None, None, estacion_anio, t_actual, False, None
+            )
+        except Exception:
+            t_h, neto = 0.0, 0.0
+
+        t_llegada = t_actual + t_h * 60
+        t_salida  = t_llegada + DWELL_DEF / 60
+
+        filas.append({
+            'Estación':      ESTACIONES[est_idx[j+1]],
+            'Llegada':       mins_to_time_str(t_llegada),
+            'Salida':        '—' if es_destino else mins_to_time_str(t_salida),
+            'Tiempo tramo':  f"{t_h*60:.1f} min",
+            'kWh tramo':     f"{neto:.1f}"
+        })
+
+        t_actual = t_llegada if es_destino else t_salida
+
+    return pd.DataFrame(filas)
+
+
+def render_tablas_thdr_planificador(df_sint_final):
+    """
+    Muestra tablas estilo THDR por Vía, con expander minimizable.
+    Toma el primer servicio de cada vía como representativo.
+    """
+    st.markdown("---")
+    st.markdown("#### 📋 Horario Simulado por Estación (estilo THDR)")
+
+    for via in [1, 2]:
+        label_via = "🔵 Vía 1 — Puerto → Limache" if via == 1 else "🔴 Vía 2 — Limache → Puerto"
+        df_via = df_sint_final[df_sint_final['Via'] == via].sort_values('t_ini')
+
+        if df_via.empty:
+            continue
+
+        with st.expander(label_via, expanded=False):
+            # Selector de servicio dentro del expander
+            servicios = df_via['num_servicio'].unique().tolist()
+            srv_sel = st.selectbox(
+                f"Servicio Vía {via}",
+                servicios,
+                key=f"srv_sel_v{via}",
+                format_func=lambda s: f"Servicio {s}"
+            )
+
+            row = df_via[df_via['num_servicio'] == srv_sel].iloc[0]
+            tipo    = row.get('tipo_tren', 'XT-100')
+            doble   = bool(row.get('doble', False))
+            t_ini   = float(row.get('t_ini', 360.0))
+            estacion = st.session_state.get('est_plan', 'otoño')
+
+            # Obtener pct_trac del session state
+            pct = float(st.session_state.get('pct_trac_plan_val', 75.0))
+
+            config_label = "Doble" if doble else "Simple"
+            st.caption(f"**{tipo} {config_label}** | Salida: {__import__('etl_parser').mins_to_time_str(t_ini)}")
+
+            df_tabla = generar_tabla_thdr_sintetica(tipo, doble, via, pct, t_ini, estacion)
+
+            # Calcular tiempo total
+            t_fin_est = float(row.get('t_fin', t_ini + 70))
+            t_total = round(t_fin_est - t_ini, 1)
+
+            col_a, col_b, col_c = st.columns(3)
+            col_a.metric("⏱ Tiempo total", f"{t_total:.0f} min")
+            col_b.metric("🚉 Estaciones", str(N_EST))
+            col_c.metric("📏 Distancia", f"{KM_TOTAL:.1f} km")
+
+            st.dataframe(
+                df_tabla,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'Estación':     st.column_config.TextColumn('Estación', width='medium'),
+                    'Llegada':      st.column_config.TextColumn('Llegada',  width='small'),
+                    'Salida':       st.column_config.TextColumn('Salida',   width='small'),
+                    'Tiempo tramo': st.column_config.TextColumn('T. Tramo', width='small'),
+                    'kWh tramo':    st.column_config.TextColumn('kWh',      width='small'),
+                }
+            )
+
 def main():
     def reset_plan_state():
         keys_to_clear = [
@@ -678,6 +798,7 @@ def main():
                 try:
                     render_gemelo_digital(df_sint_final, df_sint_e, active_sers, f"Simulación: {nombre_perfil}", pct_trac_plan, use_rm, use_pend, estacion_anio_plan, "plan", gap_vias, pax_dia_total=int(df_sint_final['pax_abordo'].sum()))
                     render_dashboard_energia_v112(df_sint_e, active_sers, "Planificador", st.session_state.get('sl_ui_plan', 480.0))
+                    render_tablas_thdr_planificador(df_sint_final)
                 except Exception as e:
                     st.error(f"Fallo al graficar UI del Planificador: {e}")
 
