@@ -82,10 +82,6 @@ for ki, kf, r_m in _curvas:
     s_i, e_i = int(ki * 1000), min(int(kf * 1000), 44999)
     if s_i < e_i: _CURVA_ARRAY[s_i:e_i] = w_c
 
-# Constante física: factor de resistencia aerodinámica para doble tracción (acoplamiento de estelas).
-# Valor 1.35 basado en calibración IDE MERVAL. Aplicar en TODOS los cálculos Davis con n_uni==2.
-_DAVIS_DOBLE_AERO = 1.35
-
 # =============================================================================
 # 2. FUNCIONES BASE DE MOVIMIENTO Y RADAR ELÉCTRICO
 # =============================================================================
@@ -140,35 +136,33 @@ def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos=None, t_
     elif v_kmh < 1.0: return "DWELL", 0.0
     else: return "CRUISE", v_kmh
 
-def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", f_compresor_dwell=1.08, flota_params=None):
+def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE", f_compresor_dwell=1.08):
     hora_int = int(hora_decimal) % 24
     try: perfil = _get_val('AUX_HVAC_HORA', {}).get(estacion_anio, [0.5]*24)
     except: perfil = [0.5]*24
     if not perfil or len(perfil) < 24: perfil = [0.5]*24
-
+    
     f_hvac = perfil[hora_int]
     f_ocup = 1.0
     if cap_max > 0:
         ocup = min(1.0, pax_abordo / cap_max)
-        if estacion_anio == "verano":   f_ocup = 1.0 + 0.05 * ocup
+        if estacion_anio == "verano": f_ocup = 1.0 + 0.05 * ocup
         elif estacion_anio == "invierno": f_ocup = 1.0 - 0.12 * ocup
-        else:                            f_ocup = 1.0 - 0.06 * ocup
+        else: f_ocup = 1.0 - 0.06 * ocup
 
-    # Factor de demanda según estado de marcha
-    if estado_marcha == "DWELL":                          f_marcha = f_compresor_dwell
-    elif estado_marcha == "ACCEL":                        f_marcha = 0.95
-    elif estado_marcha in ("BRAKE", "BRAKE_STATION"):     f_marcha = 1.05
-    elif estado_marcha == "COAST":                        f_marcha = 0.90
-    else:                                                  f_marcha = 1.0
+    # Factor de demanda neumática según estado de marcha
+    if estado_marcha == "DWELL":       f_marcha = f_compresor_dwell
+    elif estado_marcha == "ACCEL":     f_marcha = 0.95
+    elif estado_marcha in ("BRAKE", "BRAKE_STATION"): f_marcha = 1.05
+    elif estado_marcha == "COAST":     f_marcha = 0.90
+    else:                              f_marcha = 1.0
 
     frac_base = _get_val('FRAC_BASE', 0.12)
     frac_hvac = _get_val('FRAC_HVAC', 0.45)
-
-    aux_base     = aux_kw_nominal * frac_base
+    frac_hvac = _get_val('FRAC_HVAC', 0.70)
+    
+    aux_base = aux_kw_nominal * frac_base
     aux_hvac_val = aux_kw_nominal * frac_hvac * f_hvac * f_ocup * f_marcha
-
-    # NOTA: p_compresor_kw, p_puertas_kw y p_vent_trac_kw ya están incluidos
-    # en FRAC_BASE (calibrado desde TRA 305 Alstom). No sumar por separado.
     return aux_base + aux_hvac_val
 
 # =============================================================================
@@ -265,23 +259,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     paradas_km = list(set(paradas_km))
     paradas_km.sort(reverse=(via_op == 2))
     
-    # Velocidad media real por tramo desde nodos THDR
-    # Cuando es_sintetico=False, cada tramo tiene su v_consigna derivada del timestamp real
-    v_tramo_real = {}  # km_ini_tramo -> v_media_kmh
-    if not es_sintetico and nodos and len(nodos) >= 2:
-        nodos_sorted = sorted(nodos, key=lambda x: x[0])  # ordenar por tiempo
-        for ni in range(len(nodos_sorted)-1):
-            t0, km0 = nodos_sorted[ni]
-            t1, km1 = nodos_sorted[ni+1]
-            dt_min = t1 - t0
-            dist_km = abs(km1 - km0)
-            if dt_min > 0.1 and dist_km > 0.01:
-                v_media = dist_km / (dt_min / 60.0)  # km/h
-                # Limitar a velocidad física razonable (no más del límite de la vía)
-                idx_ref = min(44999, int(min(km0, km1) * 1000))
-                v_via = _VEL_ARRAY_NORM[idx_ref] if _VEL_ARRAY_NORM[idx_ref] > 0 else 120.0
-                v_tramo_real[round(min(km0,km1), 3)] = min(v_media * 1.70, v_via)
-
     ser_data = _get_val('SER_DATA', [(4.9, "SER PO"), (12.7, "SER ES"), (25.5, "SER EB"), (28.7, "SER VA")])
     dt = 1.0  
     
@@ -291,10 +268,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     
     for i in range(len(paradas_km)-1):
         p_ini, p_fin = paradas_km[i], paradas_km[i+1]
-        # Velocidad consigna real del tramo (desde THDR si disponible)
-        km_tramo_key = round(min(p_ini, p_fin), 3)
-        v_cons_tramo = v_tramo_real.get(km_tramo_key, None)
-
         dist_tramo = abs(p_fin - p_ini) * 1000.0
         if dist_tramo <= 0: continue
         
@@ -347,9 +320,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             
             # Aplica límite histórico si existe
             v_cons_kmh = min(v_cons_kmh, v_limit_thdr)
-            # Override por velocidad real del tramo THDR (más preciso que v_limit global)
-            if v_cons_tramo is not None:
-                v_cons_kmh = min(v_cons_kmh, v_cons_tramo)
             
             if prevenciones:
                 for p in prevenciones:
@@ -388,7 +358,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if via_op == 2 and km_actual <= 0.20: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual > 0.10 else 10.0)
             
             v_kmh = v_ms * 3.6
-            if n_uni_inst == 2: f_davis = (f.get('davis_A',1615.0) * 2) + (f.get('davis_B',0.0) * 2 * v_kmh) + (f.get('davis_C',0.54) * _DAVIS_DOBLE_AERO * (v_kmh**2))
+            if n_uni_inst == 2: f_davis = (f.get('davis_A',1615.0) * 2) + (f.get('davis_B',0.0) * 2 * v_kmh) + (f.get('davis_C',0.54) * 1.35 * (v_kmh**2))
             else: f_davis = f.get('davis_A',1615.0) + f.get('davis_B',0.0)*v_kmh + f.get('davis_C',0.54)*(v_kmh**2)
                 
             f_pend = 0.0
@@ -416,6 +386,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             d_freno_req = (v_ms**2) / (2 * a_freno_op) if v_ms > 0 else 0
             f_disp_freno = min(f_freno_max_n, p_freno_max_w / max(0.1, v_ms)) if v_kmh >= v_freno_min else 0.0
             
+            if dist_restante <= d_freno_req + (v_ms * dt * 1.2): estado_marcha = "BRAKE_STATION"
             if dist_restante <= d_freno_req + (v_ms * dt * 1.2): estado_marcha = "BRAKE_STATION"
             elif v_kmh > v_cons_kmh + 1.5:                       estado_marcha = "BRAKE_OVERSPEED"
             elif estado_marcha == "BRAKE_OVERSPEED" and v_kmh <= v_cons_kmh: estado_marcha = "CRUISE"
@@ -448,11 +419,9 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 
                 a_net_target = (f_motor - f_res_total) / masa_dinamica_kg
             elif estado_marcha == "CRUISE":
-                # Mantiene velocidad consigna: solo fuerza para compensar resistencias
-                # Sin aceleración neta — el maquinista regula el notch mínimo necesario
                 f_motor = max(0.0, f_res_total)
                 f_motor = min(f_motor, f_disp_trac_real * (pct_trac / 100.0))
-                a_net_target = (f_motor - f_res_total) / masa_dinamica_kg  # ≈ 0
+                a_net_target = (f_motor - f_res_total) / masa_dinamica_kg
             elif estado_marcha == "COAST":
                 a_net_target = (-f_res_total) / masa_dinamica_kg
                 
@@ -508,7 +477,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 reg += (trabajo_j_regen / 3_600_000.0) * _get_val('ETA_REGEN_NETA', 0.72)
                 
             hora_actual = (t_ini_mins + t_horas * 60.0) / 60.0
-            aux_kw_inst = calcular_aux_dinamico(aux_kw_nominal, hora_actual, pax_mid, f.get('cap_max', 398) * n_uni_inst, estacion_anio, estado_marcha, f_compresor_especifico, flota_params=f)
+            aux_kw_inst = calcular_aux_dinamico(aux_kw_nominal, hora_actual, pax_mid, f.get('cap_max', 398) * n_uni_inst, estacion_anio, estado_marcha, f_compresor_especifico)
             
             aux += (aux_kw_inst * dt_actual) / 3600.0
             t_horas += dt_actual / 3600.0
@@ -516,10 +485,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             v_ms = v_new
 
     n_est_mid = max(0, len(paradas_km) - 2)
-    dwell_h = (n_est_mid * _get_val('DWELL_DEF', 8.0)) / 3600.0
+    dwell_h = (n_est_mid * _get_val('DWELL_DEF', 25.0)) / 3600.0
     
     hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
-    aux_kw_dwell = calcular_aux_dinamico(aux_kw_nominal_final, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni_final, estacion_anio, "DWELL", f_compresor_especifico, flota_params=f)
+    aux_kw_dwell = calcular_aux_dinamico(aux_kw_nominal_final, hora_media_dwell, pax_abordo, f.get('cap_max', 398) * n_uni_final, estacion_anio, "DWELL", f_compresor_especifico)
     
     aux += aux_kw_dwell * dwell_h
     t_horas += dwell_h
@@ -629,7 +598,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                 if estacion_anio == "invierno": aux_nom = f.get('aux_kw_heat', 65.16) * n_uni
                 else: aux_nom = f.get('aux_kw_cool', 58.76) * n_uni
                 
-                p_aux_kw = calcular_aux_dinamico(aux_nom, m / 60.0, tr['pax_abordo'], f.get('cap_max', 398) * n_uni, estacion_anio, state, flota_params=f)
+                p_aux_kw = calcular_aux_dinamico(aux_nom, m / 60.0, tr['pax_abordo'], f.get('cap_max', 398) * n_uni, estacion_anio, state)
                 
                 idx_km = min(44999, max(0, int(pos * 1000)))
                 pend_permil = _PEND_ARRAY_V1[idx_km] if tr['Via'] == 1 else _PEND_ARRAY_V2[idx_km]
@@ -637,7 +606,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                 f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
                 
                 if n_uni == 2:
-                    f_davis = (f.get('davis_A',1615) * 2) + (f.get('davis_B',0) * 2 * v_kmh) + (f.get('davis_C',0.54) * _DAVIS_DOBLE_AERO * (v_kmh**2))
+                    f_davis = (f.get('davis_A',1615) * 2) + (f.get('davis_B',0) * 2 * v_kmh) + (f.get('davis_C',0.54) * 1.35 * (v_kmh**2))
                 else:
                     f_davis = f.get('davis_A',1615) + f.get('davis_B',0)*v_kmh + f.get('davis_C',0.54)*(v_kmh**2)
                     
@@ -686,8 +655,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                 a_idx, a_pos, _ = min(available, key=lambda x: abs(x[1] - b_pos))
                 dist = abs(a_pos - b_pos)
                 
-                # Umbral 3×λ: a esa distancia η = ETA_MAX × e^(-3) ≈ 5%, transferencia despreciable.
-                if dist <= _get_val('LAMBDA_REGEN_KM', 5.0) * 3:
+                if dist <= _get_val('LAMBDA_REGEN_KM', 5.0) * 2:
                     p_transferred = min(p_gen * (_get_val('ETA_MAX', 0.7) * np.exp(-dist / _get_val('LAMBDA_REGEN_KM', 5.0))), current_demands[a_idx])
                     current_demands[a_idx] -= p_transferred
                     regen_util_per_trip[b_idx] += (p_transferred / p_gen)
@@ -724,22 +692,20 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     df_e['tren_km'] = df_e.apply(_calc_tren_km_real_motor, axis=1)
         
     # ==========================================================================
-    # PRE/POST SERVICIO: Consumo auxiliar de encendido y apagado por motriz única
-    # Pre-servicio: ~1h de auxiliares (HVAC arrancando f_hvac=0.30)
-    # Post-servicio: ~10min de auxiliares (HVAC apagándose f_hvac=0.10)
-    # Se distribuye equitativamente entre los viajes de cada motriz.
+    # PRE/POST SERVICIO: Consumo auxiliar de encendido y apagado por motriz
+    # Pre: ~1h auxiliares (HVAC arrancando f_hvac=0.30)
+    # Post: ~10min auxiliares (HVAC apagandose f_hvac=0.10)
     # ==========================================================================
     import re as _re
-    T_PRE_H  = 1.0        # 1 hora pre-servicio
-    T_POST_H = 10.0/60.0  # 10 minutos post-servicio
-    F_HVAC_PRE  = 0.30    # HVAC arrancando
-    F_HVAC_POST = 0.10    # HVAC apagándose
-    frac_base = _get_val('FRAC_BASE', 0.21)
-    frac_hvac = _get_val('FRAC_HVAC', 0.89)
-    flota_db  = _get_val('FLOTA', {})
+    T_PRE_H  = 1.0
+    T_POST_H = 10.0/60.0
+    F_HVAC_PRE  = 0.30
+    F_HVAC_POST = 0.10
+    frac_base_pp = _get_val('FRAC_BASE', 0.21)
+    frac_hvac_pp = _get_val('FRAC_HVAC', 0.89)
+    flota_db_pp  = _get_val('FLOTA', {})
 
-    # Identificar motrices únicas y cuántos viajes hace cada una
-    motrices_viajes = {}  # motriz_num -> [idx, ...]
+    motrices_viajes = {}
     for idx, row in df_e.iterrows():
         mn = str(row.get('motriz_num', ''))
         nums = _re.findall(r'\d+', mn)
@@ -747,8 +713,6 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
             if n not in motrices_viajes: motrices_viajes[n] = []
             motrices_viajes[n].append(idx)
 
-    # Fallback para planificador sintético: sin motriz_num, usar num_servicio único
-    # Cada servicio único representa un tren físico distinto en la programación
     if not motrices_viajes and 'num_servicio' in df_e.columns:
         for idx, row in df_e.iterrows():
             srv = str(row.get('num_servicio', '')).strip()
@@ -756,23 +720,19 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
                 if srv not in motrices_viajes: motrices_viajes[srv] = []
                 motrices_viajes[srv].append(idx)
 
-    # Calcular kwh pre/post por motriz y distribuir entre sus viajes
     aux_prepost_por_idx = {idx: 0.0 for idx in df_e.index}
     for motriz, idxs in motrices_viajes.items():
         if not idxs: continue
-        # Inferir tipo desde el primer viaje de esta motriz
         tipo = df_e.loc[idxs[0], 'tipo_tren'] if idxs[0] in df_e.index else 'XT-100'
-        f = flota_db.get(tipo, {})
-        aux_nom = f.get('aux_kw_heat', 65.16)  # otoño = calefacción
-        aux_pre  = aux_nom * frac_base + aux_nom * frac_hvac * F_HVAC_PRE
-        aux_post = aux_nom * frac_base + aux_nom * frac_hvac * F_HVAC_POST
+        f_pp = flota_db_pp.get(tipo, {})
+        aux_nom = f_pp.get('aux_kw_heat', 65.16)
+        aux_pre  = aux_nom * frac_base_pp + aux_nom * frac_hvac_pp * F_HVAC_PRE
+        aux_post = aux_nom * frac_base_pp + aux_nom * frac_hvac_pp * F_HVAC_POST
         kwh_motriz = aux_pre * T_PRE_H + aux_post * T_POST_H
-        # Distribuir entre todos los viajes de esta motriz
         kwh_por_viaje = kwh_motriz / len(idxs)
         for idx in idxs:
             aux_prepost_por_idx[idx] = aux_prepost_por_idx.get(idx, 0.0) + kwh_por_viaje
 
-    # Agregar al aux y neto de cada viaje
     df_e['kwh_prepost'] = pd.Series(aux_prepost_por_idx)
     df_e['kwh_viaje_aux']  = df_e['kwh_viaje_aux']  + df_e['kwh_prepost'].fillna(0.0)
     df_e['kwh_viaje_neto'] = df_e['kwh_viaje_neto'] + df_e['kwh_prepost'].fillna(0.0)
