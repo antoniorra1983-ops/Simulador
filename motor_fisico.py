@@ -167,20 +167,9 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
     aux_base     = aux_kw_nominal * frac_base
     aux_hvac_val = aux_kw_nominal * frac_hvac * f_hvac * f_ocup * f_marcha
 
-    # Componentes fijas: compresor, puertas, ventilacion traccion
-    # Activas siempre que el tren circula — no dependen de perfil horario ni ocupacion
-    aux_fija = 0.0
-    if flota_params:
-        cap_unit = flota_params.get('cap_max', 1)
-        n_uni = max(1, round(cap_max / max(1, cap_unit))) if cap_max > 0 and cap_unit > 0 else 1
-        f_dwell_comp = flota_params.get('f_compresor_dwell', 1.0) if estado_marcha == "DWELL" else 1.0
-        aux_fija = (
-            flota_params.get('p_compresor_kw', 0.0) +
-            flota_params.get('p_puertas_kw',   0.0) +
-            flota_params.get('p_vent_trac_kw', 0.0)
-        ) * n_uni * f_dwell_comp
-
-    return aux_base + aux_hvac_val + aux_fija
+    # NOTA: p_compresor_kw, p_puertas_kw y p_vent_trac_kw ya están incluidos
+    # en FRAC_BASE (calibrado desde TRA 305 Alstom). No sumar por separado.
+    return aux_base + aux_hvac_val
 
 # =============================================================================
 # 3. KILOMETRAJE ROBUSTO (Tren-km) E INMUNE A DIRECCIÓN
