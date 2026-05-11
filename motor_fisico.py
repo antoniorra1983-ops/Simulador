@@ -390,14 +390,34 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             d_freno_req = (v_ms**2) / (2 * a_freno_op) if v_ms > 0 else 0
             f_disp_freno = min(f_freno_max_n, p_freno_max_w / max(0.1, v_ms)) if v_kmh >= v_freno_min else 0.0
             
-            # Solo frenar a 0 en destino final o en modo real (nodos con timestamps)
-            if dist_restante <= d_freno_req + (v_ms * dt * 1.2) and (es_ultima_parada or not es_sintetico): estado_marcha = "BRAKE_STATION"
-            elif v_kmh > v_cons_kmh + 1.5:                       estado_marcha = "BRAKE_OVERSPEED"
-            elif estado_marcha == "BRAKE_OVERSPEED" and v_kmh <= v_cons_kmh: estado_marcha = "CRUISE"
-            elif estado_marcha == "ACCEL" and v_kmh >= v_cons_kmh - 0.5:    estado_marcha = "CRUISE"
-            elif estado_marcha == "CRUISE" and v_kmh < v_cons_kmh - 1.5:    estado_marcha = "ACCEL"
-            elif estado_marcha == "COAST"  and v_kmh < v_cons_kmh - 2.0:    estado_marcha = "ACCEL"
-            elif estado_marcha not in ["ACCEL","CRUISE","COAST","BRAKE_STATION","BRAKE_OVERSPEED"]: estado_marcha = "ACCEL"
+            # 💡 CORRECCIÓN DE LÓGICA DE FRENADO:
+            # Solo frenar a 0 en destino final o en modo real (nodos con timestamps).
+            # Añadida condición explícita para forzar parada en el último metro.
+            if es_ultima_parada and dist_restante < 1.0:
+                estado_marcha = "BRAKE_STATION"
+                v_new = 0.0
+                step_m = dist_restante
+                dt_actual = 0.1
+                # No continuar el bucle, forzar fin de tramo
+                # La energía de este último paso es despreciable
+                t_horas += dt_actual / 3600.0
+                dist_recorrida += step_m
+                v_ms = 0.0
+                break
+            elif dist_restante <= d_freno_req + (v_ms * dt * 1.2) and (es_ultima_parada or not es_sintetico):
+                estado_marcha = "BRAKE_STATION"
+            elif v_kmh > v_cons_kmh + 1.5:
+                estado_marcha = "BRAKE_OVERSPEED"
+            elif estado_marcha == "BRAKE_OVERSPEED" and v_kmh <= v_cons_kmh:
+                estado_marcha = "CRUISE"
+            elif estado_marcha == "ACCEL" and v_kmh >= v_cons_kmh - 0.5:
+                estado_marcha = "CRUISE"
+            elif estado_marcha == "CRUISE" and v_kmh < v_cons_kmh - 1.5:
+                estado_marcha = "ACCEL"
+            elif estado_marcha == "COAST"  and v_kmh < v_cons_kmh - 2.0:
+                estado_marcha = "ACCEL"
+            elif estado_marcha not in ["ACCEL","CRUISE","COAST","BRAKE_STATION","BRAKE_OVERSPEED"]:
+                estado_marcha = "ACCEL"
 
             f_motor, f_regen_tramo, a_net_target = 0.0, 0.0, 0.0
             
@@ -447,6 +467,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 f_motor = max(0.0, min(f_motor_req, f_disp_trac_real))
                 a_net = a_req
                 
+            # 💡 CORRECCIÓN: El anti-stall ya no impide la detención en la última parada.
+            # La condición de parada forzada está al inicio del bucle.
             if v_new < 0.1 and v_ms < 0.1:
                 if dist_restante > 10.0:
                     v_new = 2.0 
@@ -478,7 +500,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             elif f_real_total < 0 and estado_marcha in ["BRAKE_STATION", "BRAKE_OVERSPEED"]:
                 f_freno_real = min(abs(f_real_total), f_disp_freno)
                 trabajo_j_regen = f_freno_real * step_m
-                reg += (trabajo_j_regen / 3_600_000.0) * _get_val('ETA_REGEN_NETA', 0.72)
+                # La energía mecánica de frenado se convierte primero con la eficiencia del motor como generador
+                reg += (trabajo_j_regen / 3_600_000.0) * f.get('eta_motor', 0.92) * _get_val('ETA_REGEN_NETA', 0.38)
                 
             hora_actual = (t_ini_mins + t_horas * 60.0) / 60.0
             aux_kw_inst = calcular_aux_dinamico(aux_kw_nominal, hora_actual, pax_mid, f.get('cap_max', 398) * n_uni_inst, estacion_anio, estado_marcha, f_compresor_especifico)
@@ -571,6 +594,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
             if not f: continue
             
             eta_m = f.get('eta_motor', 0.92)
+            eta_regen_neta = _get_val('ETA_REGEN_NETA', 0.38)
             
             km_man = None
             maniobra_tr = str(tr.get('maniobra', '')).upper()
@@ -620,7 +644,12 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                 if state in ("BRAKE", "BRAKE_STATION", "BRAKE_OVERSPEED"):
                     f_req_freno = max(0.0, masa_dinamica_kg * (f.get('a_freno_ms2', 1.2) * 0.9) - f_res_total)
                     f_disp_freno = min(f.get('f_freno_max_kn', 105.0)*1000*n_uni, (f.get('p_freno_max_kw', f.get('p_max_kw',720)*1.2)*1000*n_uni)/max(0.1, v_ms)) if v_kmh >= f.get('v_freno_min', 3.81) else 0.0
-                    p_gen_kw = ((min(f_req_freno, f_disp_freno) * v_ms) / 1000.0 * _get_val('ETA_REGEN_NETA', 0.72)) - p_aux_kw
+                    
+                    # 💡 CORRECCIÓN: Cadena de eficiencia correcta
+                    # Potencia Mecánica → Eficiencia Motor (generador) → Potencia Eléctrica → Eficiencia Red
+                    potencia_mecanica_frenado_kw = (min(f_req_freno, f_disp_freno) * v_ms) / 1000.0
+                    potencia_electrica_generada_kw = potencia_mecanica_frenado_kw * eta_m
+                    p_gen_kw = potencia_electrica_generada_kw * eta_regen_neta - p_aux_kw
                     
                     if p_gen_kw > 0: 
                         braking_by_idx[i].append((tr['idx'], pos, p_gen_kw))
