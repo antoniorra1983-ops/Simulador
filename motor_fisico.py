@@ -157,10 +157,10 @@ def calcular_aux_dinamico(aux_kw_nominal, hora_decimal, pax_abordo, cap_max, est
     elif estado_marcha == "COAST":     f_marcha = 0.90
     else:                              f_marcha = 1.0
 
-    frac_base = _get_val('FRAC_BASE', 0.12)
-    frac_hvac = _get_val('FRAC_HVAC', 0.45)
-    frac_hvac = _get_val('FRAC_HVAC', 0.70)
-    
+    frac_base = _get_val('FRAC_BASE', 0.21)  # fallback = valor TRA 305 Alstom
+    frac_hvac = _get_val('FRAC_HVAC', 0.89)  # fallback = valor TRA 305 Alstom
+    # NOTA: p_compresor_kw, p_puertas_kw, p_vent_trac_kw ya cubiertos por FRAC_BASE
+
     aux_base = aux_kw_nominal * frac_base
     aux_hvac_val = aux_kw_nominal * frac_hvac * f_hvac * f_ocup * f_marcha
     return aux_base + aux_hvac_val
@@ -268,6 +268,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     
     for i in range(len(paradas_km)-1):
         p_ini, p_fin = paradas_km[i], paradas_km[i+1]
+        # En modo sintético, solo frenar a 0 en la última parada (destino final)
+        # Las paradas intermedias se manejan con DWELL — no con frenada física completa
+        es_ultima_parada = (i == len(paradas_km) - 2)
+        v_entrada_tramo = 0.0 if (i == 0 or es_ultima_parada or not es_sintetico) else 0.0
         dist_tramo = abs(p_fin - p_ini) * 1000.0
         if dist_tramo <= 0: continue
         
@@ -386,8 +390,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             d_freno_req = (v_ms**2) / (2 * a_freno_op) if v_ms > 0 else 0
             f_disp_freno = min(f_freno_max_n, p_freno_max_w / max(0.1, v_ms)) if v_kmh >= v_freno_min else 0.0
             
-            if dist_restante <= d_freno_req + (v_ms * dt * 1.2): estado_marcha = "BRAKE_STATION"
-            if dist_restante <= d_freno_req + (v_ms * dt * 1.2): estado_marcha = "BRAKE_STATION"
+            # Solo frenar a 0 en destino final o en modo real (nodos con timestamps)
+            if dist_restante <= d_freno_req + (v_ms * dt * 1.2) and (es_ultima_parada or not es_sintetico): estado_marcha = "BRAKE_STATION"
             elif v_kmh > v_cons_kmh + 1.5:                       estado_marcha = "BRAKE_OVERSPEED"
             elif estado_marcha == "BRAKE_OVERSPEED" and v_kmh <= v_cons_kmh: estado_marcha = "CRUISE"
             elif estado_marcha == "ACCEL" and v_kmh >= v_cons_kmh - 0.5:    estado_marcha = "CRUISE"
@@ -484,7 +488,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             dist_recorrida += step_m
             v_ms = v_new
 
-    n_est_mid = max(0, len(paradas_km) - 2)
+    # Dwell: solo en modo sintético — en modo real el dwell ya está en los timestamps
+    n_est_mid = max(0, len(paradas_km) - 2) if es_sintetico else 0
     dwell_h = (n_est_mid * _get_val('DWELL_DEF', 25.0)) / 3600.0
     
     hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
@@ -713,14 +718,29 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
             if n not in motrices_viajes: motrices_viajes[n] = []
             motrices_viajes[n].append(idx)
 
-    if not motrices_viajes and 'num_servicio' in df_e.columns:
-        for idx, row in df_e.iterrows():
-            srv = str(row.get('num_servicio', '')).strip()
-            if srv and srv not in ('nan', 'none', ''):
-                if srv not in motrices_viajes: motrices_viajes[srv] = []
-                motrices_viajes[srv].append(idx)
-
     aux_prepost_por_idx = {idx: 0.0 for idx in df_e.index}
+    if not motrices_viajes:
+        # Sin motriz_num (planificador): estimar pre/post desde pico de flota
+        # Pico de flota = máximo de viajes activos simultáneamente
+        # Cada tren activo al pico = un tren que encendió esa mañana
+        if 't_fin' in df_e.columns and 't_ini' in df_e.columns:
+            import numpy as np
+            t_vals = np.arange(300, 1380, 5)
+            t_fin_est = df_e['t_fin'].fillna(df_e['t_ini'] + 70)
+            pico = max(int(((df_e['t_ini'] <= t) & (t_fin_est >= t)).sum()) for t in t_vals)
+        else:
+            pico = max(1, len(df_e) // 7)  # heurística conservadora
+        # Distribuir pre/post de 'pico' trenes equitativamente entre todos los viajes
+        tipo_predominante = df_e['tipo_tren'].mode()[0] if 'tipo_tren' in df_e.columns else 'XT-100'
+        f_pp = _get_val('FLOTA', {}).get(tipo_predominante, {})
+        aux_nom_pp = f_pp.get('aux_kw_heat', 65.16)
+        frac_b = _get_val('FRAC_BASE', 0.21); frac_h = _get_val('FRAC_HVAC', 0.89)
+        aux_pre_pp  = aux_nom_pp * frac_b + aux_nom_pp * frac_h * F_HVAC_PRE
+        aux_post_pp = aux_nom_pp * frac_b + aux_nom_pp * frac_h * F_HVAC_POST
+        kwh_total_pp = (aux_pre_pp * T_PRE_H + aux_post_pp * T_POST_H) * pico
+        kwh_por_viaje_pp = kwh_total_pp / max(1, len(df_e))
+        for idx in df_e.index:
+            aux_prepost_por_idx[idx] = kwh_por_viaje_pp
     for motriz, idxs in motrices_viajes.items():
         if not idxs: continue
         tipo = df_e.loc[idxs[0], 'tipo_tren'] if idxs[0] in df_e.index else 'XT-100'
