@@ -282,121 +282,100 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
 # TABLA THDR SINTÉTICA — Horario simulado por estación para el Planificador
 # =============================================================================
 @st.cache_data(show_spinner=False, ttl=1)
-def generar_tabla_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio):
-    """
-    Simula tramo a tramo y devuelve tabla con hora de llegada y salida
-    por estación, al estilo del archivo THDR de EFE Valparaíso.
-    """
-    from config import N_EST, ESTACIONES, KM_ACUM, KM_TOTAL, DWELL_DEF
+def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio):
+    """Una fila por servicio: columnas EstX_Llegada / EstX_Salida para cada estación."""
+    from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
     from motor_fisico import simular_tramo_termodinamico
     from etl_parser import mins_to_time_str
 
-    if via == 1:
-        est_idx = list(range(N_EST))
-    else:
-        est_idx = list(range(N_EST-1, -1, -1))
-
-    filas = []
+    est_idx = list(range(N_EST)) if via == 1 else list(range(N_EST-1, -1, -1))
+    fila = {'Servicio': str(num_servicio), 'Tipo': tipo_tren, 'Config': 'Doble' if doble else 'Simple'}
     t_actual = t_ini_mins
+    t_inicio_viaje = t_ini_mins
 
     # Estación origen: solo salida
-    filas.append({
-        'Estación': ESTACIONES[est_idx[0]],
-        'Llegada':  '—',
-        'Salida':   mins_to_time_str(t_actual),
-        'Tiempo tramo': '—',
-        'kWh tramo': '—'
-    })
+    fila[f"{ESTACIONES[est_idx[0]]}\nSalida"] = mins_to_time_str(t_actual)
 
     for j in range(len(est_idx)-1):
         km_ini = KM_ACUM[est_idx[j]]
         km_fin = KM_ACUM[est_idx[j+1]]
         es_destino = (j == len(est_idx)-2)
-
         try:
-            _,_,_,_,neto,t_h = simular_tramo_termodinamico(
+            _,_,_,_,_,t_h = simular_tramo_termodinamico(
                 tipo_tren, doble, km_ini, km_fin, via, pct_trac,
                 True, True, None, {}, 150, None, None, estacion_anio, t_actual, False, None
             )
         except Exception:
-            t_h, neto = 0.0, 0.0
+            t_h = 0.0
 
         t_llegada = t_actual + t_h * 60
         t_salida  = t_llegada + DWELL_DEF / 60
+        est_sig   = ESTACIONES[est_idx[j+1]]
 
-        filas.append({
-            'Estación':      ESTACIONES[est_idx[j+1]],
-            'Llegada':       mins_to_time_str(t_llegada),
-            'Salida':        '—' if es_destino else mins_to_time_str(t_salida),
-            'Tiempo tramo':  f"{t_h*60:.1f} min",
-            'kWh tramo':     f"{neto:.1f}"
-        })
+        fila[f"{est_sig}\nLlegada"] = mins_to_time_str(t_llegada)
+        if not es_destino:
+            fila[f"{est_sig}\nSalida"] = mins_to_time_str(t_salida)
 
         t_actual = t_llegada if es_destino else t_salida
 
-    return pd.DataFrame(filas)
+    # Tiempo total HH:MM:SS
+    t_total = t_actual - t_inicio_viaje
+    h = int(t_total // 60); m = int(t_total % 60); s = int((t_total % 1) * 60)
+    fila['Tiempo Viaje'] = f"{h:02d}:{m:02d}:{s:02d}"
+    return fila
 
 
-def render_tablas_thdr_planificador(df_sint_final):
+def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio):
     """
-    Muestra tablas estilo THDR por Vía, con expander minimizable.
+    Tabla estilo THDR por Vía: una fila por servicio, columnas por estación
+    con Llegada/Salida. Minimizable con expander.
     """
-    from config import N_EST, ESTACIONES, KM_ACUM, KM_TOTAL, DWELL_DEF
+    from config import N_EST, ESTACIONES, KM_TOTAL
+    from etl_parser import mins_to_time_str
+
     st.markdown("---")
     st.markdown("#### 📋 Horario Simulado por Estación (estilo THDR)")
 
-    for via in [1, 2]:
-        label_via = "🔵 Vía 1 — Puerto → Limache" if via == 1 else "🔴 Vía 2 — Limache → Puerto"
+    for via, label in [(1, "🔵 Vía 1 — Puerto → Limache"),
+                       (2, "🔴 Vía 2 — Limache → Puerto")]:
         df_via = df_sint_final[df_sint_final['Via'] == via].sort_values('t_ini')
-
         if df_via.empty:
             continue
 
-        with st.expander(label_via, expanded=False):
-            # Selector de servicio dentro del expander
-            servicios = df_via['num_servicio'].unique().tolist()
-            srv_sel = st.selectbox(
-                f"Servicio Vía {via}",
-                servicios,
-                key=f"srv_sel_v{via}",
-                format_func=lambda s: f"Servicio {s}"
-            )
+        with st.expander(label, expanded=False):
+            filas = []
+            for _, row in df_via.iterrows():
+                fila = generar_fila_thdr_sintetica(
+                    str(row.get('tipo_tren', 'XT-100')),
+                    bool(row.get('doble', False)),
+                    via,
+                    float(pct_trac),
+                    float(row.get('t_ini', 360.0)),
+                    str(estacion_anio),
+                    str(row.get('num_servicio', ''))
+                )
+                filas.append(fila)
 
-            row = df_via[df_via['num_servicio'] == srv_sel].iloc[0]
-            tipo    = row.get('tipo_tren', 'XT-100')
-            doble   = bool(row.get('doble', False))
-            t_ini   = float(row.get('t_ini', 360.0))
-            estacion = st.session_state.get('est_plan', 'otoño')
+            if filas:
+                df_tabla = pd.DataFrame(filas)
+                st.caption(f"{len(df_tabla)} servicios | {N_EST} estaciones | {KM_TOTAL:.1f} km")
+                st.dataframe(
+                    df_tabla,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(400, 40 + len(df_tabla) * 35),
+                    column_config={
+                        col: st.column_config.TextColumn(col.replace("\n", " "), width="small")
+                        for col in df_tabla.columns
+                        if col not in ['Servicio','Tipo','Config','Tiempo Viaje']
+                    } | {
+                        'Servicio':     st.column_config.TextColumn('Servicio', width='small'),
+                        'Tipo':         st.column_config.TextColumn('Tipo',     width='small'),
+                        'Config':       st.column_config.TextColumn('Config',   width='small'),
+                        'Tiempo Viaje': st.column_config.TextColumn('T. Viaje', width='small'),
+                    }
+                )
 
-            # Obtener pct_trac del session state
-            pct = float(st.session_state.get('pct_trac_plan_val', 75.0))
-
-            config_label = "Doble" if doble else "Simple"
-            st.caption(f"**{tipo} {config_label}** | Salida: {__import__('etl_parser').mins_to_time_str(t_ini)}")
-
-            df_tabla = generar_tabla_thdr_sintetica(tipo, doble, via, pct, t_ini, estacion)
-
-            # Calcular tiempo total
-            t_fin_est = float(row.get('t_fin', t_ini + 70))
-            t_total = round(t_fin_est - t_ini, 1)
-
-            col_a, col_b, col_c = st.columns(3)
-            col_a.metric("⏱ Tiempo total", f"{t_total:.0f} min")
-            col_b.metric("🚉 Estaciones", str(N_EST))
-            col_c.metric("📏 Distancia", f"{KM_TOTAL:.1f} km")
-
-            st.dataframe(
-                df_tabla,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    'Estación':     st.column_config.TextColumn('Estación', width='medium'),
-                    'Llegada':      st.column_config.TextColumn('Llegada',  width='small'),
-                    'Salida':       st.column_config.TextColumn('Salida',   width='small'),
-                    'Tiempo tramo': st.column_config.TextColumn('T. Tramo', width='small'),
-                    'kWh tramo':    st.column_config.TextColumn('kWh',      width='small'),
-                }
-            )
 
 def main():
     def reset_plan_state():
@@ -799,7 +778,7 @@ def main():
                 try:
                     render_gemelo_digital(df_sint_final, df_sint_e, active_sers, f"Simulación: {nombre_perfil}", pct_trac_plan, use_rm, use_pend, estacion_anio_plan, "plan", gap_vias, pax_dia_total=int(df_sint_final['pax_abordo'].sum()))
                     render_dashboard_energia_v112(df_sint_e, active_sers, "Planificador", st.session_state.get('sl_ui_plan', 480.0))
-                    render_tablas_thdr_planificador(df_sint_final)
+                    render_tablas_thdr_planificador(df_sint_final, pct_trac_plan, estacion_anio_plan)
                 except Exception as e:
                     st.error(f"Fallo al graficar UI del Planificador: {e}")
 
