@@ -265,6 +265,23 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     paradas_km = list(set(paradas_km))
     paradas_km.sort(reverse=(via_op == 2))
     
+    # Velocidad media real por tramo desde nodos THDR
+    # Cuando es_sintetico=False, cada tramo tiene su v_consigna derivada del timestamp real
+    v_tramo_real = {}  # km_ini_tramo -> v_media_kmh
+    if not es_sintetico and nodos and len(nodos) >= 2:
+        nodos_sorted = sorted(nodos, key=lambda x: x[0])  # ordenar por tiempo
+        for ni in range(len(nodos_sorted)-1):
+            t0, km0 = nodos_sorted[ni]
+            t1, km1 = nodos_sorted[ni+1]
+            dt_min = t1 - t0
+            dist_km = abs(km1 - km0)
+            if dt_min > 0.1 and dist_km > 0.01:
+                v_media = dist_km / (dt_min / 60.0)  # km/h
+                # Limitar a velocidad física razonable (no más del límite de la vía)
+                idx_ref = min(44999, int(min(km0, km1) * 1000))
+                v_via = _VEL_ARRAY_NORM[idx_ref] if _VEL_ARRAY_NORM[idx_ref] > 0 else 120.0
+                v_tramo_real[round(min(km0,km1), 3)] = min(v_media * 1.70, v_via)
+
     ser_data = _get_val('SER_DATA', [(4.9, "SER PO"), (12.7, "SER ES"), (25.5, "SER EB"), (28.7, "SER VA")])
     dt = 1.0  
     
@@ -274,6 +291,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     
     for i in range(len(paradas_km)-1):
         p_ini, p_fin = paradas_km[i], paradas_km[i+1]
+        # Velocidad consigna real del tramo (desde THDR si disponible)
+        km_tramo_key = round(min(p_ini, p_fin), 3)
+        v_cons_tramo = v_tramo_real.get(km_tramo_key, None)
+
         dist_tramo = abs(p_fin - p_ini) * 1000.0
         if dist_tramo <= 0: continue
         
@@ -326,6 +347,9 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             
             # Aplica límite histórico si existe
             v_cons_kmh = min(v_cons_kmh, v_limit_thdr)
+            # Override por velocidad real del tramo THDR (más preciso que v_limit global)
+            if v_cons_tramo is not None:
+                v_cons_kmh = min(v_cons_kmh, v_cons_tramo)
             
             if prevenciones:
                 for p in prevenciones:
@@ -393,11 +417,12 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             f_disp_freno = min(f_freno_max_n, p_freno_max_w / max(0.1, v_ms)) if v_kmh >= v_freno_min else 0.0
             
             if dist_restante <= d_freno_req + (v_ms * dt * 1.2): estado_marcha = "BRAKE_STATION"
-            elif v_kmh > v_cons_kmh + 1.5: estado_marcha = "BRAKE_OVERSPEED"
-            elif estado_marcha == "BRAKE_OVERSPEED" and v_kmh <= v_cons_kmh: estado_marcha = "COAST"
-            elif estado_marcha == "ACCEL" and v_kmh >= v_cons_kmh - 0.5: estado_marcha = "COAST"
-            elif estado_marcha == "COAST" and v_kmh < v_cons_kmh - 2.0: estado_marcha = "ACCEL"
-            elif estado_marcha not in ["ACCEL", "COAST", "BRAKE_STATION", "BRAKE_OVERSPEED"]: estado_marcha = "ACCEL"
+            elif v_kmh > v_cons_kmh + 1.5:                       estado_marcha = "BRAKE_OVERSPEED"
+            elif estado_marcha == "BRAKE_OVERSPEED" and v_kmh <= v_cons_kmh: estado_marcha = "CRUISE"
+            elif estado_marcha == "ACCEL" and v_kmh >= v_cons_kmh - 0.5:    estado_marcha = "CRUISE"
+            elif estado_marcha == "CRUISE" and v_kmh < v_cons_kmh - 1.5:    estado_marcha = "ACCEL"
+            elif estado_marcha == "COAST"  and v_kmh < v_cons_kmh - 2.0:    estado_marcha = "ACCEL"
+            elif estado_marcha not in ["ACCEL","CRUISE","COAST","BRAKE_STATION","BRAKE_OVERSPEED"]: estado_marcha = "ACCEL"
 
             f_motor, f_regen_tramo, a_net_target = 0.0, 0.0, 0.0
             
@@ -422,6 +447,12 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 f_motor = min(f_motor, f_absoluta_disp)
                 
                 a_net_target = (f_motor - f_res_total) / masa_dinamica_kg
+            elif estado_marcha == "CRUISE":
+                # Mantiene velocidad consigna: solo fuerza para compensar resistencias
+                # Sin aceleración neta — el maquinista regula el notch mínimo necesario
+                f_motor = max(0.0, f_res_total)
+                f_motor = min(f_motor, f_disp_trac_real * (pct_trac / 100.0))
+                a_net_target = (f_motor - f_res_total) / masa_dinamica_kg  # ≈ 0
             elif estado_marcha == "COAST":
                 a_net_target = (-f_res_total) / masa_dinamica_kg
                 
