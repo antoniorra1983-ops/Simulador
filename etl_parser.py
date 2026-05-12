@@ -291,7 +291,6 @@ get_pax_at_km = get_pax_at_km_nativo
 # 2. PROCESAMIENTO THDR (ESCANER HIBRIDO A PRUEBA DE FALLOS)
 # =============================================================================
 def procesar_thdr(data, fname, via_param=1):
-    # CORRECCION: Inicializacion temprana para evitar AttributeError
     est_llegada = {}
     est_salida = {}
     
@@ -763,18 +762,9 @@ def cargar_prevenciones(data, fname):
             return []
 
 # =============================================================================
-# 5. PARSEO DE PLANILLA MAESTRA (CORREGIDO - DESTINO POR CODIGO EXPLICITO)
+# 5. PARSEO DE PLANILLA MAESTRA
 # =============================================================================
 def parsear_planilla_maestra(data, fname):
-    """
-    💡 CORRECCIONES APLICADAS:
-    1. Rangos de servicio: 200-399=EB, 400-599=SA, 600+=LI
-    2. Nodos para Via 2 corregidos
-    3. Deteccion de dobles ampliada (MULT, DOB, DOBLE, ACOPL, 2 UNID, 2UNID, 2UND)
-    4. Rutas con nombres correctos: PU-SA, SA-PU, EB-PU, PU-EB, LI-EB, EB-LI, PU-LI, LI-PU
-    5. Rangos de busqueda de columnas ampliados
-    6. 💡 NUEVO: Deteccion de destino desde codigo explicito en texto del servicio (ej: "501-LI")
-    """
     try:
         ext = fname.lower()
         dfs = {}
@@ -790,7 +780,6 @@ def parsear_planilla_maestra(data, fname):
             
         viajes = []
         for sheet_name, df in dfs.items():
-            # Intentar detectar cabecera estructurada
             header_idx = -1
             for i in range(min(20, len(df))):
                 row_str = ' '.join(df.iloc[i].fillna('').astype(str).str.upper())
@@ -799,28 +788,42 @@ def parsear_planilla_maestra(data, fname):
                     break
             
             if header_idx != -1:
-                # ==============================================================
-                # MODO ESTRUCTURADO: Con cabecera detectada
-                # ==============================================================
                 headers = df.iloc[header_idx].fillna('').astype(str).str.upper()
                 viaje_cols = [c for c, val in enumerate(headers) if 'VIAJE' in val or val == 'N°' or val == 'N']
                 srv_cols = [c for c, val in enumerate(headers) if 'SERV' in val or 'TREN' in val]
                 hora_cols = [c for c, val in enumerate(headers) if 'HR PARTIDA' in val or 'HORA' in val or 'PARTIDA' in val or 'SALIDA' in val]
                 config_cols = [c for c, val in enumerate(headers) if 'CONF' in val or 'TIPO' in val or 'FORMA' in val or 'UNIDAD' in val or 'OBS' in val]
+                motriz1_cols = [c for c, val in enumerate(headers) if 'MOTRIZ 1' in val or 'MOTRIZ1' in val or ('MOTRIZ' in val and '1' in val and '2' not in val)]
+                motriz2_cols = [c for c, val in enumerate(headers) if 'MOTRIZ 2' in val or 'MOTRIZ2' in val or ('MOTRIZ' in val and '2' in val)]
 
                 pairs = []
                 for vc in viaje_cols:
-                    sc_cands = [sc for sc in srv_cols if sc > vc and sc - vc <= 3]
+                    sc_cands = [sc for sc in srv_cols if sc > vc and sc - vc <= 5]
                     if sc_cands:
                         sc = sc_cands[0]
-                        hc_cands = [hc for hc in hora_cols if hc > sc and hc - sc <= 4]
+                        hc_cands = [hc for hc in hora_cols if hc > sc and hc - sc <= 6]
                         if hc_cands:
                             hc = hc_cands[0]
-                            cc_cands = [cc for cc in config_cols if cc > sc and cc - sc <= 8]
+                            cc_cands = [cc for cc in config_cols if cc > sc and cc - sc <= 10]
                             pairs.append((vc, sc, hc, cc_cands[0] if cc_cands else None))
 
                 for i in range(header_idx + 1, len(df)):
                     row = df.iloc[i]
+                    
+                    es_doble = False
+                    if motriz2_cols:
+                        for mc2 in motriz2_cols:
+                            val_m2 = str(row.get(mc2, '')).strip()
+                            if val_m2 and val_m2 not in ('0', '0.0', '', 'nan', 'none', 'None', 'NAN'):
+                                try:
+                                    if float(val_m2.replace(',', '.')) > 0:
+                                        es_doble = True
+                                        break
+                                except:
+                                    if val_m2.upper() not in ('NAN', 'NONE', ''):
+                                        es_doble = True
+                                        break
+                    
                     for col_viaje, col_srv, col_hora, col_config in pairs:
                         if pd.isna(row.get(col_hora)) or pd.isna(row.get(col_srv)):
                             continue
@@ -831,17 +834,14 @@ def parsear_planilla_maestra(data, fname):
                         if not re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', hora_str):
                             continue
                         
-                        # 💡 NUEVO: Extraer numero de servicio Y posible codigo de destino
                         servicio_num = None
                         destino_cod = None
                         
-                        # Buscar patron como "501-LI", "501 LI", "501LI"
-                        m_srv_dest = re.search(r'(\d{3,4})\s*[-]?\s*(LI|SA|EB|PU)', srv_str.upper())
+                        m_srv_dest = re.search(r'(\d{3,4})\s*[-/]?\s*(LI|SA|EB|PU)', srv_str.upper())
                         if m_srv_dest:
                             servicio_num = int(m_srv_dest.group(1))
                             destino_cod = m_srv_dest.group(2)
                         else:
-                            # Buscar solo numero
                             m_srv = re.search(r'(\d{3,4})', srv_str)
                             if m_srv:
                                 servicio_num = int(m_srv.group(1))
@@ -860,8 +860,7 @@ def parsear_planilla_maestra(data, fname):
                             if m_viaje:
                                 viaje_num = int(m_viaje.group(1))
 
-                        es_doble = False
-                        if col_config is not None and pd.notna(row.get(col_config)):
+                        if not es_doble and col_config is not None and pd.notna(row.get(col_config)):
                             config_str = str(row[col_config]).strip().upper()
                             if any(kw in config_str for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', '2 UNID', '2UNID', '2UND']):
                                 es_doble = True
@@ -877,11 +876,6 @@ def parsear_planilla_maestra(data, fname):
                             else:
                                 via = 1 if servicio_num % 2 == 0 else 2
                         
-                        # ======================================================
-                        # 💡 CORRECCION MEJORADA: Origen/Destino
-                        # Prioridad 1: Codigo explicito en texto (LI, SA, EB, PU)
-                        # Prioridad 2: Rango del numero de servicio
-                        # ======================================================
                         km_limache = KM_ACUM_SAFE[20]
                         km_sargento = KM_ACUM_SAFE[18]
                         km_belloto = KM_ACUM_SAFE[14]
@@ -895,13 +889,14 @@ def parsear_planilla_maestra(data, fname):
                                 km_dest = km_sargento
                             elif destino_cod == 'EB':
                                 km_dest = km_belloto
+                            elif servicio_num >= 600:
+                                km_dest = km_limache
+                            elif 400 <= servicio_num < 600:
+                                km_dest = km_sargento
+                            elif 200 <= servicio_num < 400:
+                                km_dest = km_belloto
                             else:
-                                if servicio_num >= 600:
-                                    km_dest = km_limache
-                                elif 400 <= servicio_num < 600:
-                                    km_dest = km_sargento
-                                else:
-                                    km_dest = km_belloto
+                                km_dest = km_belloto  # <- CORREGIDO: default EB en vez de LI
                         else:
                             km_dest = km_puerto
                             if destino_cod == 'LI':
@@ -910,13 +905,14 @@ def parsear_planilla_maestra(data, fname):
                                 km_orig = km_sargento
                             elif destino_cod == 'EB':
                                 km_orig = km_belloto
+                            elif servicio_num >= 600:
+                                km_orig = km_limache
+                            elif 400 <= servicio_num < 600:
+                                km_orig = km_sargento
+                            elif 200 <= servicio_num < 400:
+                                km_orig = km_belloto
                             else:
-                                if servicio_num >= 600:
-                                    km_orig = km_limache
-                                elif 400 <= servicio_num < 600:
-                                    km_orig = km_sargento
-                                else:
-                                    km_orig = km_belloto
+                                km_orig = km_belloto  # <- CORREGIDO: default EB en vez de LI
                         
                         try:
                             idx_orig = KM_ACUM_SAFE.index(km_orig)
@@ -929,7 +925,10 @@ def parsear_planilla_maestra(data, fname):
                                 nodos_via = [(0.0, KM_ACUM_SAFE[j]) for j in range(idx_orig, idx_dest - 1, -1)]
                         except:
                             ruta = "PU-LI"
-                            nodos_via = [(0.0, KM_ACUM_SAFE[0]), (0.0, KM_ACUM_SAFE[20])]
+                            if via == 1:
+                                nodos_via = [(0.0, KM_ACUM_SAFE[j]) for j in range(0, 21)]
+                            else:
+                                nodos_via = [(0.0, KM_ACUM_SAFE[j]) for j in range(20, -1, -1)]
                         
                         viajes.append({
                             '_id': f"PLAN_{servicio_num}_{int(t_ini)}",
@@ -945,11 +944,23 @@ def parsear_planilla_maestra(data, fname):
                             'maniobra': None
                         })
             else:
-                # ==============================================================
-                # MODO NO ESTRUCTURADO: Escanear fila por fila
-                # ==============================================================
                 for i in range(len(df)):
                     row_vals = df.iloc[i].fillna('').astype(str).tolist()
+                    
+                    es_doble = False
+                    for c_idx, val in enumerate(row_vals):
+                        val_upper = str(val).strip().upper()
+                        if 'MOTRIZ' in val_upper and '2' in val_upper:
+                            if c_idx + 1 < len(row_vals):
+                                val_m2 = str(row_vals[c_idx + 1]).strip()
+                                if val_m2 and val_m2 not in ('0', '0.0', '', 'nan', 'none'):
+                                    try:
+                                        if float(val_m2.replace(',', '.')) > 0:
+                                            es_doble = True
+                                    except:
+                                        if val_m2.upper() not in ('NAN', 'NONE', ''):
+                                            es_doble = True
+                    
                     for c_idx, val in enumerate(row_vals):
                         val = val.strip()
                         if re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', val):
@@ -961,10 +972,10 @@ def parsear_planilla_maestra(data, fname):
                             destino_cod = None
                             sc_idx = -1
                             
-                            for offset in range(1, 6):
+                            for offset in range(1, 8):
                                 if c_idx - offset >= 0:
                                     check_val = row_vals[c_idx - offset].strip().upper()
-                                    m_srv_dest = re.search(r'(\d{3,4})\s*[-]?\s*(LI|SA|EB|PU)', check_val)
+                                    m_srv_dest = re.search(r'(\d{3,4})\s*[-/]?\s*(LI|SA|EB|PU)', check_val)
                                     if m_srv_dest:
                                         servicio_num = int(m_srv_dest.group(1))
                                         destino_cod = m_srv_dest.group(2)
@@ -978,7 +989,7 @@ def parsear_planilla_maestra(data, fname):
                             
                             viaje_num = None
                             if sc_idx != -1:
-                                for offset in range(1, 4):
+                                for offset in range(1, 5):
                                     if sc_idx - offset >= 0:
                                         check_val = row_vals[sc_idx - offset].strip()
                                         if check_val.isdigit() and 1 <= int(check_val) <= 500:
@@ -988,13 +999,13 @@ def parsear_planilla_maestra(data, fname):
                             if servicio_num is None:
                                 continue
 
-                            es_doble = False
-                            for offset_unidad in range(1, 4):
-                                if c_idx + offset_unidad < len(row_vals):
-                                    val_unidad = row_vals[c_idx + offset_unidad].strip().upper()
-                                    if any(kw in val_unidad for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', '2 UNID', '2UNID', '2UND']):
-                                        es_doble = True
-                                        break
+                            if not es_doble:
+                                for offset_unidad in range(1, 5):
+                                    if c_idx + offset_unidad < len(row_vals):
+                                        val_unidad = row_vals[c_idx + offset_unidad].strip().upper()
+                                        if any(kw in val_unidad for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', '2 UNID', '2UNID', '2UND']):
+                                            es_doble = True
+                                            break
 
                             if viaje_num is not None:
                                 via = 1 if viaje_num % 2 == 0 else 2
@@ -1020,13 +1031,14 @@ def parsear_planilla_maestra(data, fname):
                                     km_dest = km_sargento
                                 elif destino_cod == 'EB':
                                     km_dest = km_belloto
+                                elif servicio_num >= 600:
+                                    km_dest = km_limache
+                                elif 400 <= servicio_num < 600:
+                                    km_dest = km_sargento
+                                elif 200 <= servicio_num < 400:
+                                    km_dest = km_belloto
                                 else:
-                                    if servicio_num >= 600:
-                                        km_dest = km_limache
-                                    elif 400 <= servicio_num < 600:
-                                        km_dest = km_sargento
-                                    else:
-                                        km_dest = km_belloto
+                                    km_dest = km_belloto  # <- CORREGIDO: default EB en vez de LI
                             else:
                                 km_dest = km_puerto
                                 if destino_cod == 'LI':
@@ -1035,13 +1047,14 @@ def parsear_planilla_maestra(data, fname):
                                     km_orig = km_sargento
                                 elif destino_cod == 'EB':
                                     km_orig = km_belloto
+                                elif servicio_num >= 600:
+                                    km_orig = km_limache
+                                elif 400 <= servicio_num < 600:
+                                    km_orig = km_sargento
+                                elif 200 <= servicio_num < 400:
+                                    km_orig = km_belloto
                                 else:
-                                    if servicio_num >= 600:
-                                        km_orig = km_limache
-                                    elif 400 <= servicio_num < 600:
-                                        km_orig = km_sargento
-                                    else:
-                                        km_orig = km_belloto
+                                    km_orig = km_belloto  # <- CORREGIDO: default EB en vez de LI
                             
                             try:
                                 idx_orig = KM_ACUM_SAFE.index(km_orig)
@@ -1054,7 +1067,10 @@ def parsear_planilla_maestra(data, fname):
                                     nodos_via = [(0.0, KM_ACUM_SAFE[j]) for j in range(idx_orig, idx_dest - 1, -1)]
                             except:
                                 ruta = "PU-LI"
-                                nodos_via = [(0.0, KM_ACUM_SAFE[0]), (0.0, KM_ACUM_SAFE[20])]
+                                if via == 1:
+                                    nodos_via = [(0.0, KM_ACUM_SAFE[j]) for j in range(0, 21)]
+                                else:
+                                    nodos_via = [(0.0, KM_ACUM_SAFE[j]) for j in range(20, -1, -1)]
                             
                             viajes.append({
                                 '_id': f"PLAN_{servicio_num}_{int(t_ini)}",
