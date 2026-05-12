@@ -762,9 +762,15 @@ def cargar_prevenciones(data, fname):
             return []
 
 # =============================================================================
-# 5. PARSEO DE PLANILLA MAESTRA
+# 5. PARSEO DE PLANILLA MAESTRA - CORREGIDO
 # =============================================================================
 def parsear_planilla_maestra(data, fname):
+    """
+    CORRECCIONES:
+    1. La Via se determina PRIMERO por el nombre de la hoja (V1/V2), luego por N° Viaje
+    2. NUNCA se infiere la via desde el numero de servicio
+    3. Origen/Destino segun servicio_num + via
+    """
     try:
         ext = fname.lower()
         dfs = {}
@@ -780,6 +786,14 @@ def parsear_planilla_maestra(data, fname):
             
         viajes = []
         for sheet_name, df in dfs.items():
+            # DETECTAR VIA DESDE EL NOMBRE DE LA HOJA
+            sheet_upper = str(sheet_name).upper()
+            via_from_sheet = None
+            if 'V1' in sheet_upper or 'VIA 1' in sheet_upper:
+                via_from_sheet = 1
+            elif 'V2' in sheet_upper or 'VIA 2' in sheet_upper:
+                via_from_sheet = 2
+            
             header_idx = -1
             for i in range(min(20, len(df))):
                 row_str = ' '.join(df.iloc[i].fillna('').astype(str).str.upper())
@@ -867,16 +881,17 @@ def parsear_planilla_maestra(data, fname):
                             if any(kw in config_str for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', '2 UNID', '2UNID', '2UND']):
                                 es_doble = True
 
-                        if viaje_num is not None:
+                        # CORRECCION PRINCIPAL: Determinar la via
+                        # 1. Prioridad: nombre de la hoja
+                        # 2. Si no, N° Viaje (par=V1, impar=V2)
+                        # 3. NUNCA inferir desde numero de servicio
+                        if via_from_sheet is not None:
+                            via = via_from_sheet
+                        elif viaje_num is not None:
                             via = 1 if viaje_num % 2 == 0 else 2
                         else:
-                            sheet_upper = str(sheet_name).upper()
-                            if 'V1' in sheet_upper or 'VIA 1' in sheet_upper:
-                                via = 1
-                            elif 'V2' in sheet_upper or 'VIA 2' in sheet_upper:
-                                via = 2
-                            else:
-                                via = 1 if servicio_num % 2 == 0 else 2
+                            # Si no hay hoja ni viaje, usar servicio_num como fallback
+                            via = 1 if servicio_num % 2 == 0 else 2
                         
                         km_limache = KM_ACUM_SAFE[20]
                         km_sargento = KM_ACUM_SAFE[18]
@@ -898,7 +913,7 @@ def parsear_planilla_maestra(data, fname):
                             elif 200 <= servicio_num < 400:
                                 km_dest = km_belloto
                             else:
-                                km_dest = km_belloto  # <- CORREGIDO: default EB en vez de LI
+                                km_dest = km_belloto
                         else:
                             km_dest = km_puerto
                             if destino_cod == 'LI':
@@ -914,7 +929,7 @@ def parsear_planilla_maestra(data, fname):
                             elif 200 <= servicio_num < 400:
                                 km_orig = km_belloto
                             else:
-                                km_orig = km_belloto  # <- CORREGIDO: default EB en vez de LI
+                                km_orig = km_belloto
                         
                         try:
                             idx_orig = KM_ACUM_SAFE.index(km_orig)
@@ -933,7 +948,7 @@ def parsear_planilla_maestra(data, fname):
                                 nodos_via = [(0.0, KM_ACUM_SAFE[j]) for j in range(20, -1, -1)]
                         
                         viajes.append({
-                            '_id': f"PLAN_{servicio_num}_{int(t_ini)}",
+                            '_id': f"PLAN_{via}_{servicio_num}_{int(t_ini)}",
                             't_ini': t_ini,
                             'Via': via,
                             'km_orig': km_orig,
@@ -1011,16 +1026,13 @@ def parsear_planilla_maestra(data, fname):
                                             es_doble = True
                                             break
 
-                            if viaje_num is not None:
+                            # CORRECCION: Determinar via
+                            if via_from_sheet is not None:
+                                via = via_from_sheet
+                            elif viaje_num is not None:
                                 via = 1 if viaje_num % 2 == 0 else 2
                             else:
-                                sheet_upper = str(sheet_name).upper()
-                                if 'V1' in sheet_upper or 'VIA 1' in sheet_upper:
-                                    via = 1
-                                elif 'V2' in sheet_upper or 'VIA 2' in sheet_upper:
-                                    via = 2
-                                else:
-                                    via = 1 if servicio_num % 2 == 0 else 2
+                                via = 1 if servicio_num % 2 == 0 else 2
                             
                             km_limache = KM_ACUM_SAFE[20]
                             km_sargento = KM_ACUM_SAFE[18]
@@ -1042,7 +1054,7 @@ def parsear_planilla_maestra(data, fname):
                                 elif 200 <= servicio_num < 400:
                                     km_dest = km_belloto
                                 else:
-                                    km_dest = km_belloto  # <- CORREGIDO: default EB en vez de LI
+                                    km_dest = km_belloto
                             else:
                                 km_dest = km_puerto
                                 if destino_cod == 'LI':
@@ -1058,7 +1070,7 @@ def parsear_planilla_maestra(data, fname):
                                 elif 200 <= servicio_num < 400:
                                     km_orig = km_belloto
                                 else:
-                                    km_orig = km_belloto  # <- CORREGIDO: default EB en vez de LI
+                                    km_orig = km_belloto
                             
                             try:
                                 idx_orig = KM_ACUM_SAFE.index(km_orig)
@@ -1077,7 +1089,7 @@ def parsear_planilla_maestra(data, fname):
                                     nodos_via = [(0.0, KM_ACUM_SAFE[j]) for j in range(20, -1, -1)]
                             
                             viajes.append({
-                                '_id': f"PLAN_{servicio_num}_{int(t_ini)}",
+                                '_id': f"PLAN_{via}_{servicio_num}_{int(t_ini)}",
                                 't_ini': t_ini,
                                 'Via': via,
                                 'km_orig': km_orig,
