@@ -861,7 +861,9 @@ def parsear_planilla_maestra(data, fname):
                                 viaje_num = int(m_viaje.group(1))
 
                         if not es_doble and col_config is not None and pd.notna(row.get(col_config)):
-                            config_str = str(row[col_config]).strip().upper()
+                            import unicodedata as _ud
+                            _raw = str(row[col_config]).strip().upper()
+                            config_str = ''.join(c for c in _ud.normalize('NFD', _raw) if _ud.category(c) != 'Mn')
                             if any(kw in config_str for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', '2 UNID', '2UNID', '2UND']):
                                 es_doble = True
 
@@ -1002,7 +1004,9 @@ def parsear_planilla_maestra(data, fname):
                             if not es_doble:
                                 for offset_unidad in range(1, 5):
                                     if c_idx + offset_unidad < len(row_vals):
-                                        val_unidad = row_vals[c_idx + offset_unidad].strip().upper()
+                                        import unicodedata as _ud
+                                        _raw_u = row_vals[c_idx + offset_unidad].strip().upper()
+                                        val_unidad = ''.join(c for c in _ud.normalize('NFD', _raw_u) if _ud.category(c) != 'Mn')
                                         if any(kw in val_unidad for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', '2 UNID', '2UNID', '2UND']):
                                             es_doble = True
                                             break
