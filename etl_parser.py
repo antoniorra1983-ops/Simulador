@@ -762,14 +762,23 @@ def cargar_prevenciones(data, fname):
             return []
 
 # =============================================================================
-# 5. PARSEO DE PLANILLA MAESTRA - CORREGIDO (UNA FILA = UN VIAJE)
+# 5. PARSEO DE PLANILLA MAESTRA - CORREGIDO CON LOGICA EXACTA
 # =============================================================================
 def parsear_planilla_maestra(data, fname):
     """
-    CORRECCIONES:
-    1. Una fila del Excel = UN viaje. Se rompe el bucle de pairs al primer exito.
-    2. La Via se determina por el nombre de la hoja (V1/V2).
-    3. Origen/Destino segun servicio_num + via.
+    LOGICA EXACTA DE LA PLANILLA MAESTRA EFE:
+    
+    V1 (N° Viaje PAR):
+      - Servicio >= 600 -> PU-LI (Puerto -> Limache)
+      - Servicio 400-599 -> PU-SA (Puerto -> Sargento Aldea)
+      - Servicio <= 399  -> PU-EB (Puerto -> El Belloto)
+    
+    V2 (N° Viaje IMPAR):
+      - Servicio >= 600 -> LI-PU (Limache -> Puerto)
+      - Servicio 400-599 -> SA-PU (Sargento Aldea -> Puerto)
+      - Servicio <= 399  -> EB-PU (El Belloto -> Puerto)
+    
+    Columna F (Unidad): vacio = Simple, "Multiple" = Doble
     """
     try:
         ext = fname.lower()
@@ -803,143 +812,129 @@ def parsear_planilla_maestra(data, fname):
             
             if header_idx != -1:
                 headers = df.iloc[header_idx].fillna('').astype(str).str.upper()
-                viaje_cols = [c for c, val in enumerate(headers) if 'VIAJE' in val or val == 'N°' or val == 'N']
-                srv_cols = [c for c, val in enumerate(headers) if 'SERV' in val or 'TREN' in val]
-                hora_cols = [c for c, val in enumerate(headers) if 'HR PARTIDA' in val or 'HORA' in val or 'PARTIDA' in val or 'SALIDA' in val]
-                config_cols = [c for c, val in enumerate(headers) if 'CONF' in val or 'TIPO' in val or 'FORMA' in val or 'UNIDAD' in val or 'OBS' in val]
-                motriz1_cols = [c for c, val in enumerate(headers) if 'MOTRIZ 1' in val or 'MOTRIZ1' in val or ('MOTRIZ' in val and '1' in val and '2' not in val)]
-                motriz2_cols = [c for c, val in enumerate(headers) if 'MOTRIZ 2' in val or 'MOTRIZ2' in val or ('MOTRIZ' in val and '2' in val)]
-
-                # Construir UN solo par de columnas (el primero que funcione)
-                best_pair = None
-                for vc in viaje_cols:
-                    sc_cands = [sc for sc in srv_cols if sc > vc and sc - vc <= 5]
-                    if sc_cands:
-                        sc = sc_cands[0]
-                        hc_cands = [hc for hc in hora_cols if hc > sc and hc - sc <= 6]
-                        if hc_cands:
-                            hc = hc_cands[0]
-                            cc_cands = [cc for cc in config_cols if cc > sc and cc - sc <= 10]
-                            best_pair = (vc, sc, hc, cc_cands[0] if cc_cands else None)
+                
+                # Detectar columnas clave
+                viaje_col = None
+                srv_col = None
+                hora_col = None
+                unidad_col = None
+                
+                for c, val in enumerate(headers):
+                    if 'VIAJE' in val or val == 'N°' or val == 'N':
+                        if viaje_col is None:
+                            viaje_col = c
+                    if 'SERV' in val or 'TREN' in val:
+                        if srv_col is None:
+                            srv_col = c
+                    if 'HR PARTIDA' in val or 'HORA' in val or 'PARTIDA' in val or 'SALIDA' in val:
+                        if hora_col is None:
+                            hora_col = c
+                    if 'UNIDAD' in val or 'CONF' in val or 'TIPO' in val or 'FORMA' in val or 'MULT' in val:
+                        if unidad_col is None:
+                            unidad_col = c
+                
+                # Si no se encontro columna de servicio, buscar una con numeros de 3-4 digitos
+                if srv_col is None:
+                    for c in range(df.shape[1]):
+                        if c == viaje_col or c == hora_col:
+                            continue
+                        muestras = df.iloc[header_idx+1:header_idx+10, c].dropna().astype(str)
+                        if muestras.apply(lambda x: bool(re.match(r'^\d{3,4}$', x.strip()))).any():
+                            srv_col = c
                             break
-
-                if best_pair is None:
+                
+                # Si no se encontro columna de hora, buscar formato HH:MM
+                if hora_col is None:
+                    for c in range(df.shape[1]):
+                        if c == viaje_col or c == srv_col:
+                            continue
+                        muestras = df.iloc[header_idx+1:header_idx+10, c].dropna().astype(str)
+                        if muestras.apply(lambda x: bool(re.match(r'^\d{1,2}:\d{2}', x.strip()))).any():
+                            hora_col = c
+                            break
+                
+                if srv_col is None or hora_col is None:
                     continue
                 
-                col_viaje, col_srv, col_hora, col_config = best_pair
-
+                # Procesar filas
                 for i in range(header_idx + 1, len(df)):
                     row = df.iloc[i]
                     
-                    # Saltar filas sin hora
-                    if pd.isna(row.get(col_hora)):
+                    # Verificar que la fila tiene datos validos
+                    if pd.isna(row.get(srv_col)) or pd.isna(row.get(hora_col)):
                         continue
                     
-                    hora_str = str(row[col_hora]).strip()
-                    if not re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', hora_str):
-                        continue
+                    srv_str = str(row[srv_col]).strip()
+                    hora_str = str(row[hora_col]).strip()
                     
-                    srv_str = str(row.get(col_srv, '')).strip()
-                    if not srv_str:
+                    if not srv_str or not hora_str:
                         continue
                     
                     # Extraer numero de servicio
-                    servicio_num = None
-                    destino_cod = None
-                    
-                    m_srv_dest = re.search(r'(\d{3,4})\s*[-/]?\s*(LI|SA|EB|PU)', srv_str.upper())
-                    if m_srv_dest:
-                        servicio_num = int(m_srv_dest.group(1))
-                        destino_cod = m_srv_dest.group(2)
-                    else:
-                        m_srv = re.search(r'(\d{3,4})', srv_str)
-                        if m_srv:
-                            servicio_num = int(m_srv.group(1))
-                    
-                    if servicio_num is None:
+                    m_srv = re.search(r'(\d{3,4})', srv_str)
+                    if not m_srv:
                         continue
+                    servicio_num = int(m_srv.group(1))
                     
+                    # Validar hora
+                    if not re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', hora_str):
+                        continue
                     t_ini = parse_time_to_mins(hora_str)
                     if t_ini is None:
                         continue
-
-                    # Detectar doble por Motriz 2
-                    es_doble = False
-                    if motriz2_cols:
-                        for mc2 in motriz2_cols:
-                            val_m2 = str(row.get(mc2, '')).strip()
-                            if val_m2 and val_m2 not in ('0', '0.0', '', 'nan', 'none', 'None', 'NAN'):
-                                try:
-                                    if float(val_m2.replace(',', '.')) > 0:
-                                        es_doble = True
-                                        break
-                                except:
-                                    if val_m2.upper() not in ('NAN', 'NONE', ''):
-                                        es_doble = True
-                                        break
                     
-                    # Detectar doble por config
-                    if not es_doble and col_config is not None and pd.notna(row.get(col_config)):
-                        import unicodedata as _ud
-                        _raw = str(row[col_config]).strip().upper()
-                        config_str = ''.join(c for c in _ud.normalize('NFD', _raw) if _ud.category(c) != 'Mn')
-                        if any(kw in config_str for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', '2 UNID', '2UNID', '2UND']):
-                            es_doble = True
-
-                    # Determinar via
+                    # DETECTAR VIA
                     if via_from_sheet is not None:
                         via = via_from_sheet
-                    else:
-                        viaje_num = None
-                        if not pd.isna(row.get(col_viaje)):
-                            viaje_str = str(row[col_viaje]).strip()
-                            m_viaje = re.search(r'(\d+)', viaje_str)
-                            if m_viaje:
-                                viaje_num = int(m_viaje.group(1))
-                        if viaje_num is not None:
+                    elif viaje_col is not None and pd.notna(row.get(viaje_col)):
+                        viaje_str = str(row[viaje_col]).strip()
+                        m_viaje = re.search(r'(\d+)', viaje_str)
+                        if m_viaje:
+                            viaje_num = int(m_viaje.group(1))
                             via = 1 if viaje_num % 2 == 0 else 2
                         else:
                             via = 1 if servicio_num % 2 == 0 else 2
+                    else:
+                        via = 1 if servicio_num % 2 == 0 else 2
                     
-                    # Origen/Destino
-                    km_limache = KM_ACUM_SAFE[20]
-                    km_sargento = KM_ACUM_SAFE[18]
-                    km_belloto = KM_ACUM_SAFE[14]
-                    km_puerto = KM_ACUM_SAFE[0]
+                    # DETECTAR DOBLE (Columna Unidad)
+                    es_doble = False
+                    if unidad_col is not None and pd.notna(row.get(unidad_col)):
+                        unidad_str = str(row[unidad_col]).strip().upper()
+                        # Detectar "Multiple" o variantes
+                        import unicodedata as _ud
+                        unidad_norm = ''.join(c for c in _ud.normalize('NFD', unidad_str) if _ud.category(c) != 'Mn')
+                        if any(kw in unidad_norm for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', 'MULTIPLE', '2 UNID', '2UNID', '2UND']):
+                            es_doble = True
+                    
+                    # ==========================================================
+                    # LOGICA EXACTA DE DESTINO SEGUN SERVICIO Y VIA
+                    # ==========================================================
+                    km_limache = KM_ACUM_SAFE[20]   # 43.13
+                    km_sargento = KM_ACUM_SAFE[18]  # 29.1
+                    km_belloto = KM_ACUM_SAFE[14]   # 25.3
+                    km_puerto = KM_ACUM_SAFE[0]     # 0.0
                     
                     if via == 1:
+                        # V1: PU -> destino
                         km_orig = km_puerto
-                        if destino_cod == 'LI':
+                        if servicio_num >= 600:
                             km_dest = km_limache
-                        elif destino_cod == 'SA':
+                        elif 400 <= servicio_num <= 599:
                             km_dest = km_sargento
-                        elif destino_cod == 'EB':
-                            km_dest = km_belloto
-                        elif servicio_num >= 600:
-                            km_dest = km_limache
-                        elif 400 <= servicio_num < 600:
-                            km_dest = km_sargento
-                        elif 200 <= servicio_num < 400:
-                            km_dest = km_belloto
                         else:
                             km_dest = km_belloto
                     else:
+                        # V2: origen -> PU
                         km_dest = km_puerto
-                        if destino_cod == 'LI':
+                        if servicio_num >= 600:
                             km_orig = km_limache
-                        elif destino_cod == 'SA':
+                        elif 400 <= servicio_num <= 599:
                             km_orig = km_sargento
-                        elif destino_cod == 'EB':
-                            km_orig = km_belloto
-                        elif servicio_num >= 600:
-                            km_orig = km_limache
-                        elif 400 <= servicio_num < 600:
-                            km_orig = km_sargento
-                        elif 200 <= servicio_num < 400:
-                            km_orig = km_belloto
                         else:
                             km_orig = km_belloto
                     
+                    # Construir ruta y nodos
                     try:
                         idx_orig = KM_ACUM_SAFE.index(km_orig)
                         idx_dest = KM_ACUM_SAFE.index(km_dest)
@@ -977,16 +972,11 @@ def parsear_planilla_maestra(data, fname):
                     es_doble = False
                     for c_idx, val in enumerate(row_vals):
                         val_upper = str(val).strip().upper()
-                        if 'MOTRIZ' in val_upper and '2' in val_upper:
-                            if c_idx + 1 < len(row_vals):
-                                val_m2 = str(row_vals[c_idx + 1]).strip()
-                                if val_m2 and val_m2 not in ('0', '0.0', '', 'nan', 'none'):
-                                    try:
-                                        if float(val_m2.replace(',', '.')) > 0:
-                                            es_doble = True
-                                    except:
-                                        if val_m2.upper() not in ('NAN', 'NONE', ''):
-                                            es_doble = True
+                        import unicodedata as _ud
+                        val_norm = ''.join(c for c in _ud.normalize('NFD', val_upper) if _ud.category(c) != 'Mn')
+                        if any(kw in val_norm for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', 'MULTIPLE', '2 UNID', '2UNID', '2UND']):
+                            es_doble = True
+                            break
                     
                     for c_idx, val in enumerate(row_vals):
                         val = val.strip()
@@ -996,45 +986,24 @@ def parsear_planilla_maestra(data, fname):
                                 continue
                             
                             servicio_num = None
-                            destino_cod = None
-                            sc_idx = -1
-                            
                             for offset in range(1, 8):
                                 if c_idx - offset >= 0:
-                                    check_val = row_vals[c_idx - offset].strip().upper()
-                                    m_srv_dest = re.search(r'(\d{3,4})\s*[-/]?\s*(LI|SA|EB|PU)', check_val)
-                                    if m_srv_dest:
-                                        servicio_num = int(m_srv_dest.group(1))
-                                        destino_cod = m_srv_dest.group(2)
-                                        sc_idx = c_idx - offset
-                                        break
+                                    check_val = row_vals[c_idx - offset].strip()
                                     m_srv = re.search(r'(\d{3,4})', check_val)
                                     if m_srv and 200 <= int(m_srv.group(1)) <= 1999:
                                         servicio_num = int(m_srv.group(1))
-                                        sc_idx = c_idx - offset
                                         break
                             
-                            viaje_num = None
-                            if sc_idx != -1:
-                                for offset in range(1, 5):
-                                    if sc_idx - offset >= 0:
-                                        check_val = row_vals[sc_idx - offset].strip()
-                                        if check_val.isdigit() and 1 <= int(check_val) <= 500:
-                                            viaje_num = int(check_val)
-                                            break
-                                        
                             if servicio_num is None:
                                 continue
-
-                            if not es_doble:
-                                for offset_unidad in range(1, 5):
-                                    if c_idx + offset_unidad < len(row_vals):
-                                        import unicodedata as _ud
-                                        _raw_u = row_vals[c_idx + offset_unidad].strip().upper()
-                                        val_unidad = ''.join(c for c in _ud.normalize('NFD', _raw_u) if _ud.category(c) != 'Mn')
-                                        if any(kw in val_unidad for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', '2 UNID', '2UNID', '2UND']):
-                                            es_doble = True
-                                            break
+                            
+                            viaje_num = None
+                            for offset in range(1, 5):
+                                if c_idx - offset >= 0:
+                                    check_val = row_vals[c_idx - offset].strip()
+                                    if check_val.isdigit() and 1 <= int(check_val) <= 500:
+                                        viaje_num = int(check_val)
+                                        break
 
                             if via_from_sheet is not None:
                                 via = via_from_sheet
@@ -1050,34 +1019,18 @@ def parsear_planilla_maestra(data, fname):
                             
                             if via == 1:
                                 km_orig = km_puerto
-                                if destino_cod == 'LI':
+                                if servicio_num >= 600:
                                     km_dest = km_limache
-                                elif destino_cod == 'SA':
+                                elif 400 <= servicio_num <= 599:
                                     km_dest = km_sargento
-                                elif destino_cod == 'EB':
-                                    km_dest = km_belloto
-                                elif servicio_num >= 600:
-                                    km_dest = km_limache
-                                elif 400 <= servicio_num < 600:
-                                    km_dest = km_sargento
-                                elif 200 <= servicio_num < 400:
-                                    km_dest = km_belloto
                                 else:
                                     km_dest = km_belloto
                             else:
                                 km_dest = km_puerto
-                                if destino_cod == 'LI':
+                                if servicio_num >= 600:
                                     km_orig = km_limache
-                                elif destino_cod == 'SA':
+                                elif 400 <= servicio_num <= 599:
                                     km_orig = km_sargento
-                                elif destino_cod == 'EB':
-                                    km_orig = km_belloto
-                                elif servicio_num >= 600:
-                                    km_orig = km_limache
-                                elif 400 <= servicio_num < 600:
-                                    km_orig = km_sargento
-                                elif 200 <= servicio_num < 400:
-                                    km_orig = km_belloto
                                 else:
                                     km_orig = km_belloto
                             
