@@ -82,10 +82,9 @@ for ki, kf, r_m in _curvas:
     if s_i < e_i: _CURVA_ARRAY[s_i:e_i] = w_c
 
 # =============================================================================
-# 1.5 RESISTENCIA DE CATENARIA POR SECCIÓN (Ω/km) - Datos reales MERVAL
+# 1.5 RESISTENCIA DE CATENARIA POR SECCIÓN (Ω/km)
 # =============================================================================
 def _get_resistencia_catenaria_km(km):
-    """Retorna la resistencia de catenaria en Ω/km para una posición km dada."""
     if km < 2.25:
         return 0.0638
     elif km < 6.80:
@@ -107,10 +106,6 @@ def vel_at_km(km_km, via, use_rm):
     return _VEL_ARRAY_RM[idx] if use_rm else _VEL_ARRAY_NORM[idx]
 
 def km_at_t(t_ini, t_fin, t, via, use_rm=False, km_orig=0.0, km_dest=0.0, nodos=None, t_arr=None):
-    """
-    Interpolación trigonométrica no-lineal (Curva-S).
-    Reactiva las tasas de aceleración y frenado para la red eléctrica.
-    """
     if nodos and len(nodos) >= 2:
         if t <= nodos[0][0]: return nodos[0][1]
         if t >= nodos[-1][0]: return nodos[-1][1]
@@ -222,7 +217,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     f = flota_db.get(tipo_tren, {})
     if not f: return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     
-    # Pre-cálculo del hito de maniobra
     km_man = None
     man_upper = str(maniobra).upper() if maniobra and not pd.isna(maniobra) else ''
     if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper:
@@ -264,6 +258,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     
     ser_data = _get_val('SER_DATA', [(4.9, "SER PO"), (12.7, "SER ES"), (25.5, "SER EB"), (28.7, "SER VA")])
     dt = 1.0  
+    eta_motor = f.get('eta_motor', 0.92)
+    eta_regen_neta = _get_val('ETA_REGEN_NETA', 0.38)
     
     n_uni_final = 2 if doble else 1
     aux_kw_nominal_final = 0.0
@@ -287,7 +283,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             km_actual = (pos_m + dist_recorrida) / 1000.0 if via_op == 1 else (pos_m - dist_recorrida) / 1000.0
             idx_km = min(44999, max(0, int(km_actual * 1000)))
             
-            # Inyección Dinámica de Masa
             dist_recorrida_total = abs(km_actual - km_ini) * 1000.0
             es_doble = doble
             
@@ -353,7 +348,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                                         if dist_a_prev <= d_freno_prev + 50: 
                                             v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
 
-            # Restricciones Toperas
             if via_op == 1 and km_actual >= 42.93: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual < 43.03 else 10.0)
             if via_op == 2 and km_actual <= 0.20: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual > 0.10 else 10.0)
             
@@ -369,7 +363,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
             f_res_total = f_davis + f_pend + f_curva
             
-            # Squeeze Control con resistencia real de catenaria
+            # Squeeze Control
             dist_ser = min([abs(km_actual - s[0]) for s in ser_data]) if ser_data else 5.0
             r_linea = _get_resistencia_catenaria_km(km_actual) * dist_ser
             i_req = (f_trac_max_n_nominal * max(0.1, v_ms)) / 3000.0
@@ -385,7 +379,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             d_freno_req = (v_ms**2) / (2 * a_freno_op) if v_ms > 0 else 0
             f_disp_freno = min(f_freno_max_n, p_freno_max_w / max(0.1, v_ms)) if v_kmh >= v_freno_min else 0.0
             
-            # CORRECCIÓN: Parada forzada en el último metro para evitar anti-stall infinito
+            # Parada forzada en el último metro
             if es_ultima_parada and dist_restante < 1.0:
                 t_horas += 0.1 / 3600.0
                 dist_recorrida += dist_restante
@@ -470,7 +464,13 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 
             f_real_total = (masa_dinamica_kg * a_net) + f_res_total
             
+            # Calcular auxiliares para este step (se usa en ambos casos)
+            hora_actual = (t_ini_mins + t_horas * 60.0) / 60.0
+            aux_kw_inst = calcular_aux_dinamico(aux_kw_nominal, hora_actual, pax_mid, f.get('cap_max', 398) * n_uni_inst, estacion_anio, estado_marcha, f_compresor_especifico)
+            aux_kwh_step = (aux_kw_inst * dt_actual) / 3600.0
+            
             if f_real_total > 0 and estado_marcha != "BRAKE_STATION":
+                # TRACCIÓN: consumo normal de catenaria
                 f_limite_potencia_inst = p_max_op_w_real / max(0.1, v_ms)
                 f_absoluta_disp_inst = min(f_disp_trac_real, f_limite_potencia_inst)
                 f_motor_real = min(f_real_total, f_absoluta_disp_inst)
@@ -482,16 +482,40 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 trabajo_j_trac = f_motor_real * step_m
                 trc += (trabajo_j_trac / 3_600_000.0) / eta_din
                 
+                # En tracción, los auxiliares se suman al consumo de catenaria
+                aux += aux_kwh_step
+                
             elif f_real_total < 0 and estado_marcha in ["BRAKE_STATION", "BRAKE_OVERSPEED"]:
+                # =============================================================
+                # 💡 CORRECCIÓN: FRENADO REGENERATIVO CON AUTO-CONSUMO AUXILIAR
+                # =============================================================
                 f_freno_real = min(abs(f_real_total), f_disp_freno)
                 trabajo_j_regen = f_freno_real * step_m
-                # CORRECCIÓN: Cadena de eficiencia correcta (mecánica → eléctrica → red)
-                reg += (trabajo_j_regen / 3_600_000.0) * f.get('eta_motor', 0.92) * _get_val('ETA_REGEN_NETA', 0.38)
                 
-            hora_actual = (t_ini_mins + t_horas * 60.0) / 60.0
-            aux_kw_inst = calcular_aux_dinamico(aux_kw_nominal, hora_actual, pax_mid, f.get('cap_max', 398) * n_uni_inst, estacion_anio, estado_marcha, f_compresor_especifico)
+                # Energía mecánica convertida a eléctrica por el motor-generador
+                energia_bruta_kwh = trabajo_j_regen / 3_600_000.0
+                energia_electrica_kwh = energia_bruta_kwh * eta_motor
+                
+                # PRIMERO: alimentar los auxiliares del propio tren
+                if energia_electrica_kwh >= aux_kwh_step:
+                    # La regeneración alcanza para cubrir todos los auxiliares
+                    # NO se consume de catenaria para auxiliares
+                    # aux += 0  (no se suma nada)
+                    
+                    # El excedente después de auxiliares se puede exportar
+                    excedente_kwh = energia_electrica_kwh - aux_kwh_step
+                    reg += excedente_kwh * eta_regen_neta
+                else:
+                    # La regeneración NO alcanza para cubrir los auxiliares
+                    # Se usa toda la regeneración para auxiliares
+                    # El resto de auxiliares se consume de catenaria
+                    deficit_kwh = aux_kwh_step - energia_electrica_kwh
+                    aux += deficit_kwh
+                    # reg += 0 (nada para exportar)
+            else:
+                # CRUISE o COAST: los auxiliares se consumen de catenaria
+                aux += aux_kwh_step
             
-            aux += (aux_kw_inst * dt_actual) / 3600.0
             t_horas += dt_actual / 3600.0
             dist_recorrida += step_m
             v_ms = v_new
@@ -513,7 +537,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
 # 5. PRE-CALCULADORES DE RED
 # =============================================================================
 def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
-    """Modelo Probabilístico: eficiencia de regeneración basada en headway."""
     if df_dia.empty: return {}
     result = {}
     for via in [1, 2]:
@@ -546,6 +569,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
     4. Alcance eléctrico: LAMBDA_REGEN_KM × 2.5 (~12.5 km)
     5. Eficiencia: decaimiento exponencial con la distancia + ETA_MAX
     6. Distribución: pesos por distancia inversa entre todos los candidatos
+    7. 💡 CORREGIDO: Los auxiliares ya fueron descontados en simular_tramo_termodinamico
     """
     regen_util_per_trip = {idx: 0.0 for idx in df_dia.index}
     braking_ticks_per_trip = {idx: 0.0 for idx in df_dia.index}
@@ -555,12 +579,12 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
     
     t_min = int(df_dia['t_ini'].min())
     t_max = int(df_dia['t_fin'].max())
-    dt_step = 10.0 / 60.0  # Timestep de 10 segundos
+    dt_step = 10.0 / 60.0
     time_steps = np.arange(t_min, t_max + 1, dt_step)
     
     LAMBDA_REGEN = _get_val('LAMBDA_REGEN_KM', 5.0)
     ETA_MAX_VAL = _get_val('ETA_MAX', 0.70)
-    DISTANCIA_MAXIMA = LAMBDA_REGEN * 2.5  # ~12.5 km de alcance máximo físico
+    DISTANCIA_MAXIMA = LAMBDA_REGEN * 2.5
     
     for via_ in [1, 2]:
         via_trains = df_dia[df_dia['Via'] == via_]
@@ -569,7 +593,6 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
         
         via_indices = set(via_trains.index)
         
-        # Preparar datos de trenes de esta vía
         trains_data = []
         for idx, r in via_trains.iterrows():
             nodos = r.get('nodos')
@@ -654,9 +677,11 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                     f_req_freno = max(0.0, masa_dinamica_kg * (f.get('a_freno_ms2', 1.2) * 0.9) - f_res_total)
                     f_disp_freno = min(f.get('f_freno_max_kn', 105.0)*1000*n_uni, (f.get('p_freno_max_kw', f.get('p_max_kw',720)*1.2)*1000*n_uni)/max(0.1, v_ms)) if v_kmh >= f.get('v_freno_min', 3.81) else 0.0
                     
-                    # CORRECCIÓN: Cadena de eficiencia mecánica → eléctrica → red
                     potencia_mecanica_frenado_kw = (min(f_req_freno, f_disp_freno) * v_ms) / 1000.0
                     potencia_electrica_generada_kw = potencia_mecanica_frenado_kw * eta_m
+                    
+                    # 💡 Los auxiliares YA fueron descontados en simular_tramo_termodinamico
+                    # Aquí solo se modela la transferencia entre trenes
                     p_gen_kw = potencia_electrica_generada_kw * eta_regen_neta - p_aux_kw
                     
                     if p_gen_kw > 0:
@@ -683,9 +708,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                     
                     accel_by_idx[i].append((tr['idx'], pos, p_dem_kw))
         
-        # ======================================================================
         # DISTRIBUCIÓN DE REGENERACIÓN: Múltiples trenes, misma vía
-        # ======================================================================
         for i in range(len(time_steps)):
             braking_via = [b for b in braking_by_idx[i] if b[0] in via_indices]
             accel_via = [a for a in accel_by_idx[i] if a[0] in via_indices]
@@ -693,31 +716,22 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
             if not braking_via or not accel_via:
                 continue
             
-            # Demandas actuales de trenes acelerando (se actualizan al recibir energía)
             current_demands = {a[0]: a[2] for a in accel_via}
             
             for b_idx, b_pos, p_gen in braking_via:
                 if p_gen <= 0:
                     continue
                 
-                # --------------------------------------------------------------
-                # PASO 1: Identificar TODOS los candidatos dentro del alcance
-                # --------------------------------------------------------------
                 candidates = []
                 for a_idx, a_pos, a_demand in accel_via:
                     if current_demands[a_idx] <= 0:
-                        continue  # Ya está totalmente alimentado
+                        continue
                     
                     dist = abs(a_pos - b_pos)
-                    
-                    # Corte duro: más allá de DISTANCIA_MAXIMA no hay transferencia posible
                     if dist > DISTANCIA_MAXIMA:
                         continue
                     
-                    # Peso: inversamente proporcional a la distancia
                     peso = 1.0 / max(0.1, dist)
-                    
-                    # Eficiencia de transmisión: decaimiento exponencial con la distancia
                     eta_dist = ETA_MAX_VAL * np.exp(-dist / LAMBDA_REGEN)
                     
                     candidates.append({
@@ -729,36 +743,22 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                     })
                 
                 if not candidates:
-                    # NADIE en alcance → toda la energía va al reóstato
                     continue
                 
-                # --------------------------------------------------------------
-                # PASO 2: Distribuir energía entre TODOS los candidatos
-                # --------------------------------------------------------------
                 total_peso = sum(c['peso'] for c in candidates)
                 energia_asignada_total = 0.0
                 
                 for c in candidates:
-                    # Fracción de la energía que le corresponde por proximidad
                     fraccion_peso = c['peso'] / total_peso if total_peso > 0 else 1.0 / len(candidates)
-                    
-                    # Energía ofrecida a este tren
                     p_ofrecida = p_gen * c['eta_dist'] * fraccion_peso
-                    
-                    # Transferencia real limitada por la demanda del receptor
                     p_transferida = min(p_ofrecida, c['demand'])
                     
-                    # Actualizar demanda residual
                     current_demands[c['idx']] -= p_transferida
                     energia_asignada_total += p_transferida
                 
-                # --------------------------------------------------------------
-                # PASO 3: Registrar eficiencia de regeneración para este frenado
-                # --------------------------------------------------------------
                 if p_gen > 0:
                     regen_util_per_trip[b_idx] += min(1.0, energia_asignada_total / p_gen)
     
-    # Normalizar por ticks de frenado
     for idx in df_dia.index:
         if braking_ticks_per_trip[idx] > 0:
             regen_util_per_trip[idx] = min(1.0, regen_util_per_trip[idx] / braking_ticks_per_trip[idx])
@@ -790,7 +790,7 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     df_e['t_fin'] = df_e['t_ini'] + df_e['t_viaje_h'] * 60.0
     df_e['tren_km'] = df_e.apply(_calc_tren_km_real_motor, axis=1)
         
-    # Pre/Post Servicio: Consumo auxiliar de encendido y apagado
+    # Pre/Post Servicio
     import re as _re
     T_PRE_H  = 1.0
     T_POST_H = 10.0/60.0
