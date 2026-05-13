@@ -579,9 +579,11 @@ def main():
             
             df_dia_e = simular_dia_historico_cached(df_dia, pct_trac_hist, use_rm, use_pend, use_regen, tipo_regen, estacion_anio, prevenciones_list, file_signature + fecha_sel)
             
-            # Eliminar columna de diagnóstico que puede romper la UI (también en histórico)
-            if 'prevencion_aplicada' in df_dia_e.columns:
-                df_dia_e = df_dia_e.drop(columns=['prevencion_aplicada'])
+            # Forzar tipos numéricos (por seguridad)
+            cols_num = ['t_ini', 't_fin', 'kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto', 't_viaje_h', 'tren_km']
+            for col in cols_num:
+                if col in df_dia_e.columns:
+                    df_dia_e[col] = pd.to_numeric(df_dia_e[col], errors='coerce')
             
             try:
                 render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac_hist, use_rm, use_pend, estacion_anio, "mapa", gap_vias, pax_dia_total=0)
@@ -836,9 +838,13 @@ def main():
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature
                 df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig)
                 
-                # La columna ya fue eliminada dentro de la función, pero por seguridad volvemos a verificar
-                if 'prevencion_aplicada' in df_sint_e.columns:
-                    df_sint_e = df_sint_e.drop(columns=['prevencion_aplicada'])
+                # Forzar tipos numéricos (CORRECCIÓN DEL ERROR)
+                cols_num = ['t_ini', 't_fin', 'kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto', 't_viaje_h', 'tren_km']
+                for col in cols_num:
+                    if col in df_sint_e.columns:
+                        df_sint_e[col] = pd.to_numeric(df_sint_e[col], errors='coerce')
+                    if col in df_sint_final.columns:
+                        df_sint_final[col] = pd.to_numeric(df_sint_final[col], errors='coerce')
                 
                 st.divider()
                 try:
