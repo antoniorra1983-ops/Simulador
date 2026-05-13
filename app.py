@@ -20,7 +20,7 @@ except ImportError:
 import etl_parser
 
 # =============================================================================
-# IMPORTACIONES BLINDADAS
+# IMPORTACIONES BLINDADAS - Tolerancia a fallos de caché en Streamlit Cloud
 # =============================================================================
 _funcs_etl = {
     'procesar_thdr': None,
@@ -271,13 +271,14 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         pax_arr_viaje = {k: min(v, cap_m) for k, v in pax_arr_viaje.items()}
 
         try:
-            trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico(
+            # Ajuste a 7 valores de retorno
+            trc_v, aux_v, reg_v, _, _, t_h, _ = simular_tramo_termodinamico(
                 r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
                 pct_trac_plan, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
                 None, r.get('maniobra'), estacion_anio_plan, r['t_ini'], es_vacio=False, prevenciones=_prevenciones
             )
         except TypeError:
-            trc_v, aux_v, reg_v, _, _, t_h = simular_tramo_termodinamico(
+            trc_v, aux_v, reg_v, _, _, t_h, _ = simular_tramo_termodinamico(
                 r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
                 pct_trac_plan, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
                 None, r.get('maniobra'), estacion_anio_plan, r['t_ini'], es_vacio=False
@@ -310,7 +311,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
     return df_sint_final, df_sint_e
 
 # =============================================================================
-# TABLA THDR SINTÉTICA
+# TABLA THDR SINTÉTICA — Horario simulado por estación para el Planificador
 # =============================================================================
 @st.cache_data(show_spinner=False, ttl=1)
 def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio, km_orig, km_dest, prevenciones=None):
@@ -345,7 +346,8 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
         es_destino = (j == len(est_en_recorrido)-2)
 
         try:
-            _,_,_,_,_,t_h = simular_tramo_termodinamico(
+            # Ajuste a 7 valores de retorno
+            _,_,_,_,_,t_h, _ = simular_tramo_termodinamico(
                 tipo_tren, doble, km_ini_tr, km_fin_tr, via, pct_trac,
                 True, True, None, {}, 150, None, None, estacion_anio, t_actual, False, prevenciones
             )
@@ -735,12 +737,12 @@ def main():
                         
                         with st.spinner("Calculando termodinámica..."):
                             try:
-                                trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb = simular_tramo_termodinamico(
+                                trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb, _ = simular_tramo_termodinamico(
                                     sb_flota, False, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
                                     None, estacion_anio_plan, 480.0, es_vacio=False, prevenciones=prevenciones_list
                                 )
                             except TypeError:
-                                trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb = simular_tramo_termodinamico(
+                                trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb, _ = simular_tramo_termodinamico(
                                     sb_flota, False, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
                                     None, estacion_anio_plan, 480.0, es_vacio=False
                                 )
@@ -814,7 +816,7 @@ def main():
                     st.session_state['simulacion_plan_lista'] = True
 
             if st.session_state.get('simulacion_plan_lista', False) and 'raw_plan_df' in st.session_state:
-                plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature + str(sorted([(p.get('km_min',0), p.get('km_max',0), p.get('v_kmh',0), p.get('via',0)) for p in (prevenciones_list or [])], key=lambda x: x[0]))
+                plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature
                 df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig)
                 st.divider()
                 try:
