@@ -204,7 +204,7 @@ def _calc_tren_km_real_motor(row):
     return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
 
 # =============================================================================
-# 4. MOTOR CINEMÁTICO-TERMODINÁMICO (CON DIAGNÓSTICO DE PREVENCIONES)
+# 4. MOTOR CINEMÁTICO-TERMODINÁMICO (CORREGIDO)
 # =============================================================================
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False, prevenciones=None):
     flota_db = _get_val('FLOTA', {})
@@ -241,7 +241,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     aux_catenaria = 0.0
     reg_exportable = 0.0
     t_horas = 0.0
-    prevencion_aplicada = 0  # contador de aplicaciones
+    prevencion_aplicada = 0
     
     paradas_km = [n[1] for n in nodos] if nodos else [k_s, k_e]
     k_min, k_max = min(k_s, k_e), max(k_s, k_e)
@@ -324,7 +324,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                             if km_aviso <= km_actual <= km_fin:
                                 v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
                                 prevencion_aplicada += 1
-                        else:  # via_op == 2
+                        else:
                             km_inicio = p['km_max']
                             km_fin = p['km_min'] - long_tren_km
                             km_aviso = p['km_max'] + 0.5
@@ -742,5 +742,9 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     df_e['kwh_prepost'] = pd.Series(aux_prepost_por_idx)
     df_e['kwh_viaje_aux']  = df_e['kwh_viaje_aux']  + df_e['kwh_prepost'].fillna(0.0)
     df_e['kwh_viaje_neto'] = df_e['kwh_viaje_neto'] + df_e['kwh_prepost'].fillna(0.0)
+
+    # 💡 Eliminar la columna de diagnóstico para no romper la interfaz
+    if 'prevencion_aplicada' in df_e.columns:
+        df_e = df_e.drop(columns=['prevencion_aplicada'])
 
     return df_e
