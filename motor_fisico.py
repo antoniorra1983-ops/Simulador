@@ -124,20 +124,9 @@ def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos=None, t_
     else: return "CRUISE", v_kmh
 
 # =============================================================================
-# 2.5. NUEVA FUNCIÓN DE AUXILIARES CON DUTY CYCLE REAL
+# 2.5. FUNCIÓN DE AUXILIARES CON DUTY CYCLE REAL
 # =============================================================================
 def calcular_aux_dinamico(tipo_tren, aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE"):
-    """
-    Calcula el consumo auxiliar REAL según el estado de marcha y tipo de tren.
-    
-    Componentes:
-    - HVAC: Siempre funciona (modulado por hora, ocupación)
-    - Compresor: Duty cycle variable por estado y tipo de tren
-    - Ventilación tracción: Duty cycle variable por estado
-    - Iluminación/TCMS: Fijo
-    
-    Datos calibrados con mediciones reales de la industria.
-    """
     hora_int = int(hora_decimal) % 24
     try: perfil = _get_val('AUX_HVAC_HORA', {}).get(estacion_anio, [0.5]*24)
     except: perfil = [0.5]*24
@@ -151,85 +140,42 @@ def calcular_aux_dinamico(tipo_tren, aux_kw_nominal, hora_decimal, pax_abordo, c
         elif estacion_anio == "invierno": f_ocup = 1.0 - 0.12 * ocup
         else: f_ocup = 1.0 - 0.06 * ocup
     
-    # =========================================================================
-    # DUTY CYCLE DEL COMPRESOR POR TIPO DE TREN Y ESTADO
-    # Valores basados en datos reales de fabricantes (Knorr-Bremse, Wabtec, Faiveley)
-    # =========================================================================
     if tipo_tren == "XT-100":
-        # Sin suspensión neumática, puertas eléctricas
         duty_compresor = {
-            "ACCEL": 0.10,
-            "CRUISE": 0.08,
-            "BRAKE": 0.45,
-            "BRAKE_STATION": 0.45,
-            "BRAKE_OVERSPEED": 0.45,
-            "COAST": 0.08,
-            "DWELL": 0.12
+            "ACCEL": 0.10, "CRUISE": 0.08, "BRAKE": 0.45,
+            "BRAKE_STATION": 0.45, "BRAKE_OVERSPEED": 0.45,
+            "COAST": 0.08, "DWELL": 0.12
         }
     elif tipo_tren == "XT-M":
-        # Con suspensión neumática (balonas), puertas eléctricas
         duty_compresor = {
-            "ACCEL": 0.20,
-            "CRUISE": 0.18,
-            "BRAKE": 0.65,
-            "BRAKE_STATION": 0.65,
-            "BRAKE_OVERSPEED": 0.65,
-            "COAST": 0.18,
-            "DWELL": 0.80
+            "ACCEL": 0.20, "CRUISE": 0.18, "BRAKE": 0.65,
+            "BRAKE_STATION": 0.65, "BRAKE_OVERSPEED": 0.65,
+            "COAST": 0.18, "DWELL": 0.80
         }
-    else:  # SFE
-        # Con suspensión neumática (balonas, 3 coches), puertas eléctricas
+    else:
         duty_compresor = {
-            "ACCEL": 0.25,
-            "CRUISE": 0.22,
-            "BRAKE": 0.70,
-            "BRAKE_STATION": 0.70,
-            "BRAKE_OVERSPEED": 0.70,
-            "COAST": 0.22,
-            "DWELL": 0.85
+            "ACCEL": 0.25, "CRUISE": 0.22, "BRAKE": 0.70,
+            "BRAKE_STATION": 0.70, "BRAKE_OVERSPEED": 0.70,
+            "COAST": 0.22, "DWELL": 0.85
         }
     
     dc_comp = duty_compresor.get(estado_marcha, 0.10)
     
-    # =========================================================================
-    # DUTY CYCLE DE VENTILACIÓN DE TRACCIÓN POR ESTADO
-    # La ventilación refrigera motores e inversores - depende de la corriente
-    # =========================================================================
     duty_ventilacion = {
-        "ACCEL": 1.00,    # Máxima corriente = máximo calor
-        "CRUISE": 0.60,   # Corriente moderada
-        "BRAKE": 0.40,    # El motor-generador también genera calor
-        "BRAKE_STATION": 0.40,
-        "BRAKE_OVERSPEED": 0.40,
-        "COAST": 0.20,    # Casi sin corriente
-        "DWELL": 0.10     # Mínimo, solo electrónica de control
+        "ACCEL": 1.00, "CRUISE": 0.60, "BRAKE": 0.40,
+        "BRAKE_STATION": 0.40, "BRAKE_OVERSPEED": 0.40,
+        "COAST": 0.20, "DWELL": 0.10
     }
     dc_vent = duty_ventilacion.get(estado_marcha, 0.30)
-    
-    # =========================================================================
-    # CÁLCULO DE COMPONENTES
-    # =========================================================================
-    # Fracciones del consumo auxiliar nominal
-    # HVAC: ~75% del consumo auxiliar total
-    # Compresor: ~5% del nominal (varía con duty cycle)
-    # Ventilación tracción: ~5% del nominal (varía con duty cycle)
-    # Iluminación/TCMS: ~15% fijo
     
     frac_hvac = 0.75
     frac_comp = 0.05
     frac_vent = 0.05
     frac_base = 0.15
     
-    # HVAC: siempre funciona, modulado por hora y ocupación
     aux_hvac = aux_kw_nominal * frac_hvac * f_hvac * f_ocup
-    
-    # Compresor: duty cycle variable según estado y tipo de tren
     aux_comp = aux_kw_nominal * frac_comp * dc_comp
-    
-    # Ventilación tracción: duty cycle variable según estado
     aux_vent = aux_kw_nominal * frac_vent * dc_vent
-    
-    # Carga base fija (iluminación, TCMS, electrónica)
     aux_base = aux_kw_nominal * frac_base
     
     return aux_base + aux_hvac + aux_comp + aux_vent
@@ -258,7 +204,7 @@ def _calc_tren_km_real_motor(row):
     return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
 
 # =============================================================================
-# 4. MOTOR CINEMÁTICO-TERMODINÁMICO
+# 4. MOTOR CINEMÁTICO-TERMODINÁMICO (CORREGIDO: FRENA EN TODAS LAS ESTACIONES)
 # =============================================================================
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False, prevenciones=None):
     flota_db = _get_val('FLOTA', {})
@@ -308,6 +254,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     dt = 1.0  
     eta_motor = f.get('eta_motor', 0.92)
     eta_regen_neta = _get_val('ETA_REGEN_NETA', 0.38)
+    dwell_seg = _get_val('DWELL_DEF', 25.0)
     
     n_uni_final = 2 if doble else 1
     aux_kw_nominal_final = 0.0
@@ -417,12 +364,14 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             d_freno_req = (v_ms**2) / (2 * a_freno_op) if v_ms > 0 else 0
             f_disp_freno = min(f_freno_max_n, p_freno_max_w / max(0.1, v_ms)) if v_kmh >= v_freno_min else 0.0
             
-            if es_ultima_parada and dist_restante < 1.0:
+            # 💡 CORREGIDO: Forzar parada en el último metro
+            if dist_restante < 1.0:
                 t_horas += 0.1 / 3600.0
                 dist_recorrida += dist_restante
                 v_ms = 0.0
                 break
-            elif dist_restante <= d_freno_req + (v_ms * dt * 1.2) and (es_ultima_parada or not es_sintetico):
+            # 💡 CORREGIDO: Frenar SIEMPRE cuando la distancia lo requiera
+            elif dist_restante <= d_freno_req + (v_ms * dt * 1.2):
                 estado_marcha = "BRAKE_STATION"
             elif v_kmh > v_cons_kmh + 1.5:
                 estado_marcha = "BRAKE_OVERSPEED"
@@ -498,9 +447,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 
             f_real_total = (masa_dinamica_kg * a_net) + f_res_total
             
-            # =============================================================
-            # CÁLCULO DE AUXILIARES CON NUEVA FUNCIÓN
-            # =============================================================
             hora_actual = (t_ini_mins + t_horas * 60.0) / 60.0
             aux_kw_inst = calcular_aux_dinamico(
                 tipo_tren, aux_kw_nominal, hora_actual, pax_mid,
@@ -508,11 +454,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             )
             aux_kwh_step = (aux_kw_inst * dt_actual) / 3600.0
             
-            # =============================================================
-            # ORIGEN DE LA ENERGÍA PARA AUXILIARES
-            # =============================================================
             if f_real_total > 0 and estado_marcha != "BRAKE_STATION":
-                # TRACCIÓN: Todo de catenaria
                 f_limite_potencia_inst = p_max_op_w_real / max(0.1, v_ms)
                 f_absoluta_disp_inst = min(f_disp_trac_real, f_limite_potencia_inst)
                 f_motor_real = min(f_real_total, f_absoluta_disp_inst)
@@ -524,39 +466,37 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 aux_catenaria += aux_kwh_step
                 
             elif f_real_total < 0 and estado_marcha in ["BRAKE_STATION", "BRAKE_OVERSPEED"]:
-                # FRENADO: Auxiliares primero de regeneración
                 f_freno_real = min(abs(f_real_total), f_disp_freno)
                 trabajo_j_regen = f_freno_real * step_m
                 energia_bruta_kwh = trabajo_j_regen / 3_600_000.0
                 energia_electrica_kwh = energia_bruta_kwh * eta_motor
                 
                 if energia_electrica_kwh >= aux_kwh_step:
-                    # La regeneración cubre todos los auxiliares
                     excedente_kwh = energia_electrica_kwh - aux_kwh_step
                     reg_exportable += excedente_kwh * eta_regen_neta
                 else:
-                    # La regeneración NO alcanza para auxiliares
                     deficit_kwh = aux_kwh_step - energia_electrica_kwh
                     aux_catenaria += deficit_kwh
             else:
-                # CRUISE/COAST: Todo de catenaria
                 aux_catenaria += aux_kwh_step
             
             t_horas += dt_actual / 3600.0
             dist_recorrida += step_m
             v_ms = v_new
 
-    # Dwell: 100% de catenaria
-    n_est_mid = max(0, len(paradas_km) - 2) if es_sintetico else 0
-    dwell_h = (n_est_mid * _get_val('DWELL_DEF', 25.0)) / 3600.0
-    hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
-    aux_kw_dwell = calcular_aux_dinamico(
-        tipo_tren, aux_kw_nominal_final, hora_media_dwell, pax_abordo,
-        f.get('cap_max', 398) * n_uni_final, estacion_anio, "DWELL"
-    )
-    aux_catenaria += aux_kw_dwell * dwell_h
-    t_horas += dwell_h
-    
+        # 💡 CORREGIDO: DWELL en TODAS las estaciones (25 segundos)
+        # En modo real (THDR), el dwell ya esta en los timestamps → n_est_mid = 0
+        # En modo sintetico (Planificador), hay dwell en cada parada intermedia
+        if es_sintetico:
+            dwell_h = dwell_seg / 3600.0
+            hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
+            aux_kw_dwell = calcular_aux_dinamico(
+                tipo_tren, aux_kw_nominal_final, hora_media_dwell, pax_abordo,
+                f.get('cap_max', 398) * n_uni_final, estacion_anio, "DWELL"
+            )
+            aux_catenaria += aux_kw_dwell * dwell_h
+            t_horas += dwell_h
+
     neto_ideal = max(0.0, trc + aux_catenaria - reg_exportable)
     return trc, aux_catenaria, reg_exportable, 0.0, neto_ideal, t_horas
 
@@ -586,10 +526,6 @@ def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
     return result
 
 def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="primavera"):
-    """
-    MODELO FÍSICO: Transferencia de regeneración a múltiples trenes en la misma vía.
-    La regeneración que llega aquí ya es el excedente neto después de auxiliares.
-    """
     regen_util_per_trip = {idx: 0.0 for idx in df_dia.index}
     braking_ticks_per_trip = {idx: 0.0 for idx in df_dia.index}
     
