@@ -271,7 +271,6 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         pax_arr_viaje = {k: min(v, cap_m) for k, v in pax_arr_viaje.items()}
 
         try:
-            # Ajuste a 7 valores de retorno
             trc_v, aux_v, reg_v, _, _, t_h, _ = simular_tramo_termodinamico(
                 r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'], 
                 pct_trac_plan, use_rm, use_pend, r.get('nodos'), pax_arr_viaje, pax_calculado, 
@@ -346,7 +345,6 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
         es_destino = (j == len(est_en_recorrido)-2)
 
         try:
-            # Ajuste a 7 valores de retorno
             _,_,_,_,_,t_h, _ = simular_tramo_termodinamico(
                 tipo_tren, doble, km_ini_tr, km_fin_tr, via, pct_trac,
                 True, True, None, {}, 150, None, None, estacion_anio, t_actual, False, prevenciones
@@ -533,7 +531,18 @@ def main():
     
     prevenciones_list = procesar_prevenciones_independiente(b_prev, file_signature)
 
+    # 🩺 DIAGNÓSTICO DE PREVENCIONES (OPCIONAL INCLUIDO)
     with st.sidebar:
+        if prevenciones_list:
+            st.success(f"✅ {len(prevenciones_list)} prevenciones cargadas")
+            for via in [1, 2]:
+                prev_via = [p for p in prevenciones_list if p['via'] == via]
+                if prev_via:
+                    velocidades = set(p['v_kmh'] for p in prev_via)
+                    st.caption(f"Vía {via}: {len(prev_via)} tramos, velocidades {velocidades}")
+        else:
+            st.warning("⚠️ Sin prevenciones cargadas")
+
         if err_t:
             with st.expander(f"⚠️ {len(err_t)} Errores de Lectura THDR"):
                 for e in err_t: st.caption(e)
