@@ -4,7 +4,6 @@ import numpy as np
 import time
 from io import BytesIO
 from datetime import datetime, date, timedelta
-import traceback
 
 # Configuración de página de Streamlit (DEBE ser la primera instrucción)
 st.set_page_config(page_title="Simulador MERVAL V135", layout="wide", page_icon="🗺️")
@@ -195,6 +194,56 @@ def simular_dia_historico_cached(_df_dia, pct_trac_hist, use_rm, use_pend, use_r
         
     return calcular_termodinamica_flota_v111(_df_dia, pct_trac_hist, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=_prevenciones)
 
+# =============================================================================
+# FUNCIÓN PARA GENERAR TRAYECTORIA DETALLADA POR ESTACIONES
+# =============================================================================
+def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, km_orig, km_dest, prevenciones=None):
+    from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
+    from motor_fisico import simular_tramo_termodinamico
+
+    km_min = min(km_orig, km_dest)
+    km_max = max(km_orig, km_dest)
+
+    est_indices = [i for i, km in enumerate(KM_ACUM[:N_EST]) if km_min - 0.01 <= km <= km_max + 0.01]
+    if via == 2:
+        est_indices = list(reversed(est_indices))
+
+    if len(est_indices) < 2:
+        return [(t_ini_mins, km_orig), (t_ini_mins + 70, km_dest)]
+
+    trayectoria = []
+    t_actual = t_ini_mins
+
+    # Salida de la primera estación
+    trayectoria.append((t_actual, KM_ACUM[est_indices[0]]))
+
+    for j in range(len(est_indices) - 1):
+        idx_ini = est_indices[j]
+        idx_fin = est_indices[j+1]
+        km_ini_seg = KM_ACUM[idx_ini]
+        km_fin_seg = KM_ACUM[idx_fin]
+        es_destino = (j == len(est_indices) - 2)
+
+        try:
+            _, _, _, _, _, t_h, _ = simular_tramo_termodinamico(
+                tipo_tren, doble, km_ini_seg, km_fin_seg, via, pct_trac,
+                True, True, None, {}, 150, None, None, estacion_anio, t_actual, False, prevenciones
+            )
+        except Exception:
+            t_h = 0.0
+
+        t_llegada = t_actual + t_h * 60
+        trayectoria.append((t_llegada, km_fin_seg))
+
+        if not es_destino:
+            t_salida = t_llegada + DWELL_DEF / 60
+            trayectoria.append((t_salida, km_fin_seg))
+            t_actual = t_salida
+        else:
+            t_actual = t_llegada
+
+    return trayectoria
+
 @st.cache_data(show_spinner="Integrando física y demanda en Planificador...")
 def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig):
     viajes_completos = []
@@ -288,6 +337,15 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         viaje_final['pax_d'] = pax_arr_viaje
         viaje_final['pax_abordo'] = pax_calculado
         viaje_final['t_fin'] = r['t_ini'] + (t_h * 60.0)
+
+        # ✅ Reemplazar nodos por trayectoria detallada con estaciones
+        viaje_final['nodos'] = generar_trayectoria_sintetica(
+            r['tipo_tren'], r['doble'], r['Via'], pct_trac_plan, r['t_ini'],
+            estacion_anio_plan, r['km_orig'], r['km_dest'], _prevenciones
+        )
+        if viaje_final['nodos']:
+            viaje_final['t_fin'] = viaje_final['nodos'][-1][0]
+
         viajes_completos.append(viaje_final)
         
     df_sint_final = pd.DataFrame(viajes_completos)
@@ -308,7 +366,6 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
     except TypeError:
         df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan)
         
-    # Eliminar columna de diagnóstico que puede romper la UI
     if 'prevencion_aplicada' in df_sint_e.columns:
         df_sint_e = df_sint_e.drop(columns=['prevencion_aplicada'])
         
@@ -854,7 +911,6 @@ def main():
                     render_tablas_thdr_planificador(df_sint_final, pct_trac_plan, estacion_anio_plan, prevenciones_list)
                 except Exception as e:
                     st.error(f"Fallo al graficar UI del Planificador: {e}")
-                    st.code(traceback.format_exc())
 
 if __name__ == "__main__": 
     main()
