@@ -204,12 +204,12 @@ def _calc_tren_km_real_motor(row):
     return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
 
 # =============================================================================
-# 4. MOTOR CINEMÁTICO-TERMODINÁMICO (CORREGIDO)
+# 4. MOTOR CINEMÁTICO-TERMODINÁMICO (CON DIAGNÓSTICO DE PREVENCIONES)
 # =============================================================================
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False, prevenciones=None):
     flota_db = _get_val('FLOTA', {})
     f = flota_db.get(tipo_tren, {})
-    if not f: return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    if not f: return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0
     
     km_man = None
     man_upper = str(maniobra).upper() if maniobra and not pd.isna(maniobra) else ''
@@ -222,7 +222,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     
     k_s, k_e = km_ini, km_fin
     dist_total_m = abs(k_e - k_s) * 1000.0
-    if dist_total_m <= 0: return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    if dist_total_m <= 0: return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0
     
     es_sintetico = True
     duracion_real_h = 0.0
@@ -241,6 +241,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     aux_catenaria = 0.0
     reg_exportable = 0.0
     t_horas = 0.0
+    prevencion_aplicada = 0  # contador de aplicaciones
     
     paradas_km = [n[1] for n in nodos] if nodos else [k_s, k_e]
     k_min, k_max = min(k_s, k_e), max(k_s, k_e)
@@ -311,7 +312,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             v_cons_kmh = min(v_cons_kmh, v_limit_thdr)
             
             # =============================================================
-            # 💡 CORREGIDO: Aplicación de prevenciones con aviso de 500m
+            # APLICACIÓN DE PREVENCIONES (500 m de aviso)
             # =============================================================
             if prevenciones:
                 for p in prevenciones:
@@ -319,15 +320,17 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                         if via_op == 1:
                             km_inicio = p['km_min']
                             km_fin = p['km_max'] + long_tren_km
-                            km_aviso = p['km_min'] - 0.5  # 500 metros de aviso
+                            km_aviso = p['km_min'] - 0.5
                             if km_aviso <= km_actual <= km_fin:
                                 v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
-                        else:
+                                prevencion_aplicada += 1
+                        else:  # via_op == 2
                             km_inicio = p['km_max']
                             km_fin = p['km_min'] - long_tren_km
-                            km_aviso = p['km_max'] + 0.5  # 500 metros de aviso
+                            km_aviso = p['km_max'] + 0.5
                             if km_fin <= km_actual <= km_aviso:
                                 v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+                                prevencion_aplicada += 1
 
             if via_op == 1 and km_actual >= 42.93: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual < 43.03 else 10.0)
             if via_op == 2 and km_actual <= 0.20: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual > 0.10 else 10.0)
@@ -358,13 +361,11 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             d_freno_req = (v_ms**2) / (2 * a_freno_op) if v_ms > 0 else 0
             f_disp_freno = min(f_freno_max_n, p_freno_max_w / max(0.1, v_ms)) if v_kmh >= v_freno_min else 0.0
             
-            # Parada forzada en el último metro
             if dist_restante < 1.0:
                 t_horas += 0.1 / 3600.0
                 dist_recorrida += dist_restante
                 v_ms = 0.0
                 break
-            # Frenar SIEMPRE cuando la distancia lo requiera
             elif dist_restante <= d_freno_req + (v_ms * dt * 1.2):
                 estado_marcha = "BRAKE_STATION"
             elif v_kmh > v_cons_kmh + 1.5:
@@ -478,7 +479,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             dist_recorrida += step_m
             v_ms = v_new
 
-        # DWELL en todas las estaciones (modo sintético)
         if es_sintetico:
             dwell_h = dwell_seg / 3600.0
             hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
@@ -490,7 +490,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             t_horas += dwell_h
 
     neto_ideal = max(0.0, trc + aux_catenaria - reg_exportable)
-    return trc, aux_catenaria, reg_exportable, 0.0, neto_ideal, t_horas
+    return trc, aux_catenaria, reg_exportable, 0.0, neto_ideal, t_horas, prevencion_aplicada
 
 # =============================================================================
 # 5. PRE-CALCULADORES DE RED
@@ -675,7 +675,8 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     
     def _wrapper(r):
         pct_real = obtener_pct_traccion_operativo(r, pct_trac_ui)
-        trc, aux_catenaria, reg_bruta, reg_panto_push, neto_ideal, t_h = simular_tramo_termodinamico(
+        (trc, aux_catenaria, reg_bruta, reg_panto_push,
+         neto_ideal, t_h, prev_aplic) = simular_tramo_termodinamico(
             r['tipo_tren'], r.get('doble', False), r['km_orig'], r['km_dest'], r['Via'], 
             pct_real, use_rm, use_pend, r.get('nodos'), r.get('pax_d', {}), r.get('pax_abordo', 0), 
             None, r.get('maniobra'), estacion_anio, r.get('t_ini', 0.0), False, prevenciones
@@ -686,9 +687,10 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
         kwh_reostato = max(0.0, reg_bruta - reg_util)
         neto = max(0.0, trc + aux_catenaria - reg_util)
         
-        return pd.Series([trc, aux_catenaria, reg_util, kwh_reostato, neto, t_h])
+        return pd.Series([trc, aux_catenaria, reg_util, kwh_reostato, neto, t_h, prev_aplic])
         
-    df_e[['kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto', 't_viaje_h']] = df_e.apply(_wrapper, axis=1)
+    df_e[['kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato',
+          'kwh_viaje_neto', 't_viaje_h', 'prevencion_aplicada']] = df_e.apply(_wrapper, axis=1)
     df_e['t_fin'] = df_e['t_ini'] + df_e['t_viaje_h'] * 60.0
     df_e['tren_km'] = df_e.apply(_calc_tren_km_real_motor, axis=1)
         
