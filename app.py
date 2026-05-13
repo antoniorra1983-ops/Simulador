@@ -307,6 +307,10 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
     except TypeError:
         df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan)
         
+    # Eliminar columna de diagnóstico que puede romper la UI
+    if 'prevencion_aplicada' in df_sint_e.columns:
+        df_sint_e = df_sint_e.drop(columns=['prevencion_aplicada'])
+        
     return df_sint_final, df_sint_e
 
 # =============================================================================
@@ -575,7 +579,7 @@ def main():
             
             df_dia_e = simular_dia_historico_cached(df_dia, pct_trac_hist, use_rm, use_pend, use_regen, tipo_regen, estacion_anio, prevenciones_list, file_signature + fecha_sel)
             
-            # Eliminar columna de diagnóstico para no romper la UI
+            # Eliminar columna de diagnóstico que puede romper la UI (también en histórico)
             if 'prevencion_aplicada' in df_dia_e.columns:
                 df_dia_e = df_dia_e.drop(columns=['prevencion_aplicada'])
             
@@ -832,7 +836,7 @@ def main():
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature
                 df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig)
                 
-                # Eliminar columna de diagnóstico para no romper la UI
+                # La columna ya fue eliminada dentro de la función, pero por seguridad volvemos a verificar
                 if 'prevencion_aplicada' in df_sint_e.columns:
                     df_sint_e = df_sint_e.drop(columns=['prevencion_aplicada'])
                 
