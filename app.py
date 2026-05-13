@@ -4,6 +4,7 @@ import numpy as np
 import time
 from io import BytesIO
 from datetime import datetime, date, timedelta
+import traceback
 
 # Configuración de página de Streamlit (DEBE ser la primera instrucción)
 st.set_page_config(page_title="Simulador MERVAL V135", layout="wide", page_icon="🗺️")
@@ -579,7 +580,7 @@ def main():
             
             df_dia_e = simular_dia_historico_cached(df_dia, pct_trac_hist, use_rm, use_pend, use_regen, tipo_regen, estacion_anio, prevenciones_list, file_signature + fecha_sel)
             
-            # Forzar tipos numéricos (por seguridad)
+            # Forzar tipos numéricos
             cols_num = ['t_ini', 't_fin', 'kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto', 't_viaje_h', 'tren_km']
             for col in cols_num:
                 if col in df_dia_e.columns:
@@ -589,7 +590,7 @@ def main():
                 render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac_hist, use_rm, use_pend, estacion_anio, "mapa", gap_vias, pax_dia_total=0)
                 render_dashboard_energia_v112(df_dia_e, active_sers, fecha_sel, st.session_state.get('sl_ui_mapa', 480.0))
             except Exception as e:
-                st.error(f"Falla de Renderizado Visual: Asegúrate de tener los módulos UI integrados. Error: {e}")
+                st.error(f"Falla de Renderizado Visual (Mapa): {e}")
 
     with tab_datos:
         st.subheader("📋 Auditoría de Carga de Pasajeros")
@@ -838,7 +839,7 @@ def main():
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature
                 df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig)
                 
-                # Forzar tipos numéricos (CORRECCIÓN DEL ERROR)
+                # Forzar tipos numéricos
                 cols_num = ['t_ini', 't_fin', 'kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto', 't_viaje_h', 'tren_km']
                 for col in cols_num:
                     if col in df_sint_e.columns:
@@ -853,6 +854,7 @@ def main():
                     render_tablas_thdr_planificador(df_sint_final, pct_trac_plan, estacion_anio_plan, prevenciones_list)
                 except Exception as e:
                     st.error(f"Fallo al graficar UI del Planificador: {e}")
+                    st.code(traceback.format_exc())
 
 if __name__ == "__main__": 
     main()
