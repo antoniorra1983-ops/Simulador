@@ -730,39 +730,95 @@ def calcular_dwell(df1, df2):
 def get_vacios_dia(df):
     return []
 
+# =============================================================================
+# 4.1 NUEVA FUNCIÓN cargar_prevenciones (ROBUSTA)
+# =============================================================================
 def cargar_prevenciones(data, fname):
+    """
+    Carga prevenciones de velocidad desde CSV o Excel.
+    Formatos aceptados:
+    - CSV con columnas: km_inicio, km_fin, velocidad, via
+    - Excel con las mismas columnas.
+    Si no se reconocen los nombres, se asume que las primeras 4 columnas son:
+    [km_inicio, km_fin, velocidad, via]
+    """
+    prevenciones = []
     try:
-        raw = pd.read_csv(BytesIO(data), sep=',', encoding='latin-1')
-        if raw.shape[1] < 2:
-            raw = pd.read_csv(BytesIO(data), sep=';', encoding='latin-1')
-        res = []
-        for _, r in raw.iterrows():
+        # Leer archivo
+        if fname.lower().endswith('.csv'):
             try:
-                v1 = float(str(r.iloc[0]).replace(',', '.'))
-                v2 = float(str(r.iloc[1]).replace(',', '.'))
-                vel = float(re.search(r'\d+', str(r.iloc[2])).group())
-                res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
+                raw = pd.read_csv(BytesIO(data), sep=',', encoding='utf-8')
             except:
-                pass
-        return res
-    except:
-        try:
-            raw = pd.read_excel(BytesIO(data), engine="openpyxl")
-            res = []
-            for _, r in raw.iterrows():
-                try:
-                    v1 = float(str(r.iloc[0]).replace(',', '.'))
-                    v2 = float(str(r.iloc[1]).replace(',', '.'))
-                    vel = float(re.search(r'\d+', str(r.iloc[2])).group())
-                    res.append({'km_min': min(v1, v2), 'km_max': max(v1, v2), 'v_kmh': vel, 'via': int(r.iloc[3])})
-                except:
-                    pass
-            return res
-        except:
+                raw = pd.read_csv(BytesIO(data), sep=';', encoding='latin-1')
+        else:
+            try:
+                raw = pd.read_excel(BytesIO(data), engine='openpyxl')
+            except:
+                raw = pd.read_excel(BytesIO(data), engine='xlrd')
+
+        if raw.empty:
             return []
 
+        # Normalizar nombres de columnas
+        cols_norm = {}
+        for col in raw.columns:
+            nombre = str(col).strip().lower()
+            nombre = ''.join(c for c in unicodedata.normalize('NFD', nombre) if unicodedata.category(c) != 'Mn')
+            nombre = re.sub(r'\s+', '_', nombre)
+            cols_norm[nombre] = col
+
+        km_ini_col = None
+        km_fin_col = None
+        vel_col = None
+        via_col = None
+
+        for norm, orig in cols_norm.items():
+            if 'km_inicio' in norm or 'km_ini' in norm or 'inicio' in norm or 'desde' in norm:
+                if km_ini_col is None:
+                    km_ini_col = orig
+            if 'km_fin' in norm or 'km_final' in norm or 'fin' in norm or 'hasta' in norm:
+                if km_fin_col is None:
+                    km_fin_col = orig
+            if 'velocidad' in norm or 'vel' in norm or 'km/h' in norm:
+                if vel_col is None:
+                    vel_col = orig
+            if 'via' in norm or 'sentido' in norm:
+                if via_col is None:
+                    via_col = orig
+
+        # Fallback: primeras 4 columnas
+        cols = list(raw.columns)
+        if km_ini_col is None and len(cols) > 0:
+            km_ini_col = cols[0]
+        if km_fin_col is None and len(cols) > 1:
+            km_fin_col = cols[1]
+        if vel_col is None and len(cols) > 2:
+            vel_col = cols[2]
+        if via_col is None and len(cols) > 3:
+            via_col = cols[3]
+
+        for _, row in raw.iterrows():
+            try:
+                km1 = float(str(row[km_ini_col]).replace(',', '.'))
+                km2 = float(str(row[km_fin_col]).replace(',', '.'))
+                vel_str = str(row[vel_col])
+                vel = float(re.search(r'(\d+\.?\d*)', vel_str).group())
+                via = int(row[via_col])
+                prevenciones.append({
+                    'km_min': min(km1, km2),
+                    'km_max': max(km1, km2),
+                    'v_kmh': vel,
+                    'via': via
+                })
+            except:
+                continue
+    except Exception:
+        return []
+
+    return prevenciones
+
 # =============================================================================
-# 5. PARSEO DE PLANILLA MAESTRA - CORREGIDO (DOBLES DETECTADOS)
+# 5. PARSEO DE PLANILLA MAESTRA (mantenido sin cambios)
 # =============================================================================
 def parsear_planilla_maestra(data, fname):
     """
@@ -778,7 +834,7 @@ def parsear_planilla_maestra(data, fname):
       - Servicio 400-599 -> SA-PU
       - Servicio <= 399  -> EB-PU
     
-    Columna Unidad: vacio = Simple, "Multiple" = Doble
+    Columna Unidad: vacio = Simple, "Múltiple" = Doble
     """
     try:
         ext = fname.lower()
@@ -830,7 +886,6 @@ def parsear_planilla_maestra(data, fname):
                     if 'HR PARTIDA' in val_sin_tilde or 'HORA' in val_sin_tilde or 'PARTIDA' in val_sin_tilde or 'SALIDA' in val_sin_tilde:
                         if hora_col is None:
                             hora_col = c
-                    # 💡 CORREGIDO: Detección mejorada de columna Unidad
                     if any(p in val_sin_tilde for p in ['UNIDAD', 'UNID', 'CONF', 'TIPO', 'FORMA', 'OBS']):
                         if unidad_col is None:
                             unidad_col = c
@@ -879,12 +934,10 @@ def parsear_planilla_maestra(data, fname):
                     if t_ini is None:
                         continue
                     
-                    # 💡 CORREGIDO: Detección de dobles con normalización correcta
                     es_doble = False
                     if unidad_col is not None and pd.notna(row.get(unidad_col)):
                         unidad_str = str(row[unidad_col]).strip().upper()
                         unidad_norm = ''.join(ch for ch in unicodedata.normalize('NFD', unidad_str) if unicodedata.category(ch) != 'Mn')
-                        # Buscar palabras clave sin tildes
                         if any(kw in unidad_norm for kw in ['MULTIPLE', 'MULT', 'DOBLE', 'DOB', 'ACOPL', '2 UNID', '2UNID', '2UND', '2 UNIDADES', 'DOBLE UNIDAD', 'DUPLA']):
                             es_doble = True
                     
