@@ -531,7 +531,7 @@ def main():
     
     prevenciones_list = procesar_prevenciones_independiente(b_prev, file_signature)
 
-    # 🩺 DIAGNÓSTICO DE PREVENCIONES (OPCIONAL INCLUIDO)
+    # Diagnóstico de prevenciones en la barra lateral
     with st.sidebar:
         if prevenciones_list:
             st.success(f"✅ {len(prevenciones_list)} prevenciones cargadas")
@@ -574,6 +574,10 @@ def main():
             df_dia = df_all[df_all['Fecha_str']==fecha_sel].copy()
             
             df_dia_e = simular_dia_historico_cached(df_dia, pct_trac_hist, use_rm, use_pend, use_regen, tipo_regen, estacion_anio, prevenciones_list, file_signature + fecha_sel)
+            
+            # Eliminar columna de diagnóstico para no romper la UI
+            if 'prevencion_aplicada' in df_dia_e.columns:
+                df_dia_e = df_dia_e.drop(columns=['prevencion_aplicada'])
             
             try:
                 render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac_hist, use_rm, use_pend, estacion_anio, "mapa", gap_vias, pax_dia_total=0)
@@ -827,6 +831,11 @@ def main():
             if st.session_state.get('simulacion_plan_lista', False) and 'raw_plan_df' in st.session_state:
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature
                 df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig)
+                
+                # Eliminar columna de diagnóstico para no romper la UI
+                if 'prevencion_aplicada' in df_sint_e.columns:
+                    df_sint_e = df_sint_e.drop(columns=['prevencion_aplicada'])
+                
                 st.divider()
                 try:
                     render_gemelo_digital(df_sint_final, df_sint_e, active_sers, f"Simulación: {nombre_perfil}", pct_trac_plan, use_rm, use_pend, estacion_anio_plan, "plan", gap_vias, pax_dia_total=int(df_sint_final['pax_abordo'].sum()))
