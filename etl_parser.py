@@ -762,23 +762,23 @@ def cargar_prevenciones(data, fname):
             return []
 
 # =============================================================================
-# 5. PARSEO DE PLANILLA MAESTRA - CORREGIDO CON LOGICA EXACTA
+# 5. PARSEO DE PLANILLA MAESTRA - CORREGIDO (DOBLES DETECTADOS)
 # =============================================================================
 def parsear_planilla_maestra(data, fname):
     """
     LOGICA EXACTA DE LA PLANILLA MAESTRA EFE:
     
     V1 (N° Viaje PAR):
-      - Servicio >= 600 -> PU-LI (Puerto -> Limache)
-      - Servicio 400-599 -> PU-SA (Puerto -> Sargento Aldea)
-      - Servicio <= 399  -> PU-EB (Puerto -> El Belloto)
+      - Servicio >= 600 -> PU-LI
+      - Servicio 400-599 -> PU-SA
+      - Servicio <= 399  -> PU-EB
     
     V2 (N° Viaje IMPAR):
-      - Servicio >= 600 -> LI-PU (Limache -> Puerto)
-      - Servicio 400-599 -> SA-PU (Sargento Aldea -> Puerto)
-      - Servicio <= 399  -> EB-PU (El Belloto -> Puerto)
+      - Servicio >= 600 -> LI-PU
+      - Servicio 400-599 -> SA-PU
+      - Servicio <= 399  -> EB-PU
     
-    Columna F (Unidad): vacio = Simple, "Multiple" = Doble
+    Columna Unidad: vacio = Simple, "Multiple" = Doble
     """
     try:
         ext = fname.lower()
@@ -795,7 +795,6 @@ def parsear_planilla_maestra(data, fname):
             
         viajes = []
         for sheet_name, df in dfs.items():
-            # DETECTAR VIA DESDE EL NOMBRE DE LA HOJA
             sheet_upper = str(sheet_name).upper()
             via_from_sheet = None
             if 'V1' in sheet_upper or 'VIA 1' in sheet_upper:
@@ -813,27 +812,29 @@ def parsear_planilla_maestra(data, fname):
             if header_idx != -1:
                 headers = df.iloc[header_idx].fillna('').astype(str).str.upper()
                 
-                # Detectar columnas clave
                 viaje_col = None
                 srv_col = None
                 hora_col = None
                 unidad_col = None
                 
                 for c, val in enumerate(headers):
-                    if 'VIAJE' in val or val == 'N°' or val == 'N':
+                    val_norm = str(val).strip().upper()
+                    val_sin_tilde = ''.join(ch for ch in unicodedata.normalize('NFD', val_norm) if unicodedata.category(ch) != 'Mn')
+                    
+                    if 'VIAJE' in val_sin_tilde or val_sin_tilde == 'N°' or val_sin_tilde == 'N':
                         if viaje_col is None:
                             viaje_col = c
-                    if 'SERV' in val or 'TREN' in val:
+                    if 'SERV' in val_sin_tilde or 'TREN' in val_sin_tilde:
                         if srv_col is None:
                             srv_col = c
-                    if 'HR PARTIDA' in val or 'HORA' in val or 'PARTIDA' in val or 'SALIDA' in val:
+                    if 'HR PARTIDA' in val_sin_tilde or 'HORA' in val_sin_tilde or 'PARTIDA' in val_sin_tilde or 'SALIDA' in val_sin_tilde:
                         if hora_col is None:
                             hora_col = c
-                    if 'UNIDAD' in val or 'CONF' in val or 'TIPO' in val or 'FORMA' in val or 'MULT' in val:
+                    # 💡 CORREGIDO: Detección mejorada de columna Unidad
+                    if any(p in val_sin_tilde for p in ['UNIDAD', 'UNID', 'CONF', 'TIPO', 'FORMA', 'OBS']):
                         if unidad_col is None:
                             unidad_col = c
                 
-                # Si no se encontro columna de servicio, buscar una con numeros de 3-4 digitos
                 if srv_col is None:
                     for c in range(df.shape[1]):
                         if c == viaje_col or c == hora_col:
@@ -843,7 +844,6 @@ def parsear_planilla_maestra(data, fname):
                             srv_col = c
                             break
                 
-                # Si no se encontro columna de hora, buscar formato HH:MM
                 if hora_col is None:
                     for c in range(df.shape[1]):
                         if c == viaje_col or c == srv_col:
@@ -856,11 +856,9 @@ def parsear_planilla_maestra(data, fname):
                 if srv_col is None or hora_col is None:
                     continue
                 
-                # Procesar filas
                 for i in range(header_idx + 1, len(df)):
                     row = df.iloc[i]
                     
-                    # Verificar que la fila tiene datos validos
                     if pd.isna(row.get(srv_col)) or pd.isna(row.get(hora_col)):
                         continue
                     
@@ -870,20 +868,26 @@ def parsear_planilla_maestra(data, fname):
                     if not srv_str or not hora_str:
                         continue
                     
-                    # Extraer numero de servicio
                     m_srv = re.search(r'(\d{3,4})', srv_str)
                     if not m_srv:
                         continue
                     servicio_num = int(m_srv.group(1))
                     
-                    # Validar hora
                     if not re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', hora_str):
                         continue
                     t_ini = parse_time_to_mins(hora_str)
                     if t_ini is None:
                         continue
                     
-                    # DETECTAR VIA
+                    # 💡 CORREGIDO: Detección de dobles con normalización correcta
+                    es_doble = False
+                    if unidad_col is not None and pd.notna(row.get(unidad_col)):
+                        unidad_str = str(row[unidad_col]).strip().upper()
+                        unidad_norm = ''.join(ch for ch in unicodedata.normalize('NFD', unidad_str) if unicodedata.category(ch) != 'Mn')
+                        # Buscar palabras clave sin tildes
+                        if any(kw in unidad_norm for kw in ['MULTIPLE', 'MULT', 'DOBLE', 'DOB', 'ACOPL', '2 UNID', '2UNID', '2UND', '2 UNIDADES', 'DOBLE UNIDAD', 'DUPLA']):
+                            es_doble = True
+                    
                     if via_from_sheet is not None:
                         via = via_from_sheet
                     elif viaje_col is not None and pd.notna(row.get(viaje_col)):
@@ -897,26 +901,12 @@ def parsear_planilla_maestra(data, fname):
                     else:
                         via = 1 if servicio_num % 2 == 0 else 2
                     
-                    # DETECTAR DOBLE (Columna Unidad)
-                    es_doble = False
-                    if unidad_col is not None and pd.notna(row.get(unidad_col)):
-                        unidad_str = str(row[unidad_col]).strip().upper()
-                        # Detectar "Multiple" o variantes
-                        import unicodedata as _ud
-                        unidad_norm = ''.join(c for c in _ud.normalize('NFD', unidad_str) if _ud.category(c) != 'Mn')
-                        if any(kw in unidad_norm for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', 'MULTIPLE', '2 UNID', '2UNID', '2UND']):
-                            es_doble = True
-                    
-                    # ==========================================================
-                    # LOGICA EXACTA DE DESTINO SEGUN SERVICIO Y VIA
-                    # ==========================================================
-                    km_limache = KM_ACUM_SAFE[20]   # 43.13
-                    km_sargento = KM_ACUM_SAFE[18]  # 29.1
-                    km_belloto = KM_ACUM_SAFE[14]   # 25.3
-                    km_puerto = KM_ACUM_SAFE[0]     # 0.0
+                    km_limache = KM_ACUM_SAFE[20]
+                    km_sargento = KM_ACUM_SAFE[18]
+                    km_belloto = KM_ACUM_SAFE[14]
+                    km_puerto = KM_ACUM_SAFE[0]
                     
                     if via == 1:
-                        # V1: PU -> destino
                         km_orig = km_puerto
                         if servicio_num >= 600:
                             km_dest = km_limache
@@ -925,7 +915,6 @@ def parsear_planilla_maestra(data, fname):
                         else:
                             km_dest = km_belloto
                     else:
-                        # V2: origen -> PU
                         km_dest = km_puerto
                         if servicio_num >= 600:
                             km_orig = km_limache
@@ -934,7 +923,6 @@ def parsear_planilla_maestra(data, fname):
                         else:
                             km_orig = km_belloto
                     
-                    # Construir ruta y nodos
                     try:
                         idx_orig = KM_ACUM_SAFE.index(km_orig)
                         idx_dest = KM_ACUM_SAFE.index(km_dest)
@@ -965,16 +953,14 @@ def parsear_planilla_maestra(data, fname):
                         'maniobra': None
                     })
             else:
-                # MODO NO ESTRUCTURADO
                 for i in range(len(df)):
                     row_vals = df.iloc[i].fillna('').astype(str).tolist()
                     
                     es_doble = False
                     for c_idx, val in enumerate(row_vals):
                         val_upper = str(val).strip().upper()
-                        import unicodedata as _ud
-                        val_norm = ''.join(c for c in _ud.normalize('NFD', val_upper) if _ud.category(c) != 'Mn')
-                        if any(kw in val_norm for kw in ['MULT', 'DOB', 'DOBLE', 'ACOPL', 'MULTIPLE', '2 UNID', '2UNID', '2UND']):
+                        val_norm = ''.join(ch for ch in unicodedata.normalize('NFD', val_upper) if unicodedata.category(ch) != 'Mn')
+                        if any(kw in val_norm for kw in ['MULTIPLE', 'MULT', 'DOBLE', 'DOB', 'ACOPL', '2 UNID', '2UNID', '2UND', '2 UNIDADES', 'DOBLE UNIDAD', 'DUPLA']):
                             es_doble = True
                             break
                     
