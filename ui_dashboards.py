@@ -153,15 +153,13 @@ def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, tit
 def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titulo_extra, active_sers_list, gap_vias, use_rm):
     """
     Empaqueta el perfil matemático y genera el Iframe HTML para la animación SCADA a 60FPS.
-    🚀 OPTIMIZADO: Envía los nodos reales como trayectoria para evitar estrangulamiento de CPU (O(N)).
-    ✅ CORREGIDO: Los trenes se ordenan por posición en la vía para evitar superposiciones visuales.
+    ✅ CORREGIDO: Los trenes se ordenan por posición en la vía, color naranja en frenado.
     """
     trips_data = []
     
     for _, row in df_dia_e.iterrows():
         t_ini, t_fin = float(row['t_ini']), float(row['t_fin'])
         
-        # Extraemos los nodos reales en lugar de iterar cada 0.1s.
         traj = []
         nodos = row.get('nodos')
         if isinstance(nodos, list) and len(nodos) >= 2:
@@ -268,17 +266,15 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
         let html = '';
         let activeTrips = trips.filter(tr => currentTime >= tr.t_ini && currentTime <= tr.t_fin + 5.0);
         
-        // ✅ CORRECCIÓN: Ordenar trenes por vía y luego por posición (ascendente en V1, descendente en V2)
+        // Ordenar trenes por vía y luego por posición
         activeTrips.sort((a, b) => {
             if (a.Via !== b.Via) return a.Via - b.Via;
             let kmA = getPos(a.traj, Math.min(currentTime, a.t_fin));
             let kmB = getPos(b.traj, Math.min(currentTime, b.t_fin));
-            // En V1 (1) orden ascendente (menor km primero), en V2 (2) orden descendente (mayor km primero)
             if (a.Via === 1) return kmA - kmB;
             else return kmB - kmA;
         });
         
-        // Para alternar etiquetas correctamente dentro de cada vía
         let via1Index = 0;
         let via2Index = 0;
         
@@ -288,9 +284,23 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
             let km = getPos(tr.traj, current_t);
             let xp = xkm(km);
             
+            // Detectar frenado comparando posición futura con actual
+            let is_braking = false;
+            if (!is_parked) {
+                let delta = 0.02; // minutos
+                let km_future = getPos(tr.traj, current_t + delta);
+                let speed_now = (km_future - km) / delta;
+                let km_past = getPos(tr.traj, Math.max(tr.t_ini, current_t - delta));
+                let speed_past = (km - km_past) / delta;
+                if (speed_now < speed_past - 0.5) {
+                    is_braking = true;
+                }
+            }
+            
             let y_ln = tr.Via === 2 ? Y_V2 : Y_V1;
             let color = tr.Via === 2 ? '#c62828' : '#1565c0';
-            if (is_parked) color = '#4CAF50'; 
+            if (is_parked) color = '#4CAF50';
+            else if (is_braking) color = '#FF8C00';   // Naranja frenado
             
             let r_c = tr.doble ? 18 : 11;
             
@@ -298,10 +308,8 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
             let current_kwh = tr.kwh_total * frac;
             let current_pax = is_parked ? 0 : getPaxAtKm(tr.pax_arr, km, tr.Via);
             
-            // Determinar índice dentro de la vía para alternar etiquetas
             let viaIndex = (tr.Via === 1) ? via1Index++ : via2Index++;
             let base_dy = tr.Via === 2 ? (-r_c - 16) : (r_c + 16);
-            // Si el índice es impar, movemos la etiqueta más lejos
             if (viaIndex % 2 !== 0) {
                 base_dy = tr.Via === 2 ? base_dy - 28 : base_dy + 28;
             }
