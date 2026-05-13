@@ -540,23 +540,17 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             masa_total = tara_base + ((pax_v * PAX_KG) / 1000.0)
             
             aux_nominal_unidad = f_flota.get('aux_kw_heat', f_flota.get('aux_kw', 65.16)) if estacion_anio == "invierno" else f_flota.get('aux_kw_cool', f_flota.get('aux_kw', 58.76))
-            p_vent_max = f_flota.get('p_vent_trac_kw', 7.6) * n_unidades
             
             if is_parked:
                 state = "DWELL"
                 state_icon = "🏁 Estacionado en Terminal"
-                p_elec_kw = calcular_aux_dinamico(aux_nominal_unidad * n_unidades, hora_m1 / 60.0, 0, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state, p_vent_max)
+                # ✅ CORREGIDO: llamada a calcular_aux_dinamico con tipo_tren
+                p_elec_kw = calcular_aux_dinamico(tipo, aux_nominal_unidad * n_unidades, hora_m1 / 60.0, pax_v, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state)
             else:
                 state, v_kmh = get_train_state_and_speed(hora_m1, row['Via'], use_rm, row['km_orig'], row['km_dest'], row.get('nodos'))
                 state_icon = "🟢 Traccionando" if state == "ACCEL" else "🔴 Frenando (Regen)" if state == "BRAKE" else "🟡 Velocidad Crucero"
-                v_ms = v_kmh / 3.6
-                f_davis = (f_flota['davis_A'] * 2 + f_flota['davis_B'] * 2 * v_kmh + f_flota['davis_C'] * 1.35 * (v_kmh**2)) if n_unidades == 2 else (f_flota['davis_A'] + f_flota['davis_B'] * v_kmh + f_flota['davis_C'] * (v_kmh**2))
-                
-                p_aux_kw = calcular_aux_dinamico(aux_nominal_unidad * n_unidades, hora_m1 / 60.0, pax_v, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state, p_vent_max)
-                eta_m = f_flota.get('eta_motor', 0.92)
-                
-                p_mech = f_flota['p_max_kw'] * n_unidades * (pct_trac / 100.0) if state == "ACCEL" else ((f_davis * v_ms) / 1000.0 if state == "CRUISE" else (-f_flota.get('p_freno_max_kw', f_flota['p_max_kw']*1.2) * n_unidades * 0.6 if state == "BRAKE" else 0.0))
-                p_elec_kw = (p_mech / eta_m) + p_aux_kw if p_mech > 0 else ((p_mech * ETA_REGEN_NETA) + p_aux_kw if p_mech < 0 else p_aux_kw)
+                # ✅ CORREGIDO: llamada a calcular_aux_dinamico con tipo_tren
+                p_elec_kw = calcular_aux_dinamico(tipo, aux_nominal_unidad * n_unidades, hora_m1 / 60.0, pax_v, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state)
             
             cab += f"Estado: {state_icon}\n"
             
@@ -611,7 +605,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         
         if is_manual_limache:
             vacio_km_total += dist_efe * factor_flota
-            trc_v, aux_v, reg_v, _, _, t_h_v = simular_tramo_termodinamico(v['tipo'], v.get('doble', False), 0.0, dist_efe, 1, pct_trac, use_rm, False, None, {}, 0, 20.0, None, estacion_anio, v.get('t_asigned', 480.0), True)
+            trc_v, aux_v, reg_v, _, _, t_h_v, _ = simular_tramo_termodinamico(v['tipo'], v.get('doble', False), 0.0, dist_efe, 1, pct_trac, use_rm, False, None, {}, 0, 20.0, None, estacion_anio, v.get('t_asigned', 480.0), True)
             e_p = trc_v + aux_v - reg_v
             vacio_kwh_total += e_p
             if v['tipo'] in energy_by_fleet: energy_by_fleet[v['tipo']] += e_p
@@ -620,7 +614,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         else:
             if es_cochera:
                 vacio_km_total += 1.0 * factor_flota
-                trc_a, aux_a, reg_a, _, _, th_a = simular_tramo_termodinamico(v['tipo'], False, 25.3, 26.3, 1, pct_trac, use_rm, False, None, {}, 0, 20.0, None, estacion_anio, v['t_asigned'], True)
+                trc_a, aux_a, reg_a, _, _, th_a, _ = simular_tramo_termodinamico(v['tipo'], False, 25.3, 26.3, 1, pct_trac, use_rm, False, None, {}, 0, 20.0, None, estacion_anio, v['t_asigned'], True)
                 e_panto_a = trc_a + aux_a - reg_a
                 vacio_kwh_total += e_panto_a
                 if v['tipo'] in energy_by_fleet: energy_by_fleet[v['tipo']] += e_panto_a
@@ -635,7 +629,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                 if is_loc: 
                     km_dest = km_orig + dist_efe
                     via_v = 1
-                trc_b, aux_b, reg_b, _, _, th_b = simular_tramo_termodinamico(v['tipo'], False, km_orig, km_dest, via_v, pct_trac, use_rm, use_pend if not is_loc else False, None, {}, 0, 20.0 if is_loc else None, None, estacion_anio, v['t_asigned'], True)
+                trc_b, aux_b, reg_b, _, _, th_b, _ = simular_tramo_termodinamico(v['tipo'], False, km_orig, km_dest, via_v, pct_trac, use_rm, use_pend if not is_loc else False, None, {}, 0, 20.0 if is_loc else None, None, estacion_anio, v['t_asigned'], True)
                 e_panto_b = trc_b + aux_b - reg_b
                 vacio_kwh_total += e_panto_b
                 if v['tipo'] in energy_by_fleet: energy_by_fleet[v['tipo']] += e_panto_b
@@ -657,7 +651,6 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             sub = df_acum[df_acum['tipo_tren'] == f_type]
             if not sub.empty:
                 energy_by_fleet[f_type] += sub['kwh_viaje_neto'].sum()
-        # Energía solo comercial por flota (para IDE correcto)
         energy_by_fleet_comercial = {}
         for f_type in ['XT-100', 'XT-M', 'SFE']:
             sub = df_acum[df_acum['tipo_tren'] == f_type]
