@@ -204,7 +204,7 @@ def _calc_tren_km_real_motor(row):
     return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
 
 # =============================================================================
-# 4. MOTOR CINEMÁTICO-TERMODINÁMICO (CORREGIDO: FRENA EN TODAS LAS ESTACIONES)
+# 4. MOTOR CINEMÁTICO-TERMODINÁMICO (CORREGIDO)
 # =============================================================================
 def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_trac, use_rm, use_pend, nodos=None, pax_dict=None, pax_abordo=0, v_consigna_override=None, maniobra=None, estacion_anio="primavera", t_ini_mins=0.0, es_vacio=False, prevenciones=None):
     flota_db = _get_val('FLOTA', {})
@@ -261,7 +261,6 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     
     for i in range(len(paradas_km)-1):
         p_ini, p_fin = paradas_km[i], paradas_km[i+1]
-        es_ultima_parada = (i == len(paradas_km) - 2)
         dist_tramo = abs(p_fin - p_ini) * 1000.0
         if dist_tramo <= 0: continue
         
@@ -311,29 +310,24 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if v_consigna_override is not None: v_cons_kmh = min(v_cons_kmh, v_consigna_override)
             v_cons_kmh = min(v_cons_kmh, v_limit_thdr)
             
+            # =============================================================
+            # 💡 CORREGIDO: Aplicación de prevenciones con aviso de 500m
+            # =============================================================
             if prevenciones:
                 for p in prevenciones:
                     if p['via'] == via_op:
                         if via_op == 1:
-                            km_inicio = p['km_min']; km_fin = p['km_max'] + long_tren_km; km_aviso = p['km_min'] - 1.5
+                            km_inicio = p['km_min']
+                            km_fin = p['km_max'] + long_tren_km
+                            km_aviso = p['km_min'] - 0.5  # 500 metros de aviso
                             if km_aviso <= km_actual <= km_fin:
-                                if km_inicio <= km_actual <= km_fin: v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
-                                else:
-                                    dist_a_prev = (km_inicio - km_actual) * 1000.0
-                                    v_p_ms = p['v_kmh'] / 3.6
-                                    if v_ms > v_p_ms:
-                                        d_freno_prev = (v_ms**2 - v_p_ms**2) / (2 * a_freno_op)
-                                        if dist_a_prev <= d_freno_prev + 50: v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+                                v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
                         else:
-                            km_inicio = p['km_max']; km_fin = p['km_min'] - long_tren_km; km_aviso = p['km_max'] + 1.5
+                            km_inicio = p['km_max']
+                            km_fin = p['km_min'] - long_tren_km
+                            km_aviso = p['km_max'] + 0.5  # 500 metros de aviso
                             if km_fin <= km_actual <= km_aviso:
-                                if km_fin <= km_actual <= km_inicio: v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
-                                else:
-                                    dist_a_prev = (km_actual - km_inicio) * 1000.0
-                                    v_p_ms = p['v_kmh'] / 3.6
-                                    if v_ms > v_p_ms:
-                                        d_freno_prev = (v_ms**2 - v_p_ms**2) / (2 * a_freno_op)
-                                        if dist_a_prev <= d_freno_prev + 50: v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+                                v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
 
             if via_op == 1 and km_actual >= 42.93: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual < 43.03 else 10.0)
             if via_op == 2 and km_actual <= 0.20: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual > 0.10 else 10.0)
@@ -364,13 +358,13 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             d_freno_req = (v_ms**2) / (2 * a_freno_op) if v_ms > 0 else 0
             f_disp_freno = min(f_freno_max_n, p_freno_max_w / max(0.1, v_ms)) if v_kmh >= v_freno_min else 0.0
             
-            # 💡 CORREGIDO: Forzar parada en el último metro
+            # Parada forzada en el último metro
             if dist_restante < 1.0:
                 t_horas += 0.1 / 3600.0
                 dist_recorrida += dist_restante
                 v_ms = 0.0
                 break
-            # 💡 CORREGIDO: Frenar SIEMPRE cuando la distancia lo requiera
+            # Frenar SIEMPRE cuando la distancia lo requiera
             elif dist_restante <= d_freno_req + (v_ms * dt * 1.2):
                 estado_marcha = "BRAKE_STATION"
             elif v_kmh > v_cons_kmh + 1.5:
@@ -484,9 +478,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             dist_recorrida += step_m
             v_ms = v_new
 
-        # 💡 CORREGIDO: DWELL en TODAS las estaciones (25 segundos)
-        # En modo real (THDR), el dwell ya esta en los timestamps → n_est_mid = 0
-        # En modo sintetico (Planificador), hay dwell en cada parada intermedia
+        # DWELL en todas las estaciones (modo sintético)
         if es_sintetico:
             dwell_h = dwell_seg / 3600.0
             hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
