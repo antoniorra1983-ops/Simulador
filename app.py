@@ -7,7 +7,7 @@ from datetime import datetime, date, timedelta
 
 st.set_page_config(page_title="Simulador MERVAL V135", layout="wide", page_icon="🗺️")
 
-# 🛡️ FALLBACKS DE SEGURIDAD
+# Fallbacks de seguridad
 PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
 SER_DATA_DEFAULT = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
 
@@ -18,13 +18,12 @@ except ImportError:
 
 import etl_parser
 
-# ── Funciones del parser ─────────────────────────────────
+# Funciones necesarias del parser
 parsear_planilla_maestra = etl_parser.parsear_planilla_maestra
 cargar_pax               = etl_parser.cargar_pax
 cargar_prevenciones      = etl_parser.cargar_prevenciones
 calc_tren_km_real_general = etl_parser.calc_tren_km_real_general
 
-# ── Motor físico y eléctrico ────────────────────────────
 from motor_fisico import (
     calcular_termodinamica_flota_v111,
     simular_tramo_termodinamico
@@ -39,7 +38,9 @@ from red_electrica import (
 )
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 
-# ── Funciones auxiliares del planificador ───────────────
+# =============================================================================
+# Funciones auxiliares del planificador (IDÉNTICAS a la versión que funcionaba)
+# =============================================================================
 def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, km_orig, km_dest, use_rm, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
     km_min = min(km_orig, km_dest)
@@ -204,7 +205,9 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         df_sint_e = df_sint_e.drop(columns=['prevencion_aplicada'])
     return df_sint_final, df_sint_e
 
-# ── Tabla THDR sintética ──────────────────────────────────
+# =============================================================================
+# Tabla THDR sintética (idéntica a la versión original)
+# =============================================================================
 @st.cache_data(show_spinner=False, ttl=1)
 def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio, km_orig, km_dest, use_rm, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
@@ -270,12 +273,16 @@ def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, use_
                 st.dataframe(df_tabla, use_container_width=True, hide_index=True,
                              height=min(400, 40 + len(df_tabla) * 35))
 
-# ── Interfaz principal ─────────────────────────────────────
+# =============================================================================
+# Interfaz principal
+# =============================================================================
 def main():
     # ── Barra lateral ──
     with st.sidebar:
         st.header("📂 Archivos")
+        # Planilla Maestra (reemplaza a los antiguos THDR)
         archivo_planilla = st.file_uploader("Planilla Maestra (.csv, .xlsx)", type=['csv', 'xlsx', 'xls'])
+        # Pasajeros y Prevenciones (se conservan porque el planificador los necesita)
         f_px1 = st.file_uploader("Pasajeros Vía 1", type=['csv', 'xlsx', 'xls'])
         f_px2 = st.file_uploader("Pasajeros Vía 2", type=['csv', 'xlsx', 'xls'])
         f_prev = st.file_uploader("🚧 Prevenciones de Vía (.csv, .xlsx)", type=['csv', 'xlsx', 'xls'])
@@ -320,14 +327,14 @@ def main():
         try: prevenciones_list = cargar_prevenciones(f_prev.getvalue(), f_prev.name)
         except: pass
 
-    # ── Inicializar claves de sesión necesarias para el dashboard ──
+    # ── Inicializar variables de sesión para el dashboard ──
     for key in ["sl_ui_plan", "t_math_plan", "play_plan"]:
         if key not in st.session_state:
             st.session_state[key] = 480.0 if "sl_ui" in key or "t_math" in key else False
 
     st.title("🔮 Planificador de Escenarios")
 
-    # ── Selector de modo ──
+    # ── Modo de entrada de datos ──
     modo_plan = st.radio("Fuente de Datos", ["Planilla Maestra (Subir CSV/Excel)", "Matriz Sintética", "Laboratorio (Tramo Único)"], horizontal=True)
 
     df_sint = None
