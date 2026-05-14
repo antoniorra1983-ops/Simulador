@@ -72,7 +72,7 @@ V_SQUEEZE_WARN = 2850.0
 # 3. MODELO TÉRMICO Y AUXILIARES (Bottom-Up)
 # =============================================================================
 PAX_KG    = 75.0
-DWELL_DEF = 8.0  
+DWELL_DEF = 25.0  # Dwell real por estacion MERVAL: mediana 25s (calibrado THDR 02-04-2026, n=4002)
 DAVIS_E_N_PERMIL = 9.81
 
 AUX_HVAC_HORA = {
