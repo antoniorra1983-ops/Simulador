@@ -388,12 +388,18 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             f_motor, f_regen_tramo, a_net_target = 0.0, 0.0, 0.0
             
             if estado_marcha == "BRAKE_STATION":
-                f_req_freno = max(0.0, masa_dinamica_kg * a_freno_op - f_res_total)
-                f_regen_tramo = min(f_req_freno, f_disp_freno)
-                a_net_target = (-f_regen_tramo - f_res_total) / masa_dinamica_kg
-                if a_net_target > -a_freno_op: a_net_target = -a_freno_op 
+                # Freno mixto: regenerativo hasta v_freno_min, luego neumático completa la diferencia
+                f_req_freno_total = masa_dinamica_kg * a_freno_op
+                if v_kmh >= v_freno_min * 3.6:  # freno regen disponible
+                    f_regen_tramo = min(f_req_freno_total, f_disp_freno)
+                else:  # velocidad baja: solo freno neumático
+                    f_regen_tramo = 0.0
+                f_freno_neumatico = max(0.0, f_req_freno_total - f_regen_tramo)
+                f_freno_total = f_regen_tramo + f_freno_neumatico
+                a_net_target = (-f_freno_total - f_res_total) / masa_dinamica_kg
+                a_net_target = max(a_net_target, -a_freno_op * 1.1)  # no superar límite físico
             elif estado_marcha == "BRAKE_OVERSPEED":
-                f_req_freno = max(0.0, masa_dinamica_kg * 0.4 - f_res_total)
+                f_req_freno = max(0.0, masa_dinamica_kg * 0.7 - f_res_total)  # 0.7 m/s² para corregir sobrevelocidad
                 f_regen_tramo = min(f_req_freno, f_disp_freno)
                 a_net_target = min((-f_regen_tramo - f_res_total) / masa_dinamica_kg, -0.15)
             elif estado_marcha == "ACCEL":
@@ -402,8 +408,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 f_piloto = f_trac_max_n_nominal * (pct_trac / 100.0)
                 p_piloto = p_max_w_nominal * (pct_trac / 100.0)
                 f_piloto_disp = min(f_piloto, p_piloto / max(0.1, v_ms))
-                f_motor = max(f_piloto_disp, f_res_total + (masa_dinamica_kg * 0.1))
-                f_motor = min(f_motor, f_absoluta_disp)
+                f_motor = min(f_piloto_disp, f_absoluta_disp)  # solo el notch del piloto, sin mínimo forzado
                 a_net_target = (f_motor - f_res_total) / masa_dinamica_kg
             elif estado_marcha == "CRUISE":
                 f_motor = max(0.0, f_res_total)
@@ -412,7 +417,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             elif estado_marcha == "COAST":
                 a_net_target = (-f_res_total) / masa_dinamica_kg
                 
-            jerk_limit = f.get('jerk_ms3', 0.8) * dt
+            # Jerk diferenciado: tracción vs frenado
+            jerk_trac  = f.get('jerk_ms3', 0.8) * dt
+            jerk_freno = f.get('a_freno_ms2', 1.2) * 0.5 * dt  # transición más rápida en frenado
+            jerk_limit = jerk_freno if a_net_target < 0 else jerk_trac
             if a_net_target > a_prev + jerk_limit: a_net = a_prev + jerk_limit
             elif a_net_target < a_prev - jerk_limit: a_net = a_prev - jerk_limit
             else: a_net = a_net_target
@@ -423,7 +431,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 dt_actual = v_ms / abs(a_net) if a_net < -0.001 else dt
                 v_new = 0.0
                 
-            if f_motor > 0 and v_new * 3.6 > v_cons_kmh:
+            if (f_motor > 0 or estado_marcha == "COAST") and v_new * 3.6 > v_cons_kmh + 0.5:
                 v_new = v_cons_kmh / 3.6
                 a_req = (v_new - v_ms) / dt_actual if dt_actual > 0 else 0.0
                 f_motor_req = masa_dinamica_kg * a_req + f_res_total
@@ -432,8 +440,9 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 
             if v_new < 0.1 and v_ms < 0.1:
                 if dist_restante > 10.0:
-                    v_new = 2.0 
-                    a_net = (v_new - v_ms) / dt_actual if dt_actual > 0 else 0.0
+                    estado_marcha = "ACCEL"  # forzar arranque gradual via máquina de estados
+                    v_new = 0.1  # velocidad mínima para salir del punto muerto
+                    a_net = f.get('jerk_ms3', 0.8) * dt  # primer impulso suave
                 else:
                     t_horas += (dist_restante / 1.0) / 3600.0
                     break
@@ -442,7 +451,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if step_m > dist_restante:
                 step_m = dist_restante
                 if v_ms + v_new > 0: dt_actual = step_m / ((v_ms + v_new) / 2.0)
-            if step_m < 0.1: step_m = 0.5 
+            if step_m < 0.01: step_m = min(0.1, dist_restante)  # paso mínimo controlado
                 
             f_real_total = (masa_dinamica_kg * a_net) + f_res_total
             
