@@ -241,10 +241,11 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
             trayectoria.append((t_salida, km_fin_seg))
             t_actual = t_salida
         else:
-            t_actual = t_llegada  # Actualizar para que el último nodo refleje el tiempo final
+            t_actual = t_llegada
 
-    # Asegurar que el último nodo sea exactamente el destino
-    if trayectoria[-1][1] != km_dest:
+    # Garantizar que el último nodo sea exactamente el destino (con tolerancia)
+    TOL = 0.001
+    if abs(trayectoria[-1][1] - km_dest) > TOL:
         trayectoria.append((t_actual, km_dest))
 
     return trayectoria
@@ -343,16 +344,16 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         viaje_final['pax_abordo'] = pax_calculado
         viaje_final['t_fin'] = r['t_ini'] + (t_h * 60.0)
 
-        # ✅ Conservar el t_fin original antes de generar la trayectoria detallada
+        # ✅ Generar trayectoria detallada con paradas
         t_fin_original = viaje_final['t_fin']
         viaje_final['nodos'] = generar_trayectoria_sintetica(
             r['tipo_tren'], r['doble'], r['Via'], pct_trac_plan, r['t_ini'],
             estacion_anio_plan, r['km_orig'], r['km_dest'], use_rm, _prevenciones
         )
         if viaje_final['nodos']:
-            # Forzar que el último nodo tenga el tiempo final correcto
+            # Ajustar el último nodo para que coincida exactamente con el destino y el tiempo final
             ultimo_nodo = viaje_final['nodos'][-1]
-            viaje_final['nodos'][-1] = (t_fin_original, ultimo_nodo[1])
+            viaje_final['nodos'][-1] = (t_fin_original, r['km_dest'])
             viaje_final['t_fin'] = t_fin_original
 
         viajes_completos.append(viaje_final)
