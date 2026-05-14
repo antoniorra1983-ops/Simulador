@@ -304,7 +304,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             f_freno_max_n = f.get('f_freno_max_kn', 105.0) * 1000 * n_uni_inst
             p_freno_max_w = f.get('p_freno_max_kw', f.get('p_max_kw', 720.0)*1.2) * 1000 * n_uni_inst
             
-            if estacion_anio == "invierno": aux_kw_nominal = f.get('aux_kw_heat', 65.16) * n_uni_inst
+            if estacion_anio in ("invierno", "otoño"): aux_kw_nominal = f.get('aux_kw_heat', 65.16) * n_uni_inst
             else: aux_kw_nominal = f.get('aux_kw_cool', 58.76) * n_uni_inst
             aux_kw_nominal_final = aux_kw_nominal
             
@@ -320,16 +320,16 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                     if p['via'] == via_op:
                         if via_op == 1:
                             km_inicio = p['km_min']
-                            km_fin = p['km_max'] + long_tren_km
+                            km_fin_prev = p['km_max'] + long_tren_km
                             km_aviso = p['km_min'] - 0.5
                             if km_aviso <= km_actual <= km_fin:
                                 v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
                                 prevencion_aplicada += 1
                         else:
                             km_inicio = p['km_max']
-                            km_fin = p['km_min'] - long_tren_km
+                            km_fin_prev = p['km_min'] - long_tren_km
                             km_aviso = p['km_max'] + 0.5
-                            if km_fin <= km_actual <= km_aviso:
+                            if km_fin_prev <= km_actual <= km_aviso:
                                 v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
                                 prevencion_aplicada += 1
 
@@ -343,14 +343,16 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             f_pend = 0.0
             if use_pend:
                 pend_permil = _PEND_ARRAY_V1[idx_km] if via_op == 1 else _PEND_ARRAY_V2[idx_km]
-                f_pend = masa_estatica_kg * 9.81 * (pend_permil / 1000.0)
+                f_pend = masa_dinamica_kg * 9.81 * (pend_permil / 1000.0)
                 
             f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
             f_res_total = f_davis + f_pend + f_curva
             
             dist_ser = min([abs(km_actual - s[0]) for s in ser_data]) if ser_data else 5.0
             r_linea = _get_resistencia_catenaria_km(km_actual) * dist_ser
-            i_req = (f_trac_max_n_nominal * max(0.1, v_ms)) / 3000.0
+            # Caída de voltaje: estimar corriente desde potencia disponible
+            _p_est_w = p_max_w_nominal * (pct_trac / 100.0) * min(1.0, v_kmh / max(1.0, v_cons_kmh))
+            i_req = _p_est_w / max(100.0, 3000.0 * v_ms if v_ms > 0.1 else 3000.0)
             v_pantografo = 3000.0 - (i_req * r_linea)
             
             factor_squeeze = 1.0
@@ -375,6 +377,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 estado_marcha = "CRUISE"
             elif estado_marcha == "ACCEL" and v_kmh >= v_cons_kmh - 0.5:
                 estado_marcha = "CRUISE"
+            elif estado_marcha == "CRUISE" and f_res_total < -50.0:  estado_marcha = "COAST"  # bajada: pendiente favorable, sin tracción
             elif estado_marcha == "CRUISE" and v_kmh < v_cons_kmh - 1.5:
                 estado_marcha = "ACCEL"
             elif estado_marcha == "COAST"  and v_kmh < v_cons_kmh - 2.0:
@@ -461,7 +464,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 trc += (trabajo_j_trac / 3_600_000.0) / eta_din
                 aux_catenaria += aux_kwh_step
                 
-            elif f_real_total < 0 and estado_marcha in ["BRAKE_STATION", "BRAKE_OVERSPEED"]:
+            elif f_real_total < 0 and estado_marcha in ["BRAKE_STATION", "BRAKE_OVERSPEED", "COAST"]:
                 f_freno_real = min(abs(f_real_total), f_disp_freno)
                 trabajo_j_regen = f_freno_real * step_m
                 energia_bruta_kwh = trabajo_j_regen / 3_600_000.0
@@ -593,7 +596,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                 
                 idx_km = min(44999, max(0, int(pos * 1000)))
                 pend_permil = _PEND_ARRAY_V1[idx_km] if tr['Via'] == 1 else _PEND_ARRAY_V2[idx_km]
-                f_pend = masa_estatica_kg * 9.81 * (pend_permil / 1000.0)
+                f_pend = masa_dinamica_kg * 9.81 * (pend_permil / 1000.0)
                 f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
                 
                 if n_uni == 2: f_davis = (f.get('davis_A',1615)*2) + (f.get('davis_B',0)*2*v_kmh) + (f.get('davis_C',0.54)*1.35*(v_kmh**2))
