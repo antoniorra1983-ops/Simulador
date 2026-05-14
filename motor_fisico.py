@@ -262,6 +262,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     
     for i in range(len(paradas_km)-1):
         p_ini, p_fin = paradas_km[i], paradas_km[i+1]
+        es_ultima_parada = (i == len(paradas_km) - 2)
         dist_tramo = abs(p_fin - p_ini) * 1000.0
         if dist_tramo <= 0: continue
         
@@ -479,7 +480,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             dist_recorrida += step_m
             v_ms = v_new
 
-        if es_sintetico:
+        if es_sintetico and not es_ultima_parada:
             dwell_h = dwell_seg / 3600.0
             hora_media_dwell = (t_ini_mins + (t_horas + dwell_h / 2.0) * 60.0) / 60.0
             aux_kw_dwell = calcular_aux_dinamico(
