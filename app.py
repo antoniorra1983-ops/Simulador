@@ -7,7 +7,7 @@ from datetime import datetime, date, timedelta
 
 st.set_page_config(page_title="Simulador MERVAL V135", layout="wide", page_icon="🗺️")
 
-# ── Fallbacks de seguridad ──────────────────────────────
+# 🛡️ FALLBACKS DE SEGURIDAD
 PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
 SER_DATA_DEFAULT = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
 
@@ -325,9 +325,9 @@ def main():
         if key not in st.session_state:
             st.session_state[key] = 480.0 if "sl_ui" in key or "t_math" in key else False
 
-    # ── Área principal ──
     st.title("🔮 Planificador de Escenarios")
 
+    # ── Selector de modo ──
     modo_plan = st.radio("Fuente de Datos", ["Planilla Maestra (Subir CSV/Excel)", "Matriz Sintética", "Laboratorio (Tramo Único)"], horizontal=True)
 
     df_sint = None
