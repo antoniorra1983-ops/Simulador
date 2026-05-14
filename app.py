@@ -209,7 +209,10 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
         est_indices = list(reversed(est_indices))
 
     if len(est_indices) < 2:
-        return [(t_ini_mins, km_orig), (t_ini_mins + 70, km_dest)]
+        # Fallback: estimar tiempo desde velocidad media operativa MERVAL (~42 km/h)
+        dist_km = abs(km_dest - km_orig)
+        t_estimado = (dist_km / 42.0) * 60.0  # minutos
+        return [(t_ini_mins, km_orig), (t_ini_mins + t_estimado, km_dest)]
 
     trayectoria = []
     t_actual = t_ini_mins
@@ -352,11 +355,10 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         )
         if trayectoria:
             t_fin_sintetico = trayectoria[-1][0]
-            t_fin_final = max(t_fin_original, t_fin_sintetico)
-            # Forzar el último nodo al destino exacto y al tiempo máximo
-            trayectoria[-1] = (t_fin_final, r['km_dest'])
+            # Usar tiempo de trayectoria detallada (incluye frenadas + dwell por estación)
+            trayectoria[-1] = (t_fin_sintetico, r['km_dest'])
             viaje_final['nodos'] = trayectoria
-            viaje_final['t_fin'] = t_fin_final
+            viaje_final['t_fin'] = t_fin_sintetico
         else:
             viaje_final['nodos'] = [(r['t_ini'], r['km_orig']), (r['t_ini'] + t_h, r['km_dest'])]
 
@@ -425,8 +427,10 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
                 tipo_tren, doble, km_ini_tr, km_fin_tr, via, pct_trac,
                 use_rm, True, None, {}, 150, None, None, estacion_anio, t_actual, False, prevenciones
             )
-        except Exception:
-            t_h = 0.0
+        except Exception as _e_thdr:
+            # Fallback: estimar desde velocidad media del tramo
+            dist_tr = abs(km_fin_tr - km_ini_tr)
+            t_h = (dist_tr / 42.0)  # horas, ~42 km/h velocidad media real
 
         t_llegada = t_actual + t_h * 60
         t_salida  = t_llegada + DWELL_DEF / 60
