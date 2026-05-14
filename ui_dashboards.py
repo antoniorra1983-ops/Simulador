@@ -148,63 +148,50 @@ def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, tit
     return svg.replace('\n', ''), H
 
 # =============================================================================
-# MOTOR VISUAL 2: SCADA JAVASCRIPT (CLIENT-SIDE RENDERING + POPUPS) – CORREGIDO
+# MOTOR VISUAL 2: SCADA JAVASCRIPT (PROTEGIDO CONTRA DATOS VACÍOS)
 # =============================================================================
 def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titulo_extra, active_sers_list, gap_vias, use_rm):
-    """
-    Empaqueta el perfil matemático y genera el Iframe HTML para la animación SCADA a 60FPS.
-    ✅ CORREGIDO: Los trenes se ordenan por posición en la vía, color naranja en frenado.
-    """
     trips_data = []
     
     for _, row in df_dia_e.iterrows():
         t_ini, t_fin = float(row['t_ini']), float(row['t_fin'])
-        
         traj = []
         nodos = row.get('nodos')
         if isinstance(nodos, list) and len(nodos) >= 2:
             for n_t, n_k in nodos:
                 if t_ini - 1.0 <= n_t <= t_fin + 1.0:
                     traj.append([round(float(n_t), 3), round(float(n_k), 3)])
-        
         if not traj or len(traj) < 2:
-            traj = [
-                [round(t_ini, 3), round(float(row['km_orig']), 3)], 
-                [round(t_fin, 3), round(float(row['km_dest']), 3)]
-            ]
-            
+            traj = [[round(t_ini, 3), round(float(row['km_orig']), 3)], 
+                    [round(t_fin, 3), round(float(row['km_dest']), 3)]]
         if traj[0][0] > t_ini:
             traj.insert(0, [round(t_ini, 3), round(float(row['km_orig']), 3)])
         if traj[-1][0] < t_fin:
             traj.append([round(t_fin, 3), round(float(row['km_dest']), 3)])
-            
         pax_dict = row.get('pax_d', {})
         if isinstance(pax_dict, dict) and pax_dict:
             pax_arr = [int(pax_dict.get(c, 0)) for c in PAX_COLS]
         else:
             pax_arr = [int(row.get('pax_abordo', 0))] * len(PAX_COLS)
-            
         trips_data.append({
-            'id': str(row['_id']),
-            'Via': int(row['Via']),
-            't_ini': t_ini,
-            't_fin': t_fin,
-            'svc': str(row.get('num_servicio', '')),
-            'motriz': str(row.get('motriz_num', '')),
-            'tipo': str(row.get('tipo_tren', 'XT-100')),
-            'doble': bool(row.get('doble', False)),
-            'kwh_total': float(row.get('kwh_viaje_neto', 0)),
-            'pax_arr': pax_arr,
-            'traj': traj
+            'id': str(row['_id']), 'Via': int(row['Via']), 't_ini': t_ini, 't_fin': t_fin,
+            'svc': str(row.get('num_servicio', '')), 'motriz': str(row.get('motriz_num', '')),
+            'tipo': str(row.get('tipo_tren', 'XT-100')), 'doble': bool(row.get('doble', False)),
+            'kwh_total': float(row.get('kwh_viaje_neto', 0)), 'pax_arr': pax_arr, 'traj': traj
         })
-        
+
+    # Protección: si no hay viajes, mostrar un mensaje en vez de SCADA vacío
+    if len(trips_data) == 0:
+        st.warning("No hay datos de viajes para mostrar en el SCADA.")
+        return "", 0
+
     json_data = json.dumps(trips_data)
     json_km_acum = json.dumps(KM_ACUM[:N_EST])
     json_pax_cols = json.dumps(PAX_COLS)
-    
+
     svg_bg, H = draw_diagram_svg(pd.DataFrame(), ser_accum_plot, seat_accum_plot, "Modo SCADA Activo", titulo_extra, active_sers_list, gap_vias)
-    svg_bg = svg_bg.replace('</svg>', '<g id="trains_layer"></g></svg>') 
-    
+    svg_bg = svg_bg.replace('</svg>', '<g id="trains_layer"></g></svg>')
+
     js_code = """
     const trips = JSON_DATA_HERE;
     const KM_ACUM = KM_ACUM_HERE;
@@ -266,7 +253,6 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
         let html = '';
         let activeTrips = trips.filter(tr => currentTime >= tr.t_ini && currentTime <= tr.t_fin + 5.0);
         
-        // Ordenar trenes por vía y luego por posición
         activeTrips.sort((a, b) => {
             if (a.Via !== b.Via) return a.Via - b.Via;
             let kmA = getPos(a.traj, Math.min(currentTime, a.t_fin));
@@ -284,55 +270,35 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
             let km = getPos(tr.traj, current_t);
             let xp = xkm(km);
             
-            // Detectar frenado comparando posición futura con actual
             let is_braking = false;
             if (!is_parked) {
-                let delta = 0.02; // minutos
+                let delta = 0.02;
                 let km_future = getPos(tr.traj, current_t + delta);
                 let speed_now = (km_future - km) / delta;
                 let km_past = getPos(tr.traj, Math.max(tr.t_ini, current_t - delta));
                 let speed_past = (km - km_past) / delta;
-                if (speed_now < speed_past - 0.5) {
-                    is_braking = true;
-                }
+                if (speed_now < speed_past - 0.5) is_braking = true;
             }
             
             let y_ln = tr.Via === 2 ? Y_V2 : Y_V1;
             let color = tr.Via === 2 ? '#c62828' : '#1565c0';
             if (is_parked) color = '#4CAF50';
-            else if (is_braking) color = '#FF8C00';   // Naranja frenado
+            else if (is_braking) color = '#FF8C00';
             
             let r_c = tr.doble ? 18 : 11;
-            
             let frac = (current_t - tr.t_ini) / Math.max(0.001, (tr.t_fin - tr.t_ini));
             let current_kwh = tr.kwh_total * frac;
             let current_pax = is_parked ? 0 : getPaxAtKm(tr.pax_arr, km, tr.Via);
             
             let viaIndex = (tr.Via === 1) ? via1Index++ : via2Index++;
             let base_dy = tr.Via === 2 ? (-r_c - 16) : (r_c + 16);
-            if (viaIndex % 2 !== 0) {
-                base_dy = tr.Via === 2 ? base_dy - 28 : base_dy + 28;
-            }
+            if (viaIndex % 2 !== 0) base_dy = tr.Via === 2 ? base_dy - 28 : base_dy + 28;
             
             let lbl = tr.tipo === 'SFE' ? 'SFE' : (tr.tipo === 'XT-M' ? 'Modular' : 'XT-100');
             if (tr.motriz) lbl += ' [' + tr.motriz + ']';
             
-            let pax_prof = "Perfil Estaciones:&#10;";
-            let p_chunk = [];
-            for(let i=0; i<tr.pax_arr.length; i++) {
-                if(tr.pax_arr[i] > 0) {
-                    p_chunk.push(PAX_COLS[i] + ":" + tr.pax_arr[i]);
-                    if(p_chunk.length === 4) {
-                        pax_prof += p_chunk.join(" | ") + "&#10;";
-                        p_chunk = [];
-                    }
-                }
-            }
-            if(p_chunk.length > 0) pax_prof += p_chunk.join(" | ") + "&#10;";
-            if(p_chunk.length === 0 || pax_prof === "Perfil Estaciones:&#10;") pax_prof = "";
-
             let state_str = is_parked ? "🏁 Estacionado en Terminal" : "🚄 En Tránsito";
-            let safe_tooltip = `Tren: ${lbl} (Serv. ${tr.svc})&#10;Vía ${tr.Via} | km ${km.toFixed(2)}&#10;Estado: ${state_str}&#10;Pasajeros Actuales: ${current_pax} pax&#10;${pax_prof}Energía Neta (KWh): ${Math.round(current_kwh)}`;
+            let safe_tooltip = `Tren: ${lbl} (Serv. ${tr.svc})&#10;Vía ${tr.Via} | km ${km.toFixed(2)}&#10;Estado: ${state_str}&#10;Pasajeros Actuales: ${current_pax} pax&#10;Energía Neta (KWh): ${Math.round(current_kwh)}`;
             
             html += `<circle cx="${xp}" cy="${y_ln}" r="${r_c}" fill="${color}" stroke="black" stroke-width="2"><title>${safe_tooltip}</title></circle>`;
             html += `<rect x="${xp-45}" y="${y_ln+base_dy-12}" width="90" height="24" fill="white" fill-opacity="0.9" rx="3" stroke="#ccc"/>`;
@@ -354,7 +320,6 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
         if (!lastTimestamp) lastTimestamp = timestamp;
         let deltaTime = timestamp - lastTimestamp;
         lastTimestamp = timestamp;
-        
         if (playing) {
             let speed = parseFloat(speedSelect.value);
             let deltaMins = (deltaTime / 1000) * speed; 
@@ -685,9 +650,15 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     seat_accum_1 = (total_ser_kwh_44kv + total_ac_loss_kwh) / 0.99
 
     if "SCADA" in modo:
-        html_scada, H_scada = draw_scada_js(df_dia_e, {k: max(0.0, v) for k, v in ser_accum_visual.items()}, seat_accum_1, hora_m1, "", active_sers, gap_vias, use_rm)
-        components.html(html_scada, height=H_scada + 100)
-        st.info("💡 **Modo SCADA Activado:** La animación gráfica se procesa a 60 FPS en el cliente.")
+        try:
+            html_scada, H_scada = draw_scada_js(df_dia_e, {k: max(0.0, v) for k, v in ser_accum_visual.items()}, seat_accum_1, hora_m1, "", active_sers, gap_vias, use_rm)
+            if H_scada > 0:
+                components.html(html_scada, height=H_scada + 100)
+                st.info("💡 **Modo SCADA Activado:** La animación gráfica se procesa a 60 FPS en el cliente.")
+            else:
+                st.warning("No se pudo generar la animación SCADA.")
+        except Exception as e:
+            st.error(f"Error al generar SCADA: {e}")
     else:
         st.markdown(draw_diagram_svg(df_act, {k: max(0.0, v) for k, v in ser_accum_visual.items()}, seat_accum_1, hora_s1[:5], "", active_sers, gap_vias)[0], unsafe_allow_html=True)
 
