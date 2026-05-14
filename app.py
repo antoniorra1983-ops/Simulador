@@ -5,9 +5,10 @@ import time
 from io import BytesIO
 from datetime import datetime, date, timedelta
 
+# Configuración de página de Streamlit
 st.set_page_config(page_title="Simulador MERVAL V135", layout="wide", page_icon="🗺️")
 
-# Fallbacks de seguridad
+# 🛡️ FALLBACKS DE SEGURIDAD
 PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
 SER_DATA_DEFAULT = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
 
@@ -18,20 +19,58 @@ except ImportError:
 
 import etl_parser
 
-# Funciones necesarias del parser
-parsear_planilla_maestra = etl_parser.parsear_planilla_maestra
-cargar_pax               = etl_parser.cargar_pax
-cargar_prevenciones      = etl_parser.cargar_prevenciones
-calc_tren_km_real_general = etl_parser.calc_tren_km_real_general
+# =============================================================================
+# IMPORTACIONES BLINDADAS (mantenidas del original)
+# =============================================================================
+_funcs_etl = {
+    'procesar_thdr': None,
+    'calcular_dwell': None,
+    'cargar_pax': None,
+    'match_pax': None,
+    'calc_tren_km_real_general': None,
+    'clean_id': None,
+    'mins_to_time_str': None,
+    'clasificar_dia': None,
+    'cargar_prevenciones': None,
+    'get_vacios_dia': None,
+    'parsear_planilla_maestra': None,
+}
+
+for _fn in _funcs_etl:
+    try:
+        _funcs_etl[_fn] = getattr(etl_parser, _fn)
+    except AttributeError:
+        pass
+
+procesar_thdr = _funcs_etl['procesar_thdr']
+calcular_dwell = _funcs_etl['calcular_dwell']
+cargar_pax = _funcs_etl['cargar_pax']
+match_pax = _funcs_etl['match_pax']
+calc_tren_km_real_general = _funcs_etl['calc_tren_km_real_general']
+clean_id = _funcs_etl['clean_id']
+mins_to_time_str = _funcs_etl['mins_to_time_str']
+clasificar_dia = _funcs_etl['clasificar_dia']
+cargar_prevenciones = _funcs_etl['cargar_prevenciones']
+get_vacios_dia = _funcs_etl['get_vacios_dia']
+parsear_planilla_maestra = _funcs_etl['parsear_planilla_maestra']
+
+# Sincronización de nombres de funciones
+if not hasattr(etl_parser, 'get_pax_at_km') and hasattr(etl_parser, 'get_pax_at_km_nativo'):
+    etl_parser.get_pax_at_km = etl_parser.get_pax_at_km_nativo
+if not hasattr(etl_parser, 'get_pax_at_km_nativo') and hasattr(etl_parser, 'get_pax_at_km'):
+    etl_parser.get_pax_at_km_nativo = etl_parser.get_pax_at_km
 
 from motor_fisico import (
-    calcular_termodinamica_flota_v111,
-    simular_tramo_termodinamico
+    calcular_termodinamica_flota_v111, simular_tramo_termodinamico
 )
+
 try:
     from motor_fisico import calcular_receptividad_por_headway, precalcular_red_electrica_v111
 except ImportError:
-    from red_electrica import calcular_receptividad_por_headway, precalcular_red_electrica_v111
+    try:
+        from red_electrica import calcular_receptividad_por_headway, precalcular_red_electrica_v111
+    except ImportError:
+        pass
 
 from red_electrica import (
     calcular_flujo_ac_nodo, distribuir_energia_sers, distribuir_potencia_sers_kw
@@ -39,10 +78,44 @@ from red_electrica import (
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 
 # =============================================================================
-# Funciones auxiliares del planificador (IDÉNTICAS a la versión que funcionaba)
+# 1. FUNCIONES DE CARGA Y AGRUPACIÓN (las necesarias para el planificador)
+# =============================================================================
+
+def leer(files): 
+    res = []
+    for f in (files or []):
+        try: 
+            f.seek(0)
+        except Exception: 
+            pass
+        res.append((f.name, f.getvalue()))
+    return res
+
+@st.cache_data(show_spinner="Cargando Pasajeros...")
+def build_pax_v71(blobs_v1, blobs_v2):
+    parts, err = [], []
+    for blobs, via_default in [(blobs_v1, 1), (blobs_v2, 2)]:
+        for nm, data in blobs:
+            try: parts.append(cargar_pax(data, nm, via_default))
+            except Exception as e: err.append(f"[{nm}]: {e}")
+    if len(parts) > 0: return pd.concat(parts, ignore_index=True), err
+    return pd.DataFrame(), err
+
+@st.cache_data(show_spinner="Cargando Prevenciones (TSR)...")
+def procesar_prevenciones_independiente(_bp, sig_ligera):
+    prev_list = []
+    for nm, data in _bp: 
+        try: prev_list.extend(cargar_prevenciones(data, nm))
+        except: pass
+    return prev_list
+
+# =============================================================================
+# FUNCIONES AUXILIARES DEL PLANIFICADOR (conservadas)
 # =============================================================================
 def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, km_orig, km_dest, use_rm, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
+    from motor_fisico import simular_tramo_termodinamico
+
     km_min = min(km_orig, km_dest)
     km_max = max(km_orig, km_dest)
     est_indices = [i for i, km in enumerate(KM_ACUM[:N_EST]) if km_min - 0.01 <= km <= km_max + 0.01]
@@ -64,7 +137,7 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
                 tipo_tren, doble, km_ini_seg, km_fin_seg, via, pct_trac,
                 use_rm, True, None, {}, 150, None, None, estacion_anio, t_actual, False, prevenciones
             )
-        except:
+        except Exception:
             t_h = 0.0
         t_llegada = t_actual + t_h * 60
         trayectoria.append((t_llegada, km_fin_seg))
@@ -78,7 +151,7 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
         trayectoria.append((t_actual, km_dest))
     return trayectoria
 
-@st.cache_data(show_spinner="Integrando física y demanda…")
+@st.cache_data(show_spinner="Integrando física y demanda en Planificador...")
 def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan,
                                   use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje,
                                   _prevenciones, plan_sig):
@@ -206,12 +279,14 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
     return df_sint_final, df_sint_e
 
 # =============================================================================
-# Tabla THDR sintética (idéntica a la versión original)
+# TABLA THDR SINTÉTICA (conservada)
 # =============================================================================
 @st.cache_data(show_spinner=False, ttl=1)
 def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio, km_orig, km_dest, use_rm, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
+    from motor_fisico import simular_tramo_termodinamico
     from etl_parser import mins_to_time_str
+
     km_min = min(km_orig, km_dest)
     km_max = max(km_orig, km_dest)
     est_en_recorrido = [i for i, km in enumerate(KM_ACUM[:N_EST]) if km_min - 0.01 <= km <= km_max + 0.01]
@@ -235,7 +310,7 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
                 tipo_tren, doble, km_ini_tr, km_fin_tr, via, pct_trac,
                 use_rm, True, None, {}, 150, None, None, estacion_anio, t_actual, False, prevenciones
             )
-        except:
+        except Exception:
             t_h = 0.0
         t_llegada = t_actual + t_h * 60
         t_salida  = t_llegada + DWELL_DEF / 60
@@ -252,6 +327,7 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
 def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, use_rm, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_TOTAL
     from etl_parser import mins_to_time_str
+
     st.markdown("---")
     st.markdown("#### 📋 Horario Simulado por Estación (estilo THDR)")
     for via, label in [(1, "🔵 Vía 1 — Puerto → Limache"), (2, "🔴 Vía 2 — Limache → Puerto")]:
@@ -274,15 +350,14 @@ def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, use_
                              height=min(400, 40 + len(df_tabla) * 35))
 
 # =============================================================================
-# Interfaz principal
+# INTERFAZ PRINCIPAL (RECONSTRUIDA)
 # =============================================================================
 def main():
     # ── Barra lateral ──
     with st.sidebar:
         st.header("📂 Archivos")
-        # Planilla Maestra (reemplaza a los antiguos THDR)
+        # Planilla Maestra (ahora aquí, donde antes iban los THDR)
         archivo_planilla = st.file_uploader("Planilla Maestra (.csv, .xlsx)", type=['csv', 'xlsx', 'xls'])
-        # Pasajeros y Prevenciones (se conservan porque el planificador los necesita)
         f_px1 = st.file_uploader("Pasajeros Vía 1", type=['csv', 'xlsx', 'xls'])
         f_px2 = st.file_uploader("Pasajeros Vía 2", type=['csv', 'xlsx', 'xls'])
         f_prev = st.file_uploader("🚧 Prevenciones de Vía (.csv, .xlsx)", type=['csv', 'xlsx', 'xls'])
@@ -327,14 +402,13 @@ def main():
         try: prevenciones_list = cargar_prevenciones(f_prev.getvalue(), f_prev.name)
         except: pass
 
-    # ── Inicializar variables de sesión para el dashboard ──
+    # ── Inicializar variables de sesión para el dashboard (IMPORTANTE) ──
     for key in ["sl_ui_plan", "t_math_plan", "play_plan"]:
         if key not in st.session_state:
             st.session_state[key] = 480.0 if "sl_ui" in key or "t_math" in key else False
 
     st.title("🔮 Planificador de Escenarios")
 
-    # ── Modo de entrada de datos ──
     modo_plan = st.radio("Fuente de Datos", ["Planilla Maestra (Subir CSV/Excel)", "Matriz Sintética", "Laboratorio (Tramo Único)"], horizontal=True)
 
     df_sint = None
