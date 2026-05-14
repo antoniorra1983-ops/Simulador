@@ -195,7 +195,7 @@ def simular_dia_historico_cached(_df_dia, pct_trac_hist, use_rm, use_pend, use_r
     return calcular_termodinamica_flota_v111(_df_dia, pct_trac_hist, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=_prevenciones)
 
 # =============================================================================
-# FUNCIÓN PARA GENERAR TRAYECTORIA DETALLADA POR ESTACIONES (CORREGIDA)
+# FUNCIÓN PARA GENERAR TRAYECTORIA DETALLADA POR ESTACIONES
 # =============================================================================
 def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, km_orig, km_dest, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
@@ -343,13 +343,17 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         viaje_final['pax_abordo'] = pax_calculado
         viaje_final['t_fin'] = r['t_ini'] + (t_h * 60.0)
 
-        # ✅ Reemplazar nodos por trayectoria detallada con estaciones
+        # ✅ Conservar el t_fin original antes de generar la trayectoria detallada
+        t_fin_original = viaje_final['t_fin']
         viaje_final['nodos'] = generar_trayectoria_sintetica(
             r['tipo_tren'], r['doble'], r['Via'], pct_trac_plan, r['t_ini'],
             estacion_anio_plan, r['km_orig'], r['km_dest'], _prevenciones
         )
         if viaje_final['nodos']:
-            viaje_final['t_fin'] = viaje_final['nodos'][-1][0]
+            # Forzar que el último nodo tenga el tiempo final correcto
+            ultimo_nodo = viaje_final['nodos'][-1]
+            viaje_final['nodos'][-1] = (t_fin_original, ultimo_nodo[1])
+            viaje_final['t_fin'] = t_fin_original
 
         viajes_completos.append(viaje_final)
         
