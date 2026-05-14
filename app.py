@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 from io import BytesIO
 
-st.set_page_config(page_title="Simulador MERVAL V135 - Planificador", layout="wide", page_icon="🗺️")
+st.set_page_config(page_title="Simulador MERVAL V135 – Planificador", layout="wide", page_icon="🗺️")
 
-# Fallbacks
+# ── Fallbacks ──────────────────────────────────────────────
 PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
 SER_DATA_DEFAULT = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
 
@@ -16,10 +16,9 @@ except ImportError:
 
 import etl_parser
 
-# Funciones necesarias del parser
 parsear_planilla_maestra = etl_parser.parsear_planilla_maestra
-cargar_pax = etl_parser.cargar_pax
-cargar_prevenciones = etl_parser.cargar_prevenciones
+cargar_pax               = etl_parser.cargar_pax
+cargar_prevenciones      = etl_parser.cargar_prevenciones
 
 from motor_fisico import (
     calcular_termodinamica_flota_v111, simular_tramo_termodinamico
@@ -34,9 +33,7 @@ from red_electrica import (
 )
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 
-# =============================================================================
-# Funciones auxiliares del planificador
-# =============================================================================
+# ── Funciones auxiliares del planificador ──────────────────
 def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, km_orig, km_dest, use_rm, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
     km_min = min(km_orig, km_dest)
@@ -74,7 +71,7 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
         trayectoria.append((t_actual, km_dest))
     return trayectoria
 
-@st.cache_data(show_spinner="Integrando física y demanda en Planificador...")
+@st.cache_data(show_spinner="Integrando física y demanda…")
 def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan,
                                   use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje,
                                   _prevenciones, plan_sig):
@@ -202,9 +199,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         df_sint_e = df_sint_e.drop(columns=['prevencion_aplicada'])
     return df_sint_final, df_sint_e
 
-# =============================================================================
-# Tabla THDR sintética
-# =============================================================================
+# ── Tabla THDR sintética ──────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=1)
 def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio, km_orig, km_dest, use_rm, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
@@ -270,9 +265,7 @@ def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, use_
                 st.dataframe(df_tabla, use_container_width=True, hide_index=True,
                              height=min(400, 40 + len(df_tabla) * 35))
 
-# =============================================================================
-# Interfaz principal
-# =============================================================================
+# ── Interfaz principal ─────────────────────────────────────
 def main():
     # --- Barra lateral ---
     with st.sidebar:
@@ -321,6 +314,11 @@ def main():
     if archivo_prev:
         try: prevenciones_list = cargar_prevenciones(archivo_prev.getvalue(), archivo_prev.name)
         except: pass
+
+    # --- Inicializar estado de sesión para el gemelo digital ---
+    for key in ["sl_ui_plan", "t_math_plan", "play_plan"]:
+        if key not in st.session_state:
+            st.session_state[key] = 480.0 if "sl_ui" in key or "t_math" in key else False
 
     # --- Área principal ---
     st.title("🔮 Planificador de Escenarios")
