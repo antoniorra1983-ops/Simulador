@@ -347,20 +347,23 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         viaje_final['pax_abordo'] = pax_calculado
         viaje_final['t_fin'] = r['t_ini'] + (t_h * 60.0)
 
-        # ✅ Generar trayectoria detallada con paradas y corregir tiempo final
-        t_fin_original = viaje_final['t_fin']
+        # Guardar nodos originales (t=0) para cálculo de energía correcto
+        nodos_energia = r.get('nodos')  # nodos t=0 → motor aplica DWELL correctamente
+
+        # ✅ Generar trayectoria detallada con timestamps reales para el mapa
         trayectoria = generar_trayectoria_sintetica(
             r['tipo_tren'], r['doble'], r['Via'], pct_trac_plan, r['t_ini'],
             estacion_anio_plan, r['km_orig'], r['km_dest'], use_rm, _prevenciones
         )
         if trayectoria:
             t_fin_sintetico = trayectoria[-1][0]
-            # Usar tiempo de trayectoria detallada (incluye frenadas + dwell por estación)
             trayectoria[-1] = (t_fin_sintetico, r['km_dest'])
-            viaje_final['nodos'] = trayectoria
+            viaje_final['nodos'] = nodos_energia  # energía usa nodos t=0
+            viaje_final['t_arr'] = trayectoria    # mapa usa trayectoria con timestamps
             viaje_final['t_fin'] = t_fin_sintetico
         else:
-            viaje_final['nodos'] = [(r['t_ini'], r['km_orig']), (r['t_ini'] + t_h, r['km_dest'])]
+            viaje_final['nodos'] = nodos_energia
+            viaje_final['t_arr'] = [(r['t_ini'], r['km_orig']), (r['t_ini'] + t_h * 60, r['km_dest'])]
 
         viajes_completos.append(viaje_final)
         
