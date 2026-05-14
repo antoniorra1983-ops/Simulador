@@ -195,7 +195,7 @@ def simular_dia_historico_cached(_df_dia, pct_trac_hist, use_rm, use_pend, use_r
     return calcular_termodinamica_flota_v111(_df_dia, pct_trac_hist, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=_prevenciones)
 
 # =============================================================================
-# FUNCIÓN PARA GENERAR TRAYECTORIA DETALLADA POR ESTACIONES
+# FUNCIÓN PARA GENERAR TRAYECTORIA DETALLADA POR ESTACIONES (CORREGIDA)
 # =============================================================================
 def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, km_orig, km_dest, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
@@ -214,7 +214,7 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
     trayectoria = []
     t_actual = t_ini_mins
 
-    # Salida de la primera estación
+    # Nodo de salida en la primera estación
     trayectoria.append((t_actual, KM_ACUM[est_indices[0]]))
 
     for j in range(len(est_indices) - 1):
@@ -233,6 +233,7 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
             t_h = 0.0
 
         t_llegada = t_actual + t_h * 60
+        # Añadir nodo de llegada (velocidad 0)
         trayectoria.append((t_llegada, km_fin_seg))
 
         if not es_destino:
@@ -240,7 +241,11 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
             trayectoria.append((t_salida, km_fin_seg))
             t_actual = t_salida
         else:
-            t_actual = t_llegada
+            t_actual = t_llegada  # Actualizar para que el último nodo refleje el tiempo final
+
+    # Asegurar que el último nodo sea exactamente el destino
+    if trayectoria[-1][1] != km_dest:
+        trayectoria.append((t_actual, km_dest))
 
     return trayectoria
 
