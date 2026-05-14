@@ -168,7 +168,7 @@ FLOTA = {
         "n_motores"    : 4,  
         "a_max_ms2"    : 1.0,  
         "a_freno_ms2"  : 1.2,
-        "jerk_ms3"     : 0.8,
+        "jerk_ms3"     : 1.3,           # Igualado a XT-100 (Alstom certificado)
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.95,          # Eficiencia Certificada SEPSA/Alstom
         "davis_A"      : 1440.60,  
@@ -193,7 +193,7 @@ FLOTA = {
         "n_motores"    : 8,       
         "a_max_ms2"    : 1.02,
         "a_freno_ms2"  : 1.30,  
-        "jerk_ms3"     : 0.8,
+        "jerk_ms3"     : 1.3,           # Igualado a flota Alstom
         "v_freno_min"  : 3.81,
         "eta_motor"    : 0.94,      
         "davis_A"      : 2480.00,  
