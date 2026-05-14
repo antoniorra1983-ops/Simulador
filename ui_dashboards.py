@@ -148,19 +148,18 @@ def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, tit
     return svg.replace('\n', ''), H
 
 # =============================================================================
-# MOTOR VISUAL 2: SCADA JAVASCRIPT (CLIENT-SIDE RENDERING + POPUPS)
+# MOTOR VISUAL 2: SCADA JAVASCRIPT (CLIENT-SIDE RENDERING + POPUPS) – CORREGIDO
 # =============================================================================
 def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titulo_extra, active_sers_list, gap_vias, use_rm):
     """
     Empaqueta el perfil matemático y genera el Iframe HTML para la animación SCADA a 60FPS.
-    🚀 OPTIMIZADO: Envía los nodos reales como trayectoria para evitar estrangulamiento de CPU (O(N)).
+    ✅ CORREGIDO: Los trenes se ordenan por posición en la vía, color naranja en frenado.
     """
     trips_data = []
     
     for _, row in df_dia_e.iterrows():
         t_ini, t_fin = float(row['t_ini']), float(row['t_fin'])
         
-        # 🚀 EXTIRPADO EL BUCLE LENTO: Extraemos los nodos reales en lugar de iterar cada 0.1s.
         traj = []
         nodos = row.get('nodos')
         if isinstance(nodos, list) and len(nodos) >= 2:
@@ -168,14 +167,12 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
                 if t_ini - 1.0 <= n_t <= t_fin + 1.0:
                     traj.append([round(float(n_t), 3), round(float(n_k), 3)])
         
-        # Si el array de nodos vino vacío o sucio, usamos inicio y fin directo
         if not traj or len(traj) < 2:
             traj = [
                 [round(t_ini, 3), round(float(row['km_orig']), 3)], 
                 [round(t_fin, 3), round(float(row['km_dest']), 3)]
             ]
             
-        # Asegurar anclaje perfecto al inicio y fin del viaje
         if traj[0][0] > t_ini:
             traj.insert(0, [round(t_ini, 3), round(float(row['km_orig']), 3)])
         if traj[-1][0] < t_fin:
@@ -269,15 +266,41 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
         let html = '';
         let activeTrips = trips.filter(tr => currentTime >= tr.t_ini && currentTime <= tr.t_fin + 5.0);
         
-        activeTrips.forEach((tr, index) => {
+        // Ordenar trenes por vía y luego por posición
+        activeTrips.sort((a, b) => {
+            if (a.Via !== b.Via) return a.Via - b.Via;
+            let kmA = getPos(a.traj, Math.min(currentTime, a.t_fin));
+            let kmB = getPos(b.traj, Math.min(currentTime, b.t_fin));
+            if (a.Via === 1) return kmA - kmB;
+            else return kmB - kmA;
+        });
+        
+        let via1Index = 0;
+        let via2Index = 0;
+        
+        activeTrips.forEach((tr) => {
             let is_parked = currentTime >= tr.t_fin;
             let current_t = Math.min(currentTime, tr.t_fin); 
             let km = getPos(tr.traj, current_t);
             let xp = xkm(km);
             
+            // Detectar frenado comparando posición futura con actual
+            let is_braking = false;
+            if (!is_parked) {
+                let delta = 0.02; // minutos
+                let km_future = getPos(tr.traj, current_t + delta);
+                let speed_now = (km_future - km) / delta;
+                let km_past = getPos(tr.traj, Math.max(tr.t_ini, current_t - delta));
+                let speed_past = (km - km_past) / delta;
+                if (speed_now < speed_past - 0.5) {
+                    is_braking = true;
+                }
+            }
+            
             let y_ln = tr.Via === 2 ? Y_V2 : Y_V1;
             let color = tr.Via === 2 ? '#c62828' : '#1565c0';
-            if (is_parked) color = '#4CAF50'; 
+            if (is_parked) color = '#4CAF50';
+            else if (is_braking) color = '#FF8C00';   // Naranja frenado
             
             let r_c = tr.doble ? 18 : 11;
             
@@ -285,8 +308,9 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
             let current_kwh = tr.kwh_total * frac;
             let current_pax = is_parked ? 0 : getPaxAtKm(tr.pax_arr, km, tr.Via);
             
+            let viaIndex = (tr.Via === 1) ? via1Index++ : via2Index++;
             let base_dy = tr.Via === 2 ? (-r_c - 16) : (r_c + 16);
-            if (index % 2 !== 0) {
+            if (viaIndex % 2 !== 0) {
                 base_dy = tr.Via === 2 ? base_dy - 28 : base_dy + 28;
             }
             
@@ -540,7 +564,6 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             masa_total = tara_base + ((pax_v * PAX_KG) / 1000.0)
             
             aux_nominal_unidad = f_flota.get('aux_kw_heat', f_flota.get('aux_kw', 65.16)) if estacion_anio == "invierno" else f_flota.get('aux_kw_cool', f_flota.get('aux_kw', 58.76))
-            p_vent_max = f_flota.get('p_vent_trac_kw', 7.6) * n_unidades
             
             if is_parked:
                 state = "DWELL"
@@ -650,7 +673,6 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             sub = df_acum[df_acum['tipo_tren'] == f_type]
             if not sub.empty:
                 energy_by_fleet[f_type] += sub['kwh_viaje_neto'].sum()
-        # Energía solo comercial por flota (para IDE correcto)
         energy_by_fleet_comercial = {}
         for f_type in ['XT-100', 'XT-M', 'SFE']:
             sub = df_acum[df_acum['tipo_tren'] == f_type]
