@@ -516,12 +516,12 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         df_act['is_parked'] = hora_m1 >= df_act['t_fin']
         df_act['frac_act'] = np.minimum(1.0, (hora_m1 - df_act['t_ini']) / np.maximum(0.001, df_act['t_fin'] - df_act['t_ini']))
         df_act['kwh_neto'] = df_act['kwh_viaje_neto'] * df_act['frac_act']
-        df_act['km_pos'] = df_act.apply(lambda r: km_at_t(r['t_ini'], r['t_fin'], min(hora_m1, r['t_fin']), r['Via'], use_rm, r['km_orig'], r['km_dest'], r.get('nodos')), axis=1)
+        df_act['km_pos'] = df_act.apply(lambda r: km_at_t(r['t_ini'], r['t_fin'], min(hora_m1, r['t_fin']), r['Via'], use_rm, r['km_orig'], r['km_dest'], r.get('nodos'), r.get('t_arr')), axis=1)
         
         def _vel_real(r):
             if r['is_parked']: return 0.0
             km_now = r['km_pos']
-            km_next = km_at_t(r['t_ini'], r['t_fin'], hora_m1 + 0.01, r['Via'], use_rm, r['km_orig'], r['km_dest'], r.get('nodos'))
+            km_next = km_at_t(r['t_ini'], r['t_fin'], hora_m1 + 0.01, r['Via'], use_rm, r['km_orig'], r['km_dest'], r.get('nodos'), r.get('t_arr'))
             if abs(km_next - km_now) < 0.0001: return 0.0 
             return vel_at_km(km_now, r['Via'], use_rm)
             
@@ -570,7 +570,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                 state_icon = "🏁 Estacionado en Terminal"
                 p_elec_kw = calcular_aux_dinamico(tipo, aux_nominal_unidad * n_unidades, hora_m1 / 60.0, pax_v, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state)
             else:
-                state, v_kmh = get_train_state_and_speed(hora_m1, row['Via'], use_rm, row['km_orig'], row['km_dest'], row.get('nodos'))
+                state, v_kmh = get_train_state_and_speed(hora_m1, row['Via'], use_rm, row['km_orig'], row['km_dest'], row.get('t_arr') or row.get('nodos'))
                 state_icon = "🟢 Traccionando" if state == "ACCEL" else "🔴 Frenando (Regen)" if state == "BRAKE" else "🟡 Velocidad Crucero"
                 p_elec_kw = calcular_aux_dinamico(tipo, aux_nominal_unidad * n_unidades, hora_m1 / 60.0, pax_v, f_flota.get('cap_max', 398) * n_unidades, estacion_anio, state)
             
@@ -662,7 +662,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     for idx, r in df_dia_e[df_dia_e['t_ini'] <= hora_m1].iterrows():
         t_eval = min(hora_m1, r['t_fin'])
         frac = (t_eval - r['t_ini']) / max(0.001, r['t_fin'] - r['t_ini'])
-        km_now = km_at_t(r['t_ini'], r['t_fin'], t_eval, r['Via'], use_rm, r['km_orig'], r['km_dest'], r.get('nodos'))
+        km_now = km_at_t(r['t_ini'], r['t_fin'], t_eval, r['Via'], use_rm, r['km_orig'], r['km_dest'], r.get('nodos'), r.get('t_arr'))
         e_p_frac = (r['kwh_viaje_trac'] + r['kwh_viaje_aux'] - r['kwh_viaje_regen']) * frac
         for s_name, e_val in distribuir_energia_sers(e_p_frac, (t_eval - r['t_ini']) / 60.0, r['km_orig'], km_now, active_sers).items(): ser_accum_visual[s_name] += e_val 
 
