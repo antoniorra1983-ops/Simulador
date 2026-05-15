@@ -310,9 +310,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             
             _v_raw = _VEL_ARRAY_RM[idx_km] if use_rm else _VEL_ARRAY_NORM[idx_km]
             if _v_raw == 0:
-                # Zona de andén: usar velocidad del primer segmento >0 adelante
+                # Zona de andén: buscar próxima velocidad >0 en dirección de marcha
+                _step_dir = 1 if via_op == 1 else -1
                 for _di in range(1, 500):
-                    _idx2 = min(44999, idx_km + _di)
+                    _idx2 = min(44999, max(0, idx_km + _di * _step_dir))
                     _v2 = _VEL_ARRAY_RM[_idx2] if use_rm else _VEL_ARRAY_NORM[_idx2]
                     if _v2 > 0: _v_raw = _v2; break
             v_cons_kmh = max(5.0, _v_raw)
@@ -477,10 +478,13 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 a_net = a_req
                 
             if v_new < 0.1 and v_ms < 0.1:
-                if dist_restante > 10.0:
-                    if estado_marcha == "BRAKE_STATION":
-                        # Tren frenó antes del destino — el tramo termina aquí
-                        break
+                if estado_marcha == "BRAKE_STATION":
+                    # Tren detenido en frenada — completar metros restantes a velocidad mínima
+                    if dist_restante > 0.1:
+                        t_horas += (dist_restante / max(0.5, v_freno_min)) / 3600.0
+                        dist_recorrida += dist_restante
+                    break
+                elif dist_restante > 10.0:
                     estado_marcha = "ACCEL"  # antiatasco gradual
                     v_new = 0.1
                     a_net = f.get('jerk_ms3', 0.8) * dt
