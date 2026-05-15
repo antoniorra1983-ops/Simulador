@@ -792,8 +792,11 @@ def main():
                     else:
                         if 'temp_df_plan' not in st.session_state: st.stop()
                         df_sint = st.session_state['temp_df_plan'].copy().sort_values('t_ini')
-                        # tipo_tren y doble ya vienen asignados correctamente desde parsear_planilla_maestra
-                        # (asignar_flota_planilla distribuye XT-100/XT-M/SFE según flota real)
+                        # Si todos son XT-100, re-ejecutar asignación de flota
+                        if 'tipo_tren' in df_sint.columns and df_sint['tipo_tren'].nunique() == 1:
+                            from etl_parser import asignar_flota_planilla
+                            df_sint = asignar_flota_planilla(df_sint)
+                            st.session_state['temp_df_plan'] = df_sint
 
                     if df_sint.empty: st.stop()
                     st.session_state['raw_plan_df'] = df_sint
