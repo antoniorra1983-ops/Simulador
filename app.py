@@ -393,7 +393,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
 # =============================================================================
 # TABLA THDR SINTÉTICA — Horario simulado por estación para el Planificador
 # =============================================================================
-def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio, km_orig, km_dest, use_rm, prevenciones=None):
+def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio, km_orig, km_dest, use_rm, prevenciones=None, motriz_num=''):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
     from motor_fisico import simular_tramo_termodinamico
     from etl_parser import mins_to_time_str
@@ -410,7 +410,7 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
     if len(est_en_recorrido) < 2:
         return {'Servicio': str(num_servicio), 'Error': 'Sin estaciones en recorrido'}
 
-    fila = {'Servicio': str(num_servicio), 'Tipo': tipo_tren, 'Config': 'Doble' if doble else 'Simple'}
+    fila = {'Servicio': str(num_servicio), 'Tipo': tipo_tren, 'Config': 'Doble' if doble else 'Simple', 'Tren': str(motriz_num) if motriz_num else str(num_servicio)}
     t_actual = t_ini_mins
     t_inicio_viaje = t_ini_mins
 
@@ -477,7 +477,8 @@ def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, use_
                     float(row.get('km_orig', 0.0)),
                     float(row.get('km_dest', 43.13)),
                     use_rm,
-                    prevenciones
+                    prevenciones,
+                    str(row.get('motriz_num', ''))
                 )
                 filas.append(fila)
 
@@ -697,13 +698,22 @@ def main():
                         else:
                             st.success("✅ Planilla decodificada. Distribuye la flota por trayecto (Rolling Stock Rostering):")
                             rutas_unicas = list(df_temp['svc_type'].value_counts().keys())
-                            if 'flota_map_v2' not in st.session_state or set(st.session_state['flota_map_v2']['Ruta']) != set(rutas_unicas):
-                                st.session_state['flota_map_v2'] = pd.DataFrame([{"Ruta": r, "Total Viajes": df_temp['svc_type'].value_counts()[r], "XT-100": df_temp['svc_type'].value_counts()[r], "XT-M": 0, "SFE": 0} for r in rutas_unicas])
-                            
-                            df_flota_edit = st.data_editor(st.session_state['flota_map_v2'], hide_index=True, use_container_width=True)
                             from etl_parser import asignar_flota_planilla
-                            st.session_state['temp_df_plan'] = asignar_flota_planilla(df_temp.copy())
+                            df_asignado = asignar_flota_planilla(df_temp.copy())
+                            # Inicializar tabla con asignación real (no todo XT-100)
+                            if 'flota_map_v2' not in st.session_state or set(st.session_state['flota_map_v2']['Ruta']) != set(rutas_unicas):
+                                filas = []
+                                for r in rutas_unicas:
+                                    sub = df_asignado[df_asignado['svc_type']==r]
+                                    filas.append({'Ruta':r,'Total Viajes':len(sub),
+                                        'XT-100':int((sub['tipo_tren']=='XT-100').sum()),
+                                        'XT-M':int((sub['tipo_tren']=='XT-M').sum()),
+                                        'SFE':int((sub['tipo_tren']=='SFE').sum())})
+                                st.session_state['flota_map_v2'] = pd.DataFrame(filas)
+                            df_flota_edit = st.data_editor(st.session_state['flota_map_v2'], hide_index=True, use_container_width=True)
+                            st.session_state['temp_df_plan'] = df_asignado
                             st.session_state['temp_flota_edit'] = df_flota_edit
+                            st.session_state['flota_map_v2'] = df_flota_edit  # reflejar ediciones
                     except Exception as err:
                         st.error(f"Fallo de lectura de planilla maestra: {err}")
             
