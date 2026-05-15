@@ -189,16 +189,18 @@ def _calc_tren_km_real_motor(row):
     if pd.isna(k_o) or pd.isna(k_d): return 0.0
     man = row.get('maniobra')
     is_doble = row.get('doble', False)
-    # tren_km = distancia de vía recorrida (1 vez, independiente si es doble)
-    # El doble ya está reflejado en la energía (más masa y resistencia)
     if not man or pd.isna(man) or str(man).strip().lower() in ['none', '']:
-        return abs(k_d - k_o)
+        return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
     km_man = None
     man_upper = str(man).upper()
     if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper: km_man = 25.3
     elif 'CORTE_SA' in man_upper or 'ACOPLE_SA' in man_upper: km_man = 29.1
-    if km_man is None: return abs(k_d - k_o)
-    return abs(k_d - k_o)  # distancia de vía siempre es la misma
+    if km_man is None: return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
+    if min(k_o, k_d) <= km_man <= max(k_o, k_d):
+        dist_antes = abs(km_man - k_o); dist_despues = abs(k_d - km_man)
+        if 'CORTE' in man_upper: return (dist_antes * 2.0) + (dist_despues * 1.0)
+        elif 'ACOPLE' in man_upper: return (dist_antes * 1.0) + (dist_despues * 2.0)
+    return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
 
 # =============================================================================
 # 4. MOTOR CINEMÁTICO-TERMODINÁMICO (CORREGIDO)
