@@ -946,6 +946,28 @@ def asignar_flota_planilla(df):
         if not exceso:
             break
 
+    # Asignar número de motriz usando rostering greedy
+    # XT-100: 1-27 | XT-M: 28-35 | SFE: 412
+    def _rostering(df_sub, base, max_t):
+        """Asigna números de tren físico por disponibilidad temporal."""
+        if df_sub.empty: return {}
+        df_sub = df_sub.sort_values('t_ini').copy()
+        df_sub['_tf'] = df_sub['t_ini'] + abs(df_sub['km_dest']-df_sub['km_orig'])/35*60 + 10
+        trenes = {base+i: 0.0 for i in range(max_t)}
+        asig = {}
+        for idx, row in df_sub.iterrows():
+            libres = {t:tl for t,tl in trenes.items() if tl <= row['t_ini']}
+            if libres: num = min(libres, key=libres.get)
+            else:      num = min(trenes, key=trenes.get)
+            asig[idx] = num; trenes[num] = row['_tf']
+        return asig
+
+    m100 = _rostering(df[df['tipo_tren']=='XT-100'], 1,  27)
+    mxtm = _rostering(df[df['tipo_tren']=='XT-M'],   28,  8)
+    msfe = {idx: 412 for idx in df[df['tipo_tren']=='SFE'].index}
+    all_m = {**m100, **mxtm, **msfe}
+    df['motriz_num'] = df.index.map(all_m).fillna('').astype(str).str.replace('.0','',regex=False)
+
     df = df.drop(columns=['demanda', 'pax_est', '_t_fin_est'])
     return df
 
