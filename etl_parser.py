@@ -962,11 +962,43 @@ def asignar_flota_planilla(df):
             asig[idx] = num; trenes[num] = row['_tf']
         return asig
 
-    m100 = _rostering(df[df['tipo_tren']=='XT-100'], 1,  27)
-    mxtm = _rostering(df[df['tipo_tren']=='XT-M'],   28,  8)
-    msfe = {idx: 412 for idx in df[df['tipo_tren']=='SFE'].index}
+    def _rostering_con_dobles(df_sub, base, max_t):
+        """Rostering greedy — dobles reciben par de números consecutivos (ej. '6+7')."""
+        if df_sub.empty: return {}
+        df_sub = df_sub.sort_values('t_ini').copy()
+        df_sub['_tf'] = df_sub['t_ini'] + abs(df_sub['km_dest']-df_sub['km_orig'])/35*60 + 10
+        # Trenes disponibles en pares: base, base+1 para dobles
+        trenes = {base+i: 0.0 for i in range(max_t)}
+        asig = {}
+        for idx, row in df_sub.iterrows():
+            es_doble = row.get('doble', False)
+            if es_doble:
+                # Buscar 2 trenes libres consecutivos
+                nums = sorted(trenes.keys())
+                elegidos = None
+                for i in range(len(nums)-1):
+                    t1, t2 = nums[i], nums[i+1]
+                    if trenes[t1] <= row['t_ini'] and trenes[t2] <= row['t_ini']:
+                        elegidos = (t1, t2); break
+                if elegidos is None:  # no hay par libre → usar los 2 que se liberan antes
+                    sorted_t = sorted(trenes.items(), key=lambda x: x[1])
+                    elegidos = (sorted_t[0][0], sorted_t[1][0])
+                asig[idx] = f'{elegidos[0]}+{elegidos[1]}'
+                trenes[elegidos[0]] = row['_tf']
+                trenes[elegidos[1]] = row['_tf']
+            else:
+                libres = {t:tl for t,tl in trenes.items() if tl <= row['t_ini']}
+                if libres: num = min(libres, key=libres.get)
+                else:      num = min(trenes, key=trenes.get)
+                asig[idx] = str(num)
+                trenes[num] = row['_tf']
+        return asig
+
+    m100 = _rostering_con_dobles(df[df['tipo_tren']=='XT-100'], 1,  27)
+    mxtm = _rostering_con_dobles(df[df['tipo_tren']=='XT-M'],   28,  8)
+    msfe = {idx: '412' for idx in df[df['tipo_tren']=='SFE'].index}
     all_m = {**m100, **mxtm, **msfe}
-    df['motriz_num'] = df.index.map(all_m).fillna('').astype(str).str.replace('.0','',regex=False)
+    df['motriz_num'] = df.index.map(all_m).fillna('')
 
     df = df.drop(columns=['demanda', 'pax_est', '_t_fin_est'])
     return df
