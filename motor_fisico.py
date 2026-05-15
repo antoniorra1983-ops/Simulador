@@ -511,12 +511,19 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 f_limite_potencia_inst = p_max_op_w_real / max(0.1, v_ms)
                 f_absoluta_disp_inst = min(f_disp_trac_real, f_limite_potencia_inst)
                 f_motor_real = min(f_real_total, f_absoluta_disp_inst)
-                # Eficiencia dinámica: carga relativa a la potencia nominal del motor
-                # (no a la fuerza máxima disponible que es enorme a baja velocidad)
-                p_real_w = f_motor_real * max(0.1, v_ms)
-                carga_pct = p_real_w / max(1.0, p_max_w_nominal)
+                # Eficiencia dinámica del motor eléctrico de tracción:
+                # - Arranque (v < 15 km/h): régimen de par constante → eta ≈ eta_base
+                # - Velocidad media (P ≈ P_max): eficiencia máxima → eta = eta_base
+                # - Carga parcial en CRUISE: eficiencia levemente menor
                 eta_base = f.get('eta_motor', 0.92)
-                eta_din = eta_base * (1.0 - 0.15 * (1.0 - max(0.1, carga_pct))**3)
+                if v_kmh < 15.0:
+                    # Régimen par constante: eficiencia del motor alta
+                    eta_din = eta_base
+                else:
+                    p_real_w = f_motor_real * max(0.1, v_ms)
+                    carga_pct = p_real_w / max(1.0, p_max_w_nominal)
+                    # Eficiencia cae levemente a carga parcial (CRUISE plano)
+                    eta_din = eta_base * (1.0 - 0.08 * (1.0 - max(0.2, carga_pct))**2)
                 trabajo_j_trac = f_motor_real * step_m
                 trc += (trabajo_j_trac / 3_600_000.0) / eta_din
                 aux_catenaria += aux_kwh_step
