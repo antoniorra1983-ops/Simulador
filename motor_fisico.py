@@ -389,7 +389,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             
             if estado_marcha == "BRAKE_STATION":
                 # Freno mixto: regenerativo hasta v_freno_min, luego neumático completa la diferencia
-                f_req_freno_total = masa_dinamica_kg * a_freno_op
+                # En bajada (f_res_total < 0) la gravedad acelera → se necesita MÁS freno
+                # En subida (f_res_total > 0) la gravedad frena → se necesita MENOS freno
+                f_req_freno_total = masa_dinamica_kg * a_freno_op - f_res_total
+                f_req_freno_total = max(0.0, f_req_freno_total)
                 if v_kmh >= v_freno_min * 3.6:  # freno regen disponible
                     f_regen_tramo = min(f_req_freno_total, f_disp_freno)
                 else:  # velocidad baja: solo freno neumático
@@ -424,6 +427,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if a_net_target > a_prev + jerk_limit: a_net = a_prev + jerk_limit
             elif a_net_target < a_prev - jerk_limit: a_net = a_prev - jerk_limit
             else: a_net = a_net_target
+            # Clamp físico: a_net no puede superar a_max ni a_freno del tren
+            a_max_ms2  = f.get('a_max_ms2',  1.0)
+            a_freno_ms2 = f.get('a_freno_ms2', 1.2)
+            a_net = max(-a_freno_ms2, min(a_max_ms2, a_net))
             a_prev = a_net
             
             v_new, dt_actual = v_ms + a_net * dt, dt
