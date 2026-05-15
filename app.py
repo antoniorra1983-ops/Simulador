@@ -393,7 +393,6 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
 # =============================================================================
 # TABLA THDR SINTÉTICA — Horario simulado por estación para el Planificador
 # =============================================================================
-@st.cache_data(show_spinner=False, ttl=1)
 def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, num_servicio, km_orig, km_dest, use_rm, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
     from motor_fisico import simular_tramo_termodinamico
