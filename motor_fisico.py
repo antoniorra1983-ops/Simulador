@@ -320,24 +320,46 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             v_cons_kmh = min(v_cons_kmh, v_limit_thdr)
             
             # =============================================================
-            # APLICACIÓN DE PREVENCIONES (500 m de aviso)
+            # APLICACIÓN DE PREVENCIONES — aviso dinámico por distancia de frenado
+            # El tren baja la consigna exactamente cuando necesita empezar a frenar
+            # para llegar a v_kmh_prev al inicio de la zona restringida
             # =============================================================
             if prevenciones:
                 for p in prevenciones:
                     if p['via'] == via_op:
+                        v_prev = p['v_kmh']
                         if via_op == 1:
-                            km_inicio = p['km_min']
-                            km_fin_prev = p['km_max'] + long_tren_km
-                            km_aviso = p['km_min'] - 0.5
-                            if km_aviso <= km_actual <= km_fin:
-                                v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+                            km_inicio_prev = p['km_min']
+                            km_fin_prev    = p['km_max'] + long_tren_km
+                            en_zona = km_inicio_prev <= km_actual <= km_fin_prev
+                            if not en_zona and km_actual < km_inicio_prev:
+                                # Calcular distancia de frenado desde v_actual hasta v_prev
+                                v_actual_ms = v_ms
+                                v_prev_ms   = v_prev / 3.6
+                                if v_actual_ms > v_prev_ms:
+                                    d_freno_prev = (v_actual_ms**2 - v_prev_ms**2) / (2 * a_freno_op)
+                                    dist_al_inicio = (km_inicio_prev - km_actual) * 1000
+                                    if dist_al_inicio <= d_freno_prev * 1.2:
+                                        v_cons_kmh = min(v_cons_kmh, v_prev)
+                                        prevencion_aplicada += 1
+                            elif en_zona:
+                                v_cons_kmh = min(v_cons_kmh, v_prev)
                                 prevencion_aplicada += 1
                         else:
-                            km_inicio = p['km_max']
-                            km_fin_prev = p['km_min'] - long_tren_km
-                            km_aviso = p['km_max'] + 0.5
-                            if km_fin_prev <= km_actual <= km_aviso:
-                                v_cons_kmh = min(v_cons_kmh, p['v_kmh'])
+                            km_inicio_prev = p['km_max']
+                            km_fin_prev    = p['km_min'] - long_tren_km
+                            en_zona = km_fin_prev <= km_actual <= km_inicio_prev
+                            if not en_zona and km_actual > km_inicio_prev:
+                                v_actual_ms = v_ms
+                                v_prev_ms   = v_prev / 3.6
+                                if v_actual_ms > v_prev_ms:
+                                    d_freno_prev = (v_actual_ms**2 - v_prev_ms**2) / (2 * a_freno_op)
+                                    dist_al_inicio = (km_actual - km_inicio_prev) * 1000
+                                    if dist_al_inicio <= d_freno_prev * 1.2:
+                                        v_cons_kmh = min(v_cons_kmh, v_prev)
+                                        prevencion_aplicada += 1
+                            elif en_zona:
+                                v_cons_kmh = min(v_cons_kmh, v_prev)
                                 prevencion_aplicada += 1
 
             if via_op == 1 and km_actual >= 42.93: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual < 43.03 else 10.0)
