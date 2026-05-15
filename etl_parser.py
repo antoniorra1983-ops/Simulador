@@ -548,6 +548,7 @@ def procesar_thdr(data, fname, via_param=1):
         df['dwell_min'] = df.apply(calc_dwell_dynamic, axis=1)
         df['dwell_cabecera_min'] = 0.0
         
+        # Asignar flota real según disponibilidad y demanda horaria
         return df, "ok"
     except Exception as e:
         import traceback
@@ -820,6 +821,134 @@ def cargar_prevenciones(data, fname):
 # =============================================================================
 # 5. PARSEO DE PLANILLA MAESTRA (mantenido sin cambios)
 # =============================================================================
+
+# =============================================================================
+# ASIGNACIÓN AUTOMÁTICA DE FLOTA
+# =============================================================================
+def asignar_flota_planilla(df):
+    """
+    Asigna tipo_tren y doble a cada viaje según la flota real de MERVAL:
+      - 27 XT-100 (max 13 dobles simultáneos)
+      - 8  XT-M   (max  4 dobles simultáneos)
+      - 1  SFE    (nunca doble)
+    La asignación se basa en perfil de demanda horaria típica de MERVAL.
+    """
+    import numpy as np
+
+    FLOTA_UNIDADES = {'XT-100': 27, 'XT-M': 8, 'SFE': 1}
+    MAX_DOBLES     = {'XT-100': 13, 'XT-M':  4, 'SFE': 0}
+    CAP_SIMPLE     = {'XT-100': 473, 'XT-M': 376, 'SFE': 780}
+
+    # Perfil de demanda horaria relativa (punta AM=8h, punta PM=18h)
+    DEMANDA_HORA = {
+        6: 0.35, 7: 0.75, 8: 1.00, 9: 0.80, 10: 0.50,
+        11: 0.45, 12: 0.55, 13: 0.60, 14: 0.55, 15: 0.50,
+        16: 0.65, 17: 0.90, 18: 1.00, 19: 0.85, 20: 0.60,
+        21: 0.40, 22: 0.30, 23: 0.20,
+    }
+    PAX_MAX = 800  # pasajeros máximos estimados por servicio en peak
+
+    df = df.copy()
+    df['demanda'] = df['t_ini'].apply(lambda t: DEMANDA_HORA.get(min(int(t//60), 23), 0.3))
+    df['pax_est'] = (df['demanda'] * PAX_MAX).astype(int)
+
+    # Ordenar por demanda descendente
+    orden = df.sort_values('pax_est', ascending=False).index.tolist()
+
+    # Guardar dobles originales de la planilla (columna Múltiple)
+    doble_original = df['doble'].copy()
+    # Inicializar tipo con XT-100 (se sobreescribe según demanda)
+    df['tipo_tren'] = 'XT-100'
+    df['doble']     = doble_original  # conservar dobles de la planilla
+
+    sfe_usado = 0
+    xtm_disp  = FLOTA_UNIDADES['XT-M']
+
+    for idx in orden:
+        pax = df.loc[idx, 'pax_est']
+        orig_doble = df.loc[idx, 'doble']
+
+        # 1. SFE — un solo servicio, el de mayor demanda, nunca doble
+        if sfe_usado == 0:
+            df.loc[idx, 'tipo_tren'] = 'SFE'
+            df.loc[idx, 'doble']     = False
+            sfe_usado = 1
+            continue
+
+        # 2. XT-M — alta demanda, hasta 4 dobles
+        if xtm_disp >= 2 and pax > CAP_SIMPLE['XT-M']:
+            df.loc[idx, 'tipo_tren'] = 'XT-M'
+            df.loc[idx, 'doble']     = True
+            xtm_disp -= 2
+            continue
+        if xtm_disp >= 1 and pax > CAP_SIMPLE['XT-100'] * 0.7:
+            df.loc[idx, 'tipo_tren'] = 'XT-M'
+            df.loc[idx, 'doble']     = False
+            xtm_disp -= 1
+            continue
+
+        # 3. XT-100 — mantener doble original si la demanda lo justifica
+        # (doble ya viene de la planilla como 'Múltiple')
+
+    # Verificar que dobles simultáneos no excedan límite por tipo
+    # Calcular t_fin estimado para verificación
+    df['_t_fin_est'] = df['t_ini'] + abs(df['km_dest'] - df['km_orig']) / 35.0 * 60  # conservador con paradas
+
+    for tipo in ['XT-100', 'XT-M']:
+        max_d   = MAX_DOBLES[tipo]
+        max_uni = FLOTA_UNIDADES[tipo]
+        # Ordenar dobles por t_ini — desactivar si exceden límite de dobles o unidades
+        dobles_idx = df[(df['tipo_tren'] == tipo) & (df['doble'])].sort_values('t_ini').index
+        for idx in dobles_idx:
+            t_ini = df.loc[idx, 't_ini']
+            activos = df[
+                (df['tipo_tren'] == tipo) &
+                (df['t_ini'] <= t_ini) &
+                (df['_t_fin_est'] >= t_ini)
+            ]
+            dobles_act = int(activos['doble'].sum())
+            uni_act    = int((~activos['doble']).sum() + activos['doble'].sum()*2)
+            # Desactivar si excede dobles simultáneos o unidades disponibles
+            if dobles_act > max_d or uni_act > max_uni:
+                df.loc[idx, 'doble'] = False
+
+    # Paso final: redistribuir dobles XT-100 excedentes a XT-M
+    # Iterar hasta que todos los picos estén dentro del límite
+    for _ in range(20):  # máx 20 iteraciones de ajuste
+        exceso = False
+        for t_chk in range(360, 1320, 5):
+            act_100 = df[(df['tipo_tren']=='XT-100') & (df['t_ini']<=t_chk) & (df['_t_fin_est']>=t_chk)]
+            uni_100 = int((~act_100['doble']).sum() + act_100['doble'].sum()*2)
+            if uni_100 <= FLOTA_UNIDADES['XT-100']:
+                continue
+            exceso = True
+            # Buscar un doble XT-100 activo en este instante para reasignar
+            dobles_100 = act_100[act_100['doble']].sort_values('t_ini')
+            for idx in dobles_100.index:
+                t_ini = df.loc[idx, 't_ini']
+                t_fin = df.loc[idx, '_t_fin_est']
+                # ¿Cabe en XT-M en todo el intervalo de este viaje?
+                ok_xtm = True
+                for t2 in range(int(t_ini), int(t_fin)+1, 5):
+                    act_xtm = df[(df['tipo_tren']=='XT-M') & (df['t_ini']<=t2) & (df['_t_fin_est']>=t2)]
+                    if (act_xtm['doble'].sum() >= MAX_DOBLES['XT-M'] or
+                        int((~act_xtm['doble']).sum()+act_xtm['doble'].sum()*2)+2 > FLOTA_UNIDADES['XT-M']):
+                        ok_xtm = False
+                        break
+                if ok_xtm:
+                    df.loc[idx, 'tipo_tren'] = 'XT-M'
+                    df.loc[idx, 'doble']     = True
+                    break
+                else:
+                    # No cabe en XT-M — convertir a simple XT-100
+                    df.loc[idx, 'doble'] = False
+                    break
+        if not exceso:
+            break
+
+    df = df.drop(columns=['demanda', 'pax_est', '_t_fin_est'])
+    return df
+
 def parsear_planilla_maestra(data, fname):
     """
     LOGICA EXACTA DE LA PLANILLA MAESTRA EFE:
@@ -1106,6 +1235,7 @@ def parsear_planilla_maestra(data, fname):
         df_viajes = pd.DataFrame(viajes)
         if not df_viajes.empty:
             df_viajes = df_viajes.drop_duplicates(subset=['_id'])
+        df_viajes = asignar_flota_planilla(df_viajes)
         return df_viajes, "ok"
     except Exception as e:
         return pd.DataFrame(), str(e)
