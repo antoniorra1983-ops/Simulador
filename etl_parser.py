@@ -962,43 +962,46 @@ def asignar_flota_planilla(df):
             asig[idx] = num; trenes[num] = row['_tf']
         return asig
 
-    def _rostering_con_dobles(df_sub, base, max_t):
-        """Rostering greedy — dobles reciben par de números consecutivos (ej. '6+7')."""
-        if df_sub.empty: return {}
-        df_sub = df_sub.sort_values('t_ini').copy()
-        df_sub['_tf'] = df_sub['t_ini'] + abs(df_sub['km_dest']-df_sub['km_orig'])/35*60 + 10
-        # Trenes disponibles en pares: base, base+1 para dobles
-        trenes = {base+i: 0.0 for i in range(max_t)}
-        asig = {}
-        for idx, row in df_sub.iterrows():
-            es_doble = row.get('doble', False)
-            if es_doble:
-                # Buscar 2 trenes libres consecutivos
-                nums = sorted(trenes.keys())
-                elegidos = None
-                for i in range(len(nums)-1):
-                    t1, t2 = nums[i], nums[i+1]
-                    if trenes[t1] <= row['t_ini'] and trenes[t2] <= row['t_ini']:
-                        elegidos = (t1, t2); break
-                if elegidos is None:  # no hay par libre → usar los 2 que se liberan antes
-                    sorted_t = sorted(trenes.items(), key=lambda x: x[1])
-                    elegidos = (sorted_t[0][0], sorted_t[1][0])
-                asig[idx] = f'{elegidos[0]}+{elegidos[1]}'
-                trenes[elegidos[0]] = row['_tf']
-                trenes[elegidos[1]] = row['_tf']
-            else:
-                libres = {t:tl for t,tl in trenes.items() if tl <= row['t_ini']}
-                if libres: num = min(libres, key=libres.get)
-                else:      num = min(trenes, key=trenes.get)
-                asig[idx] = str(num)
-                trenes[num] = row['_tf']
-        return asig
+    # ================================================================
+    # ROSTERING — num_servicio ES el tren físico en la planilla EFE
+    # Belloto y Limache mezclan XT-100 y XT-M según asignación
+    # Dobles: motriz_num muestra par "X+Y" con numeración consecutiva
+    # ================================================================
 
-    m100 = _rostering_con_dobles(df[df['tipo_tren']=='XT-100'], 1,  27)
-    mxtm = _rostering_con_dobles(df[df['tipo_tren']=='XT-M'],   28,  8)
-    msfe = {idx: '412' for idx in df[df['tipo_tren']=='SFE'].index}
-    all_m = {**m100, **mxtm, **msfe}
-    df['motriz_num'] = df.index.map(all_m).fillna('')
+    # El num_servicio ya identifica el tren físico que hace V1↔V2
+    # Construir motriz_num desde num_servicio, con par para dobles
+
+    # Numeración por base según prefijo del servicio:
+    # 2xx → EB-PU (Belloto) → 201-204
+    # 4xx → SA-PU/PU-SA (Belloto/Puerto) → 401-...
+    # 6xx → LI-PU/PU-LI (Limache) → 601-...
+    # SFE → siempre 412
+
+    # Para dobles: el par de números se deriva del num_servicio
+    # asignando números consecutivos a los 2 trenes del mismo servicio
+
+    # Contador de números reales por rango
+    # Puerto (1-4): servicios 401-499 que inician en Puerto
+    # Belloto (5-20 + 412): servicios 201-299 y 401-499 desde Belloto
+    # Limache (21-36): servicios 601-699
+
+    def num_a_motriz(num_srv, es_doble, tipo_tren, doble_idx=0):
+        """Convierte num_servicio a número de motriz."""
+        if tipo_tren == 'SFE':
+            return '412'
+        n = str(num_srv)
+        # Usar directamente el num_servicio como identificador del tren
+        # Los dobles muestran el par con numeración interna
+        if es_doble:
+            return f'{n}+{int(n)+1}'
+        return n
+
+    df['motriz_num'] = df.apply(
+        lambda r: '412' if r['tipo_tren']=='SFE'
+        else (f"{r['num_servicio']}+{int(r['num_servicio'])+1}" if r['doble']
+              else str(r['num_servicio'])),
+        axis=1
+    )
 
     df = df.drop(columns=['demanda', 'pax_est', '_t_fin_est'])
     return df
