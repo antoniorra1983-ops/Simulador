@@ -478,9 +478,12 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 
             if v_new < 0.1 and v_ms < 0.1:
                 if dist_restante > 10.0:
-                    estado_marcha = "ACCEL"  # forzar arranque gradual via máquina de estados
-                    v_new = 0.1  # velocidad mínima para salir del punto muerto
-                    a_net = f.get('jerk_ms3', 0.8) * dt  # primer impulso suave
+                    if estado_marcha == "BRAKE_STATION":
+                        # Tren frenó antes del destino — el tramo termina aquí
+                        break
+                    estado_marcha = "ACCEL"  # antiatasco gradual
+                    v_new = 0.1
+                    a_net = f.get('jerk_ms3', 0.8) * dt
                 else:
                     t_horas += (dist_restante / 1.0) / 3600.0
                     break
@@ -504,9 +507,12 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 f_limite_potencia_inst = p_max_op_w_real / max(0.1, v_ms)
                 f_absoluta_disp_inst = min(f_disp_trac_real, f_limite_potencia_inst)
                 f_motor_real = min(f_real_total, f_absoluta_disp_inst)
-                carga_pct = f_motor_real / max(1.0, f_absoluta_disp_inst) 
+                # Eficiencia dinámica: carga relativa a la potencia nominal del motor
+                # (no a la fuerza máxima disponible que es enorme a baja velocidad)
+                p_real_w = f_motor_real * max(0.1, v_ms)
+                carga_pct = p_real_w / max(1.0, p_max_w_nominal)
                 eta_base = f.get('eta_motor', 0.92)
-                eta_din = eta_base * (1.0 - 0.2 * (1.0 - max(0.1, carga_pct))**3)
+                eta_din = eta_base * (1.0 - 0.15 * (1.0 - max(0.1, carga_pct))**3)
                 trabajo_j_trac = f_motor_real * step_m
                 trc += (trabajo_j_trac / 3_600_000.0) / eta_din
                 aux_catenaria += aux_kwh_step
