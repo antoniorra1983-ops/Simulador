@@ -413,16 +413,18 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 f_regen_tramo = min(f_req_freno, f_disp_freno)
                 a_net_target = min((-f_regen_tramo - f_res_total) / masa_dinamica_kg, -0.15)
             elif estado_marcha == "ACCEL":
-                f_limite_potencia = p_max_op_w_real / max(0.1, v_ms)
+                # pct_trac limita la fuerza de arranque (IGBT/corriente), NO la potencia del motor
+                # A alta velocidad el motor puede desarrollar plena potencia aunque pct_trac < 100%
+                f_limite_potencia = p_max_op_w_real / max(0.1, v_ms)  # límite por potencia plena del motor
                 f_absoluta_disp = min(f_disp_trac_real, f_limite_potencia)
-                f_piloto = f_trac_max_n_nominal * (pct_trac / 100.0)
-                p_piloto = p_max_w_nominal * (pct_trac / 100.0)
-                f_piloto_disp = min(f_piloto, p_piloto / max(0.1, v_ms))
-                f_motor = min(f_piloto_disp, f_absoluta_disp)  # solo el notch del piloto, sin mínimo forzado
+                f_piloto = f_trac_max_n_nominal * (pct_trac / 100.0)  # fuerza máxima reducida por IGBT
+                f_piloto_disp = min(f_piloto, f_limite_potencia)       # a alta v, potencia plena disponible
+                f_motor = min(f_piloto_disp, f_absoluta_disp)
                 a_net_target = (f_motor - f_res_total) / masa_dinamica_kg
             elif estado_marcha == "CRUISE":
+                # En CRUISE el motor mantiene velocidad — no hay límite de pct_trac en régimen
                 f_motor = max(0.0, f_res_total)
-                f_motor = min(f_motor, f_disp_trac_real * (pct_trac / 100.0))
+                f_motor = min(f_motor, f_disp_trac_real)  # potencia plena disponible en crucero
                 a_net_target = (f_motor - f_res_total) / masa_dinamica_kg
             elif estado_marcha == "COAST":
                 a_net_target = (-f_res_total) / masa_dinamica_kg
