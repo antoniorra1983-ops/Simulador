@@ -308,7 +308,14 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             else: aux_kw_nominal = f.get('aux_kw_cool', 58.76) * n_uni_inst
             aux_kw_nominal_final = aux_kw_nominal
             
-            v_cons_kmh = max(5.0, _VEL_ARRAY_RM[idx_km] if use_rm else _VEL_ARRAY_NORM[idx_km])
+            _v_raw = _VEL_ARRAY_RM[idx_km] if use_rm else _VEL_ARRAY_NORM[idx_km]
+            if _v_raw == 0:
+                # Zona de andén: usar velocidad del primer segmento >0 adelante
+                for _di in range(1, 500):
+                    _idx2 = min(44999, idx_km + _di)
+                    _v2 = _VEL_ARRAY_RM[_idx2] if use_rm else _VEL_ARRAY_NORM[_idx2]
+                    if _v2 > 0: _v_raw = _v2; break
+            v_cons_kmh = max(5.0, _v_raw)
             if v_consigna_override is not None: v_cons_kmh = min(v_cons_kmh, v_consigna_override)
             v_cons_kmh = min(v_cons_kmh, v_limit_thdr)
             
