@@ -996,12 +996,37 @@ def asignar_flota_planilla(df):
             return f'{n}+{int(n)+1}'
         return n
 
-    df['motriz_num'] = df.apply(
-        lambda r: '412' if r['tipo_tren']=='SFE'
-        else (f"{r['num_servicio']}+{int(r['num_servicio'])+1}" if r['doble']
-              else str(r['num_servicio'])),
-        axis=1
-    )
+    # Rostering real: asignar números de tren físico (1-27 XT-100, 28-35 XT-M, 412 SFE)
+    # usando greedy por disponibilidad temporal, agrupado por tipo
+    DWELL_T = 16.0
+    df['_tf'] = df['t_ini'] + abs(df['km_dest']-df['km_orig'])/40*60 + DWELL_T
+
+    def greedy_rostering(df_sub, nums):
+        if df_sub.empty: return {}
+        pool = {n: 0.0 for n in nums}
+        asig = {}
+        for idx, row in df_sub.sort_values('t_ini').iterrows():
+            if row.get('doble', False):
+                # 2 trenes consecutivos libres
+                sn = sorted(pool)
+                par = next(((sn[i],sn[i+1]) for i in range(len(sn)-1)
+                            if pool[sn[i]]<=row['t_ini'] and pool[sn[i+1]]<=row['t_ini']), None)
+                if par is None:
+                    par = tuple(sorted(pool, key=pool.get)[:2])
+                asig[idx] = f'{par[0]}+{par[1]}'
+                pool[par[0]] = row['_tf']; pool[par[1]] = row['_tf']
+            else:
+                libres = {k:v for k,v in pool.items() if v<=row['t_ini']}
+                n = min(libres or pool, key=(libres or pool).get)
+                asig[idx] = str(n); pool[n] = row['_tf']
+        return asig
+
+    asig_sfe  = {i: '412' for i in df[df['tipo_tren']=='SFE'].index}
+    asig_xtm  = greedy_rostering(df[df['tipo_tren']=='XT-M'],   list(range(28,36)))
+    asig_xt100= greedy_rostering(df[df['tipo_tren']=='XT-100'],  list(range(1,28)))
+    all_asig  = {**asig_sfe, **asig_xtm, **asig_xt100}
+    df['motriz_num'] = df.index.map(all_asig).fillna('?')
+    df = df.drop(columns=['_tf'], errors='ignore')
 
     df = df.drop(columns=['demanda', 'pax_est', '_t_fin_est'])
     return df
