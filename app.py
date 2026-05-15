@@ -502,9 +502,6 @@ def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, use_
                 )
 
 
-# Versión de asignación de flota — incrementar cuando cambie asignar_flota_planilla
-_FLEET_ASSIGN_VERSION = '2.0'
-
 def main():
     def reset_plan_state():
         keys_to_clear = [
@@ -704,7 +701,8 @@ def main():
                                 st.session_state['flota_map_v2'] = pd.DataFrame([{"Ruta": r, "Total Viajes": df_temp['svc_type'].value_counts()[r], "XT-100": df_temp['svc_type'].value_counts()[r], "XT-M": 0, "SFE": 0} for r in rutas_unicas])
                             
                             df_flota_edit = st.data_editor(st.session_state['flota_map_v2'], hide_index=True, use_container_width=True)
-                            st.session_state['temp_df_plan'] = df_temp
+                            from etl_parser import asignar_flota_planilla
+                            st.session_state['temp_df_plan'] = asignar_flota_planilla(df_temp.copy())
                             st.session_state['temp_flota_edit'] = df_flota_edit
                     except Exception as err:
                         st.error(f"Fallo de lectura de planilla maestra: {err}")
@@ -796,16 +794,7 @@ def main():
                         if 'temp_df_plan' not in st.session_state: st.stop()
                         df_sint = st.session_state['temp_df_plan'].copy().sort_values('t_ini')
                         # Si todos son XT-100, re-ejecutar asignación de flota
-                        # Invalidar si la versión de asignación cambió
-                        if st.session_state.get('_fleet_ver') != _FLEET_ASSIGN_VERSION:
-                            from etl_parser import asignar_flota_planilla
-                            df_sint = asignar_flota_planilla(df_sint)
-                            st.session_state['temp_df_plan'] = df_sint
-                            st.session_state['_fleet_ver'] = _FLEET_ASSIGN_VERSION
-                        elif 'tipo_tren' in df_sint.columns and df_sint['tipo_tren'].nunique() == 1:
-                            from etl_parser import asignar_flota_planilla
-                            df_sint = asignar_flota_planilla(df_sint)
-                            st.session_state['temp_df_plan'] = df_sint
+                        # tipo_tren ya viene asignado desde parsear_planilla_maestra
 
                     if df_sint.empty: st.stop()
                     st.session_state['raw_plan_df'] = df_sint
