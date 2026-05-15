@@ -701,14 +701,34 @@ def main():
                             from etl_parser import asignar_flota_planilla
                             df_asignado = asignar_flota_planilla(df_temp.copy())
                             # Inicializar tabla con asignación real (no todo XT-100)
-                            if 'flota_map_v2' not in st.session_state or set(st.session_state['flota_map_v2']['Ruta']) != set(rutas_unicas):
+                            if 'flota_map_v2' not in st.session_state or set(st.session_state['flota_map_v2']['Trayecto'].dropna()) != set(rutas_unicas+['TOTAL']):
                                 filas = []
                                 for r in rutas_unicas:
                                     sub = df_asignado[df_asignado['svc_type']==r]
-                                    filas.append({'Ruta':r,'Total Viajes':len(sub),
-                                        'XT-100':int((sub['tipo_tren']=='XT-100').sum()),
-                                        'XT-M':int((sub['tipo_tren']=='XT-M').sum()),
-                                        'SFE':int((sub['tipo_tren']=='SFE').sum())})
+                                    filas.append({
+                                        'Trayecto': r,
+                                        'Simple': int((~sub['doble']).sum()),
+                                        'Doble':  int(sub['doble'].sum()),
+                                        'Total':  len(sub),
+                                        'XT-100': int((sub['tipo_tren']=='XT-100').sum()),
+                                        'XT-M':   int((sub['tipo_tren']=='XT-M').sum()),
+                                        'SFE':    int((sub['tipo_tren']=='SFE').sum()),
+                                        'km/viaje': round(abs(sub['km_dest'].iloc[0]-sub['km_orig'].iloc[0]),2) if len(sub)>0 else 0,
+                                        'Total km': round(sum(abs(r2['km_dest']-r2['km_orig'])*(2 if r2['doble'] else 1) for _,r2 in sub.iterrows()),2),
+                                    })
+                                # Fila total
+                                total_km = sum(f['Total km'] for f in filas)
+                                filas.append({
+                                    'Trayecto': 'TOTAL',
+                                    'Simple': sum(f['Simple'] for f in filas),
+                                    'Doble':  sum(f['Doble']  for f in filas),
+                                    'Total':  sum(f['Total']  for f in filas),
+                                    'XT-100': sum(f['XT-100'] for f in filas),
+                                    'XT-M':   sum(f['XT-M']   for f in filas),
+                                    'SFE':    sum(f['SFE']    for f in filas),
+                                    'km/viaje': '',
+                                    'Total km': round(total_km, 2),
+                                })
                                 st.session_state['flota_map_v2'] = pd.DataFrame(filas)
                             df_flota_edit = st.data_editor(st.session_state['flota_map_v2'], hide_index=True, use_container_width=True)
                             st.session_state['temp_df_plan'] = df_asignado
