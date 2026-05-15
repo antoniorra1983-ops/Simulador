@@ -792,16 +792,8 @@ def main():
                     else:
                         if 'temp_df_plan' not in st.session_state: st.stop()
                         df_sint = st.session_state['temp_df_plan'].copy().sort_values('t_ini')
-                        
-                        asignaciones = {}
-                        for _, r in st.session_state['temp_flota_edit'].iterrows():
-                            asignaciones[r['Ruta']] = ['XT-100']*int(r.get('XT-100', 0)) + ['XT-M']*int(r.get('XT-M', 0)) + ['SFE']*int(r.get('SFE', 0))
-                            
-                        def asignar_tren(ruta):
-                            if ruta in asignaciones and len(asignaciones[ruta]) > 0: return asignaciones[ruta].pop(0)
-                            return 'XT-100'
-                            
-                        df_sint['tipo_tren'] = df_sint['svc_type'].apply(asignar_tren)
+                        # tipo_tren y doble ya vienen asignados correctamente desde parsear_planilla_maestra
+                        # (asignar_flota_planilla distribuye XT-100/XT-M/SFE según flota real)
 
                     if df_sint.empty: st.stop()
                     st.session_state['raw_plan_df'] = df_sint
