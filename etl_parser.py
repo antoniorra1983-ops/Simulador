@@ -938,112 +938,103 @@ def asignar_flota_planilla(df):
         return n
 
     # ================================================================
-    # CARRUSEL CERRADO — el tren que llega en V2 sale en V1 y viceversa
-    # Puerto (4 trenes):  1-4   → inician PU-* mañana temprana
-    # Belloto (16 trenes): 5-20 + 412(SFE) → inician SA-PU / EB-PU
-    # Limache (16 trenes): 21-36 → inician LI-PU (XT-100 y XT-M)
+    # CARRUSEL CERRADO — GREEDY CON POSICIÓN GEOGRÁFICA
+    #
+    # Regla: un tren solo puede cubrir un servicio si está en el
+    # terminal de salida de ese servicio cuando parte.
+    # Si no hay tren disponible en ese terminal, se usa el que
+    # llega antes (viaje vacío implícito).
+    #
+    # Números de tren:
+    #   1-4   → base Puerto     (PU)
+    #   5-20  → base El Belloto (EB/SA)
+    #   21-36 → base Limache    (LI)
+    #   412   → SFE, base Belloto
     # ================================================================
-    DWELL_T = 16.0  # minutos mínimos en terminal
-    df['_tf'] = df['t_ini'] + abs(df['km_dest'] - df['km_orig']) / 40.0 * 60 + DWELL_T
 
-    def carrusel(df_sub, pool_nums):
-        """
-        Asigna número de tren respetando el carrusel:
-        el tren que llega de un sentido toma el siguiente servicio
-        en el sentido opuesto, según disponibilidad temporal.
-        Para dobles: asigna par de números consecutivos disponibles.
-        """
-        if df_sub.empty: return {}
-        pool = {n: 0.0 for n in pool_nums}  # n → t_libre
-        asig = {}
-        for idx, row in df_sub.sort_values('t_ini').iterrows():
-            es_doble = row.get('doble', False)
-            if es_doble:
-                # Buscar 2 trenes consecutivos disponibles
-                nums = sorted(pool)
-                par = None
-                for i in range(len(nums) - 1):
-                    a, b = nums[i], nums[i+1]
-                    if b == a + 1 and pool[a] <= row['t_ini'] and pool[b] <= row['t_ini']:
-                        par = (a, b); break
-                if par is None:
-                    # No hay par consecutivo libre → tomar los 2 con menor t_libre
-                    top2 = sorted(pool, key=pool.get)[:2]
-                    par = (min(top2), max(top2))
-                asig[idx] = f'{par[0]}+{par[1]}'
-                pool[par[0]] = row['_tf']
-                pool[par[1]] = row['_tf']
-            else:
-                libres = {k: v for k, v in pool.items() if v <= row['t_ini']}
-                n = min(libres or pool, key=(libres or pool).get)
-                asig[idx] = str(n)
-                pool[n] = row['_tf']
-        return asig
+    DWELL_T = 16.0
 
-    # SFE siempre 412
-    asig_sfe = {i: '412' for i in df[df['tipo_tren'] == 'SFE'].index}
+    ORIGEN  = {'PU-LI':'PU','PU-SA':'PU','PU-EB':'PU',
+               'LI-PU':'LI','SA-PU':'SA','EB-PU':'EB'}
+    DESTINO = {'PU-LI':'LI','PU-SA':'SA','PU-EB':'EB',
+               'LI-PU':'PU','SA-PU':'PU','EB-PU':'PU'}
 
-    # XT-M: números 28-35 — Belloto y Limache mezclados
-    asig_xtm = carrusel(df[df['tipo_tren'] == 'XT-M'], list(range(28, 36)))
+    BASE = {}
+    for n in range(1, 5):   BASE[n] = 'PU'
+    for n in range(5, 21):  BASE[n] = 'EB'
+    BASE[412] = 'EB'
+    for n in range(21, 37): BASE[n] = 'LI'
 
-    # XT-100: números 1-27
-    # Prioridad de base para el PRIMER servicio del día:
-    # 1-4  → PU-* (Puerto)
-    # 5-20 → SA-PU / EB-PU (Belloto)
-    # 21-27→ LI-PU (Limache, el resto va al pool general)
-    # Después de las 10:00 cualquier tren cubre cualquier servicio
-    PUNTA_FIN = 600  # 10:00
-    df_xt100 = df[df['tipo_tren'] == 'XT-100'].sort_values('t_ini').copy()
+    # Estado: posición actual y tiempo libre de cada tren
+    estado = {n: {'pos': BASE.get(n,'PU'), 't_libre': 0.0}
+              for n in list(range(1, 37)) + [412]}
 
-    # Separar servicios tempranos por base para asignar prioridad
-    pool_xt100 = {n: 0.0 for n in range(1, 28)}
+    pool_xtm   = set(range(28, 36))
+    pool_xt100 = set(range(1,  28))
+    pool_sfe   = {412}
 
-    asig_xt100 = {}
-    for idx, row in df_xt100.iterrows():
+    def mi_pool(tipo):
+        if tipo == 'SFE':  return pool_sfe
+        if tipo == 'XT-M': return pool_xtm
+        return pool_xt100
+
+    asig = {}
+    df_sorted = df.sort_values('t_ini').copy()
+
+    for idx, row in df_sorted.iterrows():
+        svc      = row['svc_type']
+        orig     = ORIGEN.get(svc, 'PU')
+        dest     = DESTINO.get(svc, 'PU')
+        t        = row['t_ini']
         es_doble = row.get('doble', False)
-        t = row['t_ini']
-        svc = row.get('svc_type', '')
+        tipo     = row['tipo_tren']
+        tf       = t + abs(row['km_dest']-row['km_orig'])/40*60 + DWELL_T
+        pool     = mi_pool(tipo)
 
-        # Determinar pool prioritario según base y hora
-        if t < PUNTA_FIN:
-            if svc in ('SA-PU', 'EB-PU'):
-                prio = {k: v for k, v in pool_xt100.items() if 5 <= k <= 20}
-            elif svc in ('LI-PU',):
-                prio = {k: v for k, v in pool_xt100.items() if 21 <= k <= 27}
-            elif svc in ('PU-LI', 'PU-SA', 'PU-EB'):
-                prio = {k: v for k, v in pool_xt100.items() if 1 <= k <= 4}
-            else:
-                prio = pool_xt100
-        else:
-            prio = pool_xt100
-
-        libres_prio = {k: v for k, v in prio.items() if v <= t}
-        libres_all  = {k: v for k, v in pool_xt100.items() if v <= t}
+        # Trenes del tipo correcto disponibles en el terminal correcto
+        en_orig = [n for n in pool
+                   if estado[n]['pos'] == orig and estado[n]['t_libre'] <= t]
 
         if es_doble:
-            def _buscar_par(pool_d):
-                nums = sorted(pool_d)
-                for i in range(len(nums)-1):
-                    a, b = nums[i], nums[i+1]
-                    if b == a+1 and pool_xt100[a] <= t and pool_xt100[b] <= t:
-                        return (a, b)
-                return None
+            # Preferir par consecutivo
+            en_orig_s = sorted(en_orig)
+            par = None
+            for i in range(len(en_orig_s)-1):
+                a, b = en_orig_s[i], en_orig_s[i+1]
+                if b == a+1:
+                    par = (a, b); break
+            if par is None and len(en_orig_s) >= 2:
+                par = (en_orig_s[0], en_orig_s[1])
 
-            par = _buscar_par(libres_prio) or _buscar_par(libres_all)
-            if par is None:
-                top2 = sorted(pool_xt100, key=pool_xt100.get)[:2]
-                par = (min(top2), max(top2))
-            asig_xt100[idx] = f'{par[0]}+{par[1]}'
-            pool_xt100[par[0]] = row['_tf']
-            pool_xt100[par[1]] = row['_tf']
+            if par:
+                a, b = par
+                asig[idx] = f'{a}+{b}'
+                for n in [a, b]:
+                    estado[n]['pos'] = dest
+                    estado[n]['t_libre'] = tf
+            else:
+                # No hay 2 trenes disponibles en orig → usar los 2 que lleguen antes
+                todos = sorted(pool, key=lambda n: estado[n]['t_libre'])
+                a, b = todos[0], todos[1]
+                asig[idx] = f'{a}+{b}'
+                for n in [a, b]:
+                    estado[n]['pos'] = dest
+                    # El tiempo libre es el máximo entre cuando llegaban y ahora + viaje
+                    # t_libre = cuando queda libre en destino = t_ini_servicio + duracion
+                estado[n]['t_libre'] = t + abs(row['km_dest']-row['km_orig'])/40*60 + DWELL_T
         else:
-            n = min(libres_prio or libres_all or pool_xt100,
-                    key=(libres_prio or libres_all or pool_xt100).get)
-            asig_xt100[idx] = str(n)
-            pool_xt100[n] = row['_tf']
+            if en_orig:
+                # Tomar el que lleva más tiempo esperando en este terminal
+                n = min(en_orig, key=lambda n: estado[n]['t_libre'])
+            else:
+                # Ninguno en orig → tomar el que se libera antes
+                n = min(pool, key=lambda n: estado[n]['t_libre'])
 
-    all_asig = {**asig_sfe, **asig_xtm, **asig_xt100}
-    df['motriz_num'] = df.index.map(all_asig).fillna('?')
+            asig[idx] = str(n)
+            estado[n]['pos'] = dest
+            estado[n]['t_libre'] = max(estado[n]['t_libre'], t) + abs(row['km_dest']-row['km_orig'])/40*60 + DWELL_T
+
+    df['motriz_num'] = df.index.map(asig).fillna('?')
     df = df.drop(columns=['_tf'], errors='ignore')
 
     df = df.drop(columns=['demanda', 'pax_est'], errors='ignore')
