@@ -484,7 +484,22 @@ def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, use_
 
             if filas:
                 df_tabla = pd.DataFrame(filas)
-                st.caption(f"{len(df_tabla)} servicios | {N_EST} estaciones | {KM_TOTAL:.1f} km")
+                col_cap, col_btn = st.columns([4, 1])
+                with col_cap:
+                    st.caption(f"{len(df_tabla)} servicios | {N_EST} estaciones | {KM_TOTAL:.1f} km")
+                with col_btn:
+                    import io as _io
+                    _buf = _io.BytesIO()
+                    with pd.ExcelWriter(_buf, engine='openpyxl') as _wr:
+                        df_tabla.to_excel(_wr, index=False, sheet_name=f'Via{via}')
+                    st.download_button(
+                        label='⬇ xlsx',
+                        data=_buf.getvalue(),
+                        file_name=f'horario_simulado_via{via}.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        key=f'dl_thdr_v{via}',
+                        use_container_width=True,
+                    )
                 st.dataframe(
                     df_tabla,
                     use_container_width=True,
