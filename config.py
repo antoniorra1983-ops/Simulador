@@ -134,6 +134,7 @@ SPEED_PROFILE = [
 # =============================================================================
 FLOTA = {
     "XT-100": {
+        "largo_m"      : 48.92,          # Largo real del tren (m)
         "tara_t"       : 86.1,  
         "m_iner_t"     : 7.20,  
         "coches"       : 2,  
@@ -160,13 +161,14 @@ FLOTA = {
         "f_compresor_dwell": 1.03       # +3% Neumática (Puertas/Frenos sin balonas)
     },
     "XT-M": {
-        "tara_t"       : 95.0,  
+        "largo_m"      : 46.0,           # Largo real del tren (m)
+        "tara_t"       : 80.0,          # 80.000 kg
         "m_iner_t"     : 8.0,  
         "coches"       : 2,  
         "cap_sent"     : 94,  
         "cap_max"      : 376,
         "n_motores"    : 4,  
-        "a_max_ms2"    : 1.0,  
+        "a_max_ms2"    : 0.9,           # Deceleración máx 0.9 m/s²
         "a_freno_ms2"  : 1.2,
         "jerk_ms3"     : 1.3,           # Igualado a XT-100 (Alstom certificado)
         "v_freno_min"  : 3.81,  
@@ -186,7 +188,8 @@ FLOTA = {
         "f_compresor_dwell": 1.06       # +3% Base + 3% Balonas Neumáticas
     },
     "SFE": {
-        "tara_t"       : 141.0,  
+        "largo_m"      : 77.2,           # Largo real del tren (m)
+        "tara_t"       : 140.0,          # 140.000 kg  
         "m_iner_t"     : 11.2,  
         "coches"       : 3,  
         "cap_max"      : 780,
