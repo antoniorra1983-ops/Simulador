@@ -584,7 +584,7 @@ def main():
         
         st.info("💡 **Gobernador Operativo (Mapa Histórico)**\n\nEn la pestaña del *Gemelo Digital*, el % de Tracción se bloquea automáticamente al 75% o 50% según la fecha.\n\nEn el *Planificador*, podrás usar tu perilla libremente.")
         
-        use_rm      = st.checkbox("🚦 Velocidades RM (Riel Mojado)", value=False, on_change=reset_plan_state)
+        use_rm      = st.checkbox("🚦 Velocidades RM (Riel Mojado)", value=True, on_change=reset_plan_state)
         use_pend    = st.toggle("⛰️ Pendientes Físicas", value=True, on_change=reset_plan_state)
         use_regen   = st.toggle("⚡ Activar Regeneración", value=True, on_change=reset_plan_state)
         tipo_regen  = st.radio("Modelo de Regeneración", ["Físico (Load Flow)", "Probabilístico (Headway)"], on_change=reset_plan_state)
