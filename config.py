@@ -139,10 +139,12 @@ FLOTA = {
         "m_iner_t"     : 7.20,  
         "coches"       : 2,  
         "cap_sent"     : 94,  
-        "cap_max"      : 473,           # ALSTOM: 35.48t (Carga Máx / 75kg)
+        "cap_max"      : 398,           # C2 (4 pax/m²) — manual TRA 001
         "n_motores"    : 4,  
         "a_max_ms2"    : 1.0,  
-        "a_freno_ms2"  : 1.2,
+        "a_max_ms2_v2"       : 0.71,          # Aceleración >55 km/h — manual TRA 001
+        "v_trans_accel_kmh"  : 55.0,          # Velocidad de transición 1°→2° régimen
+        "a_freno_ms2"  : 0.94,          # Freno servicio normal >=0.94 m/s² — manual TRA 001
         "jerk_ms3"     : 1.3,           # ALSTOM: Dinámica certificada
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.92,  
@@ -153,8 +155,8 @@ FLOTA = {
         "f_freno_max_kn": 105.0,  
         "p_max_kw"     : 720.0,
         "p_freno_max_kw": 864.0,
-        "aux_kw_cool"  : 58.76,         # Techo Verano (HVAC 100%)
-        "aux_kw_heat"  : 65.16,         # Techo Invierno (Resistencias 100%)
+        "aux_kw_cool"  : 116.0,         # 2 coches × 2 unidades × 29kW — manual TRA 001
+        "aux_kw_heat"  : 80.0,          # Estimado proporcional XT-M (sin dato explícito en manual)
         "p_compresor_kw": 3.68,         # ALSTOM VFD Soft-Load
         "p_puertas_kw" : 0.9,           # 6 puertas x 150W (Unilateral)
         "p_vent_trac_kw": 7.6,          # Ventilación forzada
@@ -169,7 +171,7 @@ FLOTA = {
         "cap_max"      : 376,
         "n_motores"    : 4,  
         "a_max_ms2"    : 0.9,           # Deceleración máx 0.9 m/s²
-        "a_freno_ms2"  : 1.2,
+        "a_freno_ms2"  : 1.0,
         "jerk_ms3"     : 1.3,           # Igualado a XT-100 (Alstom certificado)
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.95,          # Eficiencia Certificada SEPSA/Alstom
@@ -180,8 +182,8 @@ FLOTA = {
         "f_freno_max_kn": 110.0,  
         "p_max_kw"     : 1040.0,
         "p_freno_max_kw": 1248.0,
-        "aux_kw_cool"  : 68.0,         
-        "aux_kw_heat"  : 78.0,         
+        "aux_kw_cool"  : 95.0,          # Auxiliares verano: HVAC frío 70kW + base + comp (manual MC-EFER)
+        "aux_kw_heat"  : 80.0,          # Auxiliares invierno: calef+piso 59kW + base + comp
         "p_compresor_kw": 4.60,  
         "p_puertas_kw" : 0.9,    
         "p_vent_trac_kw": 8.5,
