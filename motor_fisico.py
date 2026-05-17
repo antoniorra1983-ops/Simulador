@@ -758,8 +758,13 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
             None, r.get('maniobra'), estacion_anio, r.get('t_ini', 0.0), False, prevenciones
         )
         
-        eta_red = dict_regen.get(r.name, 0.0) if (use_regen and dict_regen) else 0.0
-        reg_util = reg_bruta * eta_red
+        # reg_bruta: energía regenerativa calculada por el motor (siempre se aplica)
+        # use_regen + dict_regen: receptividad adicional de la red por subestaciones
+        if use_regen and dict_regen:
+            eta_red = dict_regen.get(r.name, 0.0)
+            reg_util = reg_bruta * eta_red
+        else:
+            reg_util = reg_bruta  # regeneración siempre se devuelve a la red
         kwh_reostato = max(0.0, reg_bruta - reg_util)
         neto = max(0.0, trc + aux_catenaria - reg_util)
         
