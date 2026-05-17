@@ -768,7 +768,11 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     df_e[['kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato',
           'kwh_viaje_neto', 't_viaje_h', 'prevencion_aplicada']] = df_e.apply(_wrapper, axis=1)
     df_e['t_fin'] = df_e['t_ini'] + df_e['t_viaje_h'] * 60.0
-    df_e['tren_km'] = df_e.apply(_calc_tren_km_real_motor, axis=1)
+    df_e['tren_km']    = df_e.apply(_calc_tren_km_real_motor, axis=1)
+    # dist_via_km: distancia de vía recorrida (sin factor doble) — para IDE
+    df_e['dist_via_km'] = df_e.apply(
+        lambda r: abs(r.get('km_dest',0.0)-r.get('km_orig',0.0)), axis=1
+    )
         
     import re as _re
     T_PRE_H  = 1.0
