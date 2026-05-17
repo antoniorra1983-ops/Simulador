@@ -868,8 +868,9 @@ def asignar_flota_planilla(df):
         pax = df.loc[idx, 'pax_est']
         orig_doble = df.loc[idx, 'doble']
 
-        # 1. SFE — un solo servicio simple (no puede hacer doble físicamente)
-        if sfe_usado == 0 and not df.loc[idx, 'doble']:
+        # 1. SFE — solo servicios LI-PU o PU-LI, simples
+        svc_idx = df.loc[idx, 'svc_type']
+        if sfe_usado == 0 and not df.loc[idx, 'doble'] and svc_idx in ('LI-PU','PU-LI'):
             df.loc[idx, 'tipo_tren'] = 'SFE'
             sfe_usado = 1
             continue
@@ -939,25 +940,20 @@ def asignar_flota_planilla(df):
 
     # ================================================================
     # CARRUSEL CERRADO — GREEDY CON POSICIÓN GEOGRÁFICA
-    #
-    # Regla: un tren solo puede cubrir un servicio si está en el
-    # terminal de salida de ese servicio cuando parte.
-    # Si no hay tren disponible en ese terminal, se usa el que
-    # llega antes (viaje vacío implícito).
-    #
-    # Números de tren:
-    #   1-4   → base Puerto     (PU)
-    #   5-20  → base El Belloto (EB/SA)
-    #   21-36 → base Limache    (LI)
-    #   412   → SFE, base Belloto
     # ================================================================
 
-    DWELL_T = 16.0
+    import heapq as _hq
 
+    DWELL_POR_TERMINAL = {'PU':15.0, 'LI':15.0, 'SA':8.0, 'EB':8.0}
     ORIGEN  = {'PU-LI':'PU','PU-SA':'PU','PU-EB':'PU',
                'LI-PU':'LI','SA-PU':'SA','EB-PU':'EB'}
     DESTINO = {'PU-LI':'LI','PU-SA':'SA','PU-EB':'EB',
                'LI-PU':'PU','SA-PU':'PU','EB-PU':'PU'}
+    T_ENTRE = {
+        ('PU','LI'):52,('LI','PU'):51,('PU','SA'):41,('SA','PU'):40,
+        ('PU','EB'):34,('EB','PU'):34,('LI','SA'):93,('SA','LI'):93,
+        ('LI','EB'):87,('EB','LI'):87,('SA','EB'):75,('EB','SA'):75,
+    }
 
     BASE = {}
     for n in range(1, 5):   BASE[n] = 'PU'
@@ -965,17 +961,17 @@ def asignar_flota_planilla(df):
     BASE[412] = 'EB'
     for n in range(21, 37): BASE[n] = 'LI'
 
-    # Estado: posición actual y tiempo libre de cada tren
     estado = {n: {'pos': BASE.get(n,'PU'), 't_libre': 0.0}
               for n in list(range(1, 37)) + [412]}
+    for n in range(17, 21): estado[n]['pos'] = 'EB'
 
-    pool_xtm   = set(range(28, 36))
-    pool_xt100 = set(range(1,  28))
-    pool_sfe   = {412}
+    pool_sfe   = [412]
+    pool_xtm   = list(range(28, 36))
+    pool_xt100 = list(range(1,  28))
 
     def mi_pool(tipo):
-        if tipo == 'SFE':  return pool_sfe
-        if tipo == 'XT-M': return pool_xtm
+        if tipo=='SFE':  return pool_sfe
+        if tipo=='XT-M': return pool_xtm
         return pool_xt100
 
     asig = {}
@@ -988,51 +984,54 @@ def asignar_flota_planilla(df):
         t        = row['t_ini']
         es_doble = row.get('doble', False)
         tipo     = row['tipo_tren']
-        tf       = t + abs(row['km_dest']-row['km_orig'])/40*60 + DWELL_T
+        dwell_t  = DWELL_POR_TERMINAL.get(dest, 15.0)
+        tf       = t + abs(row['km_dest'] - row['km_orig']) / 40.0 * 60 + dwell_t
         pool     = mi_pool(tipo)
 
-        # Trenes del tipo correcto disponibles en el terminal correcto
-        en_orig = [n for n in pool
-                   if estado[n]['pos'] == orig and estado[n]['t_libre'] <= t]
+        def t_arr(n):
+            pos = estado[n]['pos']
+            if pos == orig: return estado[n]['t_libre']
+            return estado[n]['t_libre'] + T_ENTRE.get((pos, orig), 90)
+
+        en_orig  = [n for n in pool if estado[n]['pos']==orig and estado[n]['t_libre']<=t]
+        en_trans = [n for n in pool if n not in en_orig and t_arr(n)<=t]
+        candidatos = en_orig + [n for n in en_trans if n not in en_orig]
 
         if es_doble:
-            # Preferir par consecutivo
-            en_orig_s = sorted(en_orig)
+            cs = sorted(candidatos)
             par = None
-            for i in range(len(en_orig_s)-1):
-                a, b = en_orig_s[i], en_orig_s[i+1]
-                if b == a+1:
-                    par = (a, b); break
-            if par is None and len(en_orig_s) >= 2:
-                par = (en_orig_s[0], en_orig_s[1])
-
-            if par:
-                a, b = par
-                asig[idx] = f'{a}+{b}'
-                for n in [a, b]:
-                    estado[n]['pos'] = dest
-                    estado[n]['t_libre'] = tf
-            else:
-                # No hay 2 trenes disponibles en orig → usar los 2 que lleguen antes
-                todos = sorted(pool, key=lambda n: estado[n]['t_libre'])
-                a, b = todos[0], todos[1]
-                asig[idx] = f'{a}+{b}'
-                for n in [a, b]:
-                    estado[n]['pos'] = dest
-                    # El tiempo libre es el máximo entre cuando llegaban y ahora + viaje
-                    # t_libre = cuando queda libre en destino = t_ini_servicio + duracion
-                estado[n]['t_libre'] = t + abs(row['km_dest']-row['km_orig'])/40*60 + DWELL_T
+            for i in range(len(cs)-1):
+                if cs[i+1]==cs[i]+1: par=(cs[i],cs[i+1]); break
+            if par is None and len(cs)>=2: par=(cs[0],cs[1])
+            if par is None:
+                todos = sorted(pool, key=t_arr)
+                a,b = todos[0],todos[1]
+                for n in [a,b]:
+                    if estado[n]['pos']!=orig:
+                        estado[n]['t_libre']+=T_ENTRE.get((estado[n]['pos'],orig),90)
+                        estado[n]['pos']=orig
+                par=(a,b)
+            a,b=par
+            asig[idx]=f'{a}+{b}'
+            t_sal_real=max(t,estado[a]['t_libre'],estado[b]['t_libre'])
+            for n in [a,b]:
+                estado[n]['pos']=dest
+                estado[n]['t_libre']=t_sal_real+abs(row['km_dest']-row['km_orig'])/40*60+dwell_t
         else:
-            if en_orig:
-                # Tomar el que lleva más tiempo esperando en este terminal
-                n = min(en_orig, key=lambda n: estado[n]['t_libre'])
+            if candidatos:
+                n=min(candidatos,key=lambda n:estado[n]['t_libre'])
+                if estado[n]['pos']!=orig:
+                    estado[n]['t_libre']+=T_ENTRE.get((estado[n]['pos'],orig),90)
+                    estado[n]['pos']=orig
             else:
-                # Ninguno en orig → tomar el que se libera antes
-                n = min(pool, key=lambda n: estado[n]['t_libre'])
-
-            asig[idx] = str(n)
-            estado[n]['pos'] = dest
-            estado[n]['t_libre'] = max(estado[n]['t_libre'], t) + abs(row['km_dest']-row['km_orig'])/40*60 + DWELL_T
+                n=min(pool,key=t_arr)
+                if estado[n]['pos']!=orig:
+                    estado[n]['t_libre']+=T_ENTRE.get((estado[n]['pos'],orig),90)
+                    estado[n]['pos']=orig
+            asig[idx]=str(n)
+            t_sal_real=max(t,estado[n]['t_libre'])
+            estado[n]['pos']=dest
+            estado[n]['t_libre']=t_sal_real+abs(row['km_dest']-row['km_orig'])/40*60+dwell_t
 
     df['motriz_num'] = df.index.map(asig).fillna('?')
     df = df.drop(columns=['_tf'], errors='ignore')
@@ -1223,7 +1222,9 @@ def parsear_planilla_maestra(data, fname):
                         'doble': es_doble,
                         'num_servicio': str(servicio_num),
                         'svc_type': ruta,
-                        'maniobra': None
+                        'maniobra': None,
+                        'pax_abordo': 0,
+                        'pax_d': {}
                     })
             else:
                 for i in range(len(df)):
