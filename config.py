@@ -198,7 +198,7 @@ FLOTA = {
         "a_freno_ms2"  : 1.30,  
         "jerk_ms3"     : 1.3,           # Igualado a flota Alstom
         "v_freno_min"  : 3.81,
-        "eta_motor"    : 0.94,      
+        "eta_motor"    : 0.93,      
         "davis_A"      : 2480.00,  
         "davis_B"      : 0.00,
         "davis_C"      : 0.4714,     
