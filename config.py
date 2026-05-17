@@ -152,7 +152,7 @@ FLOTA = {
         "f_trac_max_kn": 110.0,   
         "f_freno_max_kn": 105.0,  
         "p_max_kw"     : 720.0,
-        "p_freno_max_kw": 600.0,
+        "p_freno_max_kw": 864.0,
         "aux_kw_cool"  : 58.76,         # Techo Verano (HVAC 100%)
         "aux_kw_heat"  : 65.16,         # Techo Invierno (Resistencias 100%)
         "p_compresor_kw": 3.68,         # ALSTOM VFD Soft-Load
@@ -179,7 +179,7 @@ FLOTA = {
         "f_trac_max_kn": 115.0,   
         "f_freno_max_kn": 110.0,  
         "p_max_kw"     : 1040.0,
-        "p_freno_max_kw": 800.0,
+        "p_freno_max_kw": 1248.0,
         "aux_kw_cool"  : 68.0,         
         "aux_kw_heat"  : 78.0,         
         "p_compresor_kw": 4.60,  
