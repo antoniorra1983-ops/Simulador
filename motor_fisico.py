@@ -290,7 +290,9 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             n_uni_inst = 2 if es_doble else 1
             n_uni_final = n_uni_inst
             
-            long_tren_km = (0.070 if tipo_tren == 'SFE' else 0.046) * n_uni_inst
+            # Largo real del tren desde config (metros → km)
+            _largo_unit = f.get('largo_m', 72.0) / 1000.0
+            long_tren_km = _largo_unit * n_uni_inst
             
             pax_mid = get_pax_at_km_nativo(pax_dict, km_actual, via_op, pax_abordo) if pax_dict else pax_abordo
             pax_kg_total = pax_mid * _get_val('PAX_KG', 75.0)
@@ -362,8 +364,21 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                                 v_cons_kmh = min(v_cons_kmh, v_prev)
                                 prevencion_aplicada += 1
 
-            if via_op == 1 and km_actual >= 42.93: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual < 43.03 else 10.0)
-            if via_op == 2 and km_actual <= 0.20: v_cons_kmh = min(v_cons_kmh, 20.0 if km_actual > 0.10 else 10.0)
+            # Restricción de terminal — considera largo del tren
+            # La velocidad se reduce cuando la CABEZA del tren está en zona de andén
+            # y debe mantenerse hasta que el ÚLTIMO VAGÓN haya cruzado el umbral
+            # V1 terminal Limache (km 43.13): zona restringida desde km 42.93
+            if via_op == 1:
+                if km_actual >= (43.13 - long_tren_km - 0.20):  # 200m antes del andén
+                    v_cons_kmh = min(v_cons_kmh, 20.0)
+                if km_actual >= (43.13 - long_tren_km - 0.10):  # 100m antes del andén
+                    v_cons_kmh = min(v_cons_kmh, 10.0)
+            # V2 terminal Puerto (km 0.00): zona restringida hasta km 0.20
+            if via_op == 2:
+                if km_actual <= (long_tren_km + 0.20):  # hasta que todo el tren salió
+                    v_cons_kmh = min(v_cons_kmh, 20.0)
+                if km_actual <= (long_tren_km + 0.10):  # zona más cercana al andén
+                    v_cons_kmh = min(v_cons_kmh, 10.0)
             
             v_kmh = v_ms * 3.6
             if n_uni_inst == 2: f_davis = (f.get('davis_A',1615.0)*2) + (f.get('davis_B',0.0)*2*v_kmh) + (f.get('davis_C',0.54)*1.35*(v_kmh**2))
@@ -437,10 +452,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             elif estado_marcha == "ACCEL":
                 # pct_trac limita la fuerza de arranque (IGBT/corriente), NO la potencia del motor
                 # A alta velocidad el motor puede desarrollar plena potencia aunque pct_trac < 100%
-                f_limite_potencia = p_max_op_w_real / max(0.1, v_ms)  # límite por potencia plena del motor
+                f_limite_potencia = p_max_op_w_real / max(0.1, v_ms)
                 f_absoluta_disp = min(f_disp_trac_real, f_limite_potencia)
-                f_piloto = f_trac_max_n_nominal * (pct_trac / 100.0)  # fuerza máxima reducida por IGBT
-                f_piloto_disp = min(f_piloto, f_limite_potencia)       # a alta v, potencia plena disponible
+                f_piloto = f_trac_max_n_nominal * (pct_trac / 100.0)
+                f_piloto_disp = min(f_piloto, f_limite_potencia)
                 f_motor = min(f_piloto_disp, f_absoluta_disp)
                 a_net_target = (f_motor - f_res_total) / masa_dinamica_kg
             elif estado_marcha == "CRUISE":
@@ -514,15 +529,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 # - Arranque (v < 15 km/h): régimen de par constante → eta ≈ eta_base
                 # - Velocidad media (P ≈ P_max): eficiencia máxima → eta = eta_base
                 # - Carga parcial en CRUISE: eficiencia levemente menor
-                eta_base = f.get('eta_motor', 0.92)
-                if v_kmh < 15.0:
-                    # Régimen par constante: eficiencia del motor alta
-                    eta_din = eta_base
-                else:
-                    p_real_w = f_motor_real * max(0.1, v_ms)
-                    carga_pct = p_real_w / max(1.0, p_max_w_nominal)
-                    # Eficiencia cae levemente a carga parcial (CRUISE plano)
-                    eta_din = eta_base * (1.0 - 0.08 * (1.0 - max(0.2, carga_pct))**2)
+                # Eficiencia del motor: usa eta_base en todos los regímenes.
+                # No se aplica penalización por carga parcial — no hay datos
+                # técnicos certificados del XT-100/XT-M que la respalden.
+                eta_din = f.get('eta_motor', 0.92)
                 trabajo_j_trac = f_motor_real * step_m
                 trc += (trabajo_j_trac / 3_600_000.0) / eta_din
                 aux_catenaria += aux_kwh_step
@@ -688,9 +698,8 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                         f_motor = max(f_piloto_disp, f_res_total + (masa_dinamica_kg * 0.1))
                         f_limite_total_abs = min(f.get('f_trac_max_kn', 110.0)*1000*n_uni, (f.get('p_max_kw', 720.0)*1000*n_uni)/max(0.1, v_ms))
                         f_motor = min(f_motor, f_limite_total_abs)
-                        carga_pct = f_motor / max(1.0, f_limite_total_abs)
-                        eta_din = eta_m * (1.0 - 0.2 * (1.0 - max(0.1, carga_pct))**3)
-                        p_dem_kw += ((f_motor * v_ms) / 1000.0 / eta_din)
+                        # Eficiencia del motor según tipo de tren (sin penalización por carga)
+                        p_dem_kw += ((f_motor * v_ms) / 1000.0 / eta_m)
                     elif state == "CRUISE" and f_res_total > 0:
                         p_dem_kw += (((f_res_total * v_ms) / 1000.0) / eta_m)
                     accel_by_idx[i].append((tr['idx'], pos, p_dem_kw))
