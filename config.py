@@ -191,15 +191,16 @@ FLOTA = {
     },
     "SFE": {
         "largo_m"      : 77.2,           # Largo real del tren (m)
-        "tara_t"       : 140.0,          # 140.000 kg  
+        "v_max_kmh"    : 140,            # Velocidad máxima operación 140 km/h — especif. 2025
+        "tara_t"       : 142.1,         # M1≈51.8t + R1≈38.5t + M2≈51.8t — especif. técnicas 2025
         "m_iner_t"     : 11.2,  
         "coches"       : 3,  
-        "cap_max"      : 780,
+        "cap_max"      : 597,            # AW2 (4 pax/m²) — especif. técnicas 2025
         "n_motores"    : 8,       
         "a_max_ms2"    : 1.02,
-        "a_freno_ms2"  : 1.30,  
-        "jerk_ms3"     : 1.3,           # Igualado a flota Alstom
-        "v_freno_min"  : 3.81,
+        "a_freno_ms2"  : 0.85,           # Freno servicio ≥0.85 m/s² — especif. técnicas 2025
+        "jerk_ms3"     : 0.75,           # Tasa de impacto ≤0.75 m/s³ — especif. técnicas 2025
+        "v_freno_min"  : 0.833,          # Freno eléctrico desde 3 km/h = 0.833 m/s — especif. 2025
         "eta_motor"    : 0.93,      
         "davis_A"      : 2480.00,  
         "davis_B"      : 0.00,
@@ -208,8 +209,8 @@ FLOTA = {
         "f_freno_max_kn": 190.0,  
         "p_max_kw"     : 2400.0,
         "p_freno_max_kw": 2800.0,
-        "aux_kw_cool"  : 180.0,        
-        "aux_kw_heat"  : 210.0,        
+        "aux_kw_cool"  : 158.0,          # 2u×25kW×3coches + 2cab×4kW — especif. técnicas 2025
+        "aux_kw_heat"  : 49.0,           # 8kW×3 + 6kW×3 + 2kW×2 + 1.5kW×2 — especif. técnicas 2025
         "p_compresor_kw": 8.50,  
         "p_puertas_kw" : 1.35,          # 9 puertas x 150W (Unilateral)
         "p_vent_trac_kw": 11.4,
