@@ -327,8 +327,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             f_freno_max_n = f.get('f_freno_max_kn', 105.0) * 1000 * n_uni_inst
             p_freno_max_w = f.get('p_freno_max_kw', f.get('p_max_kw', 720.0)*1.2) * 1000 * n_uni_inst
             
-            if estacion_anio in ("invierno", "otoño"): aux_kw_nominal = f.get('aux_kw_heat', 65.16) * n_uni_inst
-            else: aux_kw_nominal = f.get('aux_kw_cool', 58.76) * n_uni_inst
+            if estacion_anio in ("invierno", "otoño"): aux_kw_nominal = f.get('aux_kw_heat', 67.0) * n_uni_inst
+            else: aux_kw_nominal = f.get('aux_kw_cool', 68.0) * n_uni_inst
             aux_kw_nominal_final = aux_kw_nominal
             
             _v_raw = _VEL_ARRAY_RM[idx_km] if use_rm else _VEL_ARRAY_NORM[idx_km]
@@ -714,8 +714,8 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                     braking_ticks_per_trip[tr['idx']] += 1
                 
                 elif state in ("ACCEL", "CRUISE"):
-                    if estacion_anio == "invierno": aux_nom = f.get('aux_kw_heat', 65.16) * n_uni
-                    else: aux_nom = f.get('aux_kw_cool', 58.76) * n_uni
+                    if estacion_anio == "invierno": aux_nom = f.get('aux_kw_heat', 67.0) * n_uni
+                    else: aux_nom = f.get('aux_kw_cool', 68.0) * n_uni
                     p_aux_kw = calcular_aux_dinamico(tr['tipo_tren'], aux_nom, m / 60.0, tr['pax_abordo'], f.get('cap_max', 398) * n_uni, estacion_anio, state)
                     p_dem_kw = p_aux_kw
                     if state == "ACCEL":
@@ -811,8 +811,8 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     T_POST_H = 10.0/60.0
     F_HVAC_PRE  = 0.30
     F_HVAC_POST = 0.10
-    frac_base_pp = _get_val('FRAC_BASE', 0.21)
-    frac_hvac_pp = _get_val('FRAC_HVAC', 0.89)
+    frac_base_pp = _get_val('FRAC_BASE', 0.15)  # base = 15% del nominal
+    frac_hvac_pp = _get_val('FRAC_HVAC', 0.50)  # HVAC al 50% en prepost
     flota_db_pp  = _get_val('FLOTA', {})
 
     motrices_viajes = {}
@@ -833,7 +833,7 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
             pico = max(1, len(df_e) // 7)
         tipo_predominante = df_e['tipo_tren'].mode()[0] if 'tipo_tren' in df_e.columns else 'XT-100'
         f_pp = _get_val('FLOTA', {}).get(tipo_predominante, {})
-        aux_nom_pp = f_pp.get('aux_kw_heat', 65.16)
+        aux_nom_pp = f_pp.get('aux_kw_heat', 67.0)
         aux_pre_pp  = aux_nom_pp * frac_base_pp + aux_nom_pp * frac_hvac_pp * F_HVAC_PRE
         aux_post_pp = aux_nom_pp * frac_base_pp + aux_nom_pp * frac_hvac_pp * F_HVAC_POST
         kwh_total_pp = (aux_pre_pp * T_PRE_H + aux_post_pp * T_POST_H) * pico
@@ -844,7 +844,7 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
         if not idxs: continue
         tipo = df_e.loc[idxs[0], 'tipo_tren'] if idxs[0] in df_e.index else 'XT-100'
         f_pp = flota_db_pp.get(tipo, {})
-        aux_nom = f_pp.get('aux_kw_heat', 65.16)
+        aux_nom = f_pp.get('aux_kw_heat', 67.0)
         aux_pre  = aux_nom * frac_base_pp + aux_nom * frac_hvac_pp * F_HVAC_PRE
         aux_post = aux_nom * frac_base_pp + aux_nom * frac_hvac_pp * F_HVAC_POST
         kwh_motriz = aux_pre * T_PRE_H + aux_post * T_POST_H
