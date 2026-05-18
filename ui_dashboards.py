@@ -563,7 +563,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             pax_v = int(row.get('pax_inst', 0))
             masa_total = tara_base + ((pax_v * PAX_KG) / 1000.0)
             
-            aux_nominal_unidad = f_flota.get('aux_kw_heat', f_flota.get('aux_kw', 65.16)) if estacion_anio == "invierno" else f_flota.get('aux_kw_cool', f_flota.get('aux_kw', 58.76))
+            aux_nominal_unidad = f_flota.get('aux_kw_heat', 67.0) if estacion_anio == "invierno" else f_flota.get('aux_kw_cool', 68.0)
             
             if is_parked:
                 state = "DWELL"
