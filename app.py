@@ -184,14 +184,14 @@ def procesar_prevenciones_independiente(_bp, sig_ligera):
 def simular_dia_historico_cached(_df_dia, pct_trac_hist, use_rm, use_pend, use_regen, tipo_regen, estacion_anio, _prevenciones, data_sig_fisica):
     dict_regen = {}
     if use_regen:
+        # Modelo Probabilístico: receptividad según headway real entre trenes
+        # Valores calibrados para MERVAL: 0.24–0.90, promedio 0.535
+        # El modelo Físico (Load Flow) requiere perfil de velocidad segundo a segundo
+        # que actualmente no se exporta del motor → pendiente de implementación
         try:
-            if "Probabilístico" in tipo_regen:
-                dict_regen = calcular_receptividad_por_headway(_df_dia)
-            else:
-                dict_regen = precalcular_red_electrica_v111(_df_dia, pct_trac_hist, use_rm, estacion_anio)
+            dict_regen = calcular_receptividad_por_headway(_df_dia)
         except Exception:
-            pass
-        
+            dict_regen = {}
     return calcular_termodinamica_flota_v111(_df_dia, pct_trac_hist, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones=_prevenciones)
 
 # =============================================================================
@@ -587,7 +587,12 @@ def main():
         use_rm      = st.checkbox("🚦 Velocidades RM (Riel Mojado)", value=True, on_change=reset_plan_state)
         use_pend    = st.toggle("⛰️ Pendientes Físicas", value=True, on_change=reset_plan_state)
         use_regen   = st.toggle("⚡ Activar Regeneración", value=True, on_change=reset_plan_state)
-        tipo_regen  = st.radio("Modelo de Regeneración", ["Físico (Load Flow)", "Probabilístico (Headway)"], on_change=reset_plan_state)
+        tipo_regen  = st.radio(
+            "Modelo de Regeneración",
+            ["Probabilístico (Headway)", "Físico (Load Flow DC, misma vía)"],
+            help="Probabilístico: receptividad según headway entre trenes — calibrado para MERVAL. Físico: matching segundo a segundo entre trenes de la misma vía.",
+            on_change=reset_plan_state
+        )
         
         st.divider()
         st.subheader("🌡️ Climatización y Auxiliares")
@@ -665,7 +670,7 @@ def main():
             tipo_dia_plan = st.selectbox("Tipo de Día para Demanda", ["Laboral", "Sábado", "Domingo/Festivo"], key="td_plan")
             
             st.markdown("##### 🎛️ Rendimiento del Tren")
-            pct_trac_plan = st.slider("% Tracción Máxima (Aceleración)", 30, 100, 90, 5, help="En subidas extremas (ej. Paso Hondo), el tren ignorará este límite automáticamente para no quedarse estancado (Anti-Stall).")
+            pct_trac_plan = st.slider("% Tracción Máxima (Aceleración)", 30, 100, 90, 5, help="Limita la fuerza de tracción disponible. Valores bajos reducen consumo pero aumentan el tiempo de viaje. En pendientes pronunciadas el tren puede no alcanzar la velocidad consigna.")
             
             pax_promedio_viaje = {"Laboral": 280, "Sábado": 160, "Domingo/Festivo": 110}[tipo_dia_plan]
             
