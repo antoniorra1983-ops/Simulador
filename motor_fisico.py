@@ -106,22 +106,33 @@ def km_at_t(t_ini, t_fin, t, via, use_rm=False, km_orig=0.0, km_dest=0.0, nodos=
     frac_smooth = (1.0 - np.cos(frac * np.pi)) / 2.0
     return km_orig + (km_dest - km_orig) * frac_smooth
 
-def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos=None, t_arr=None):
-    if not nodos or len(nodos) < 2: return "CRUISE", 60.0
-    if t_arr is None: t_arr = [n[0] for n in nodos]
-    if t <= t_arr[0] or t >= t_arr[-1]: return "DWELL", 0.0
+def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos=None, t_arr=None, t_ini_ext=None, t_fin_ext=None):
+    # t_ini_ext/t_fin_ext: límites temporales externos (para cuando t_arr tiene todos ceros)
     dt_sample = 0.5
-    km_now = km_at_t(t_arr[0], t_arr[-1], t, r_via, use_rm, km_orig, km_dest, nodos, t_arr)
-    km_prev = km_at_t(t_arr[0], t_arr[-1], t - dt_sample, r_via, use_rm, km_orig, km_dest, nodos, t_arr)
-    km_next = km_at_t(t_arr[0], t_arr[-1], t + dt_sample, r_via, use_rm, km_orig, km_dest, nodos, t_arr)
-    v_now = abs(km_now - km_prev) * 1000.0 / dt_sample 
+    
+    # Determinar límites temporales efectivos
+    if t_arr is not None and len(t_arr) >= 2 and any(v > 0 for v in t_arr):
+        t0 = t_arr[0]; tf = t_arr[-1]
+    elif t_ini_ext is not None and t_fin_ext is not None:
+        t0 = t_ini_ext; tf = t_fin_ext; t_arr = None  # usar interpolación lineal
+    elif nodos and len(nodos) >= 2:
+        t0 = t_ini_ext or 0; tf = t_fin_ext or (t0 + 60); t_arr = None
+    else:
+        return "CRUISE", 60.0
+    
+    if t <= t0 or t >= tf: return "DWELL", 0.0
+    
+    km_now  = km_at_t(t0, tf, t,            r_via, use_rm, km_orig, km_dest, nodos, t_arr)
+    km_prev = km_at_t(t0, tf, t-dt_sample,  r_via, use_rm, km_orig, km_dest, nodos, t_arr)
+    km_next = km_at_t(t0, tf, t+dt_sample,  r_via, use_rm, km_orig, km_dest, nodos, t_arr)
+    v_now  = abs(km_now - km_prev) * 1000.0 / dt_sample
     v_next = abs(km_next - km_now) * 1000.0 / dt_sample
-    a_ms2 = (v_next - v_now) / dt_sample
-    v_kmh = v_now * 3.6
-    if a_ms2 > 0.15: return "ACCEL", v_kmh
+    a_ms2  = (v_next - v_now) / dt_sample
+    v_kmh  = v_now * 3.6
+    if a_ms2 > 0.15:  return "ACCEL", v_kmh
     elif a_ms2 < -0.15: return "BRAKE", v_kmh
     elif v_kmh < 1.0: return "DWELL", 0.0
-    else: return "CRUISE", v_kmh
+    else:             return "CRUISE", v_kmh
 
 # =============================================================================
 # 2.5. FUNCIÓN DE AUXILIARES CON DUTY CYCLE REAL
@@ -263,6 +274,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     reg_exportable = 0.0
     t_horas = 0.0
     prevencion_aplicada = 0
+    tiempos_estaciones = []  # (t_mins_absoluto, km) para cada estación simulada
+    perfil_potencia    = []  # (t_mins, km, v_kmh, estado, p_regen_kw) cada dt=1s
     
     paradas_km = [n[1] for n in nodos] if nodos else [k_s, k_e]
     k_min, k_max = min(k_s, k_e), max(k_s, k_e)
@@ -286,6 +299,10 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
         es_ultima_parada = (i == len(paradas_km) - 2)
         dist_tramo = abs(p_fin - p_ini) * 1000.0
         if dist_tramo <= 0: continue
+        
+        # Registrar tiempo de salida de esta estación
+        t_est_mins = t_ini_mins + t_horas * 60.0
+        tiempos_estaciones.append((t_est_mins, p_ini))
         
         pos_m = p_ini * 1000.0
         dist_recorrida = 0.0
@@ -572,13 +589,22 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 
                 if energia_electrica_kwh >= aux_kwh_step:
                     excedente_kwh = energia_electrica_kwh - aux_kwh_step
-                    reg_exportable += excedente_kwh * eta_regen_neta
+                    # reg_exportable = energía eléctrica disponible en catenaria
+                    # La receptividad (ETA_REGEN_NETA) la aplica precalcular_red
+                    # o el wrapper según el modelo seleccionado
+                    reg_exportable += excedente_kwh
                 else:
                     deficit_kwh = aux_kwh_step - energia_electrica_kwh
                     aux_catenaria += deficit_kwh
             else:
                 aux_catenaria += aux_kwh_step
             
+            # Guardar perfil segundo a segundo para precalcular_red
+            km_actual_sim = (pos_m + dist_recorrida) / 1000.0 if via_op == 1 else (pos_m - dist_recorrida) / 1000.0
+            p_regen_sim = (min(abs(f_real_total), f_disp_freno) * max(0.0, v_ms) / 1000.0 * eta_motor
+                          if f_real_total < 0 and estado_marcha in ['BRAKE_STATION','BRAKE_OVERSPEED','COAST'] else 0.0)
+            perfil_potencia.append((t_ini_mins + t_horas*60.0, km_actual_sim,
+                                    v_ms*3.6, estado_marcha, p_regen_sim))
             t_horas += dt_actual / 3600.0
             dist_recorrida += step_m
             v_ms = v_new
@@ -593,14 +619,28 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             aux_catenaria += aux_kw_dwell * dwell_h
             t_horas += dwell_h
 
+    t_final_mins = t_ini_mins + t_horas * 60.0
+    if paradas_km:
+        tiempos_estaciones.append((t_final_mins, paradas_km[-1]))
     neto_ideal = max(0.0, trc + aux_catenaria - reg_exportable)
-    return trc, aux_catenaria, reg_exportable, 0.0, neto_ideal, t_horas, prevencion_aplicada
+    # Slot 4: dict con tiempos por estación y perfil segundo a segundo
+    datos_sim = {'t_est': tiempos_estaciones, 'perfil': perfil_potencia}
+    return trc, aux_catenaria, reg_exportable, datos_sim, neto_ideal, t_horas, prevencion_aplicada
 
 # =============================================================================
 # 5. PRE-CALCULADORES DE RED
 # =============================================================================
 def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
+    """Receptividad de la red DC según headway entre trenes de la misma vía.
+    
+    Retorna eta_red = receptividad_headway × ETA_REGEN_NETA, que representa
+    la fracción de la energía eléctrica disponible en catenaria (reg_bruta,
+    ya sin ETA_REGEN_NETA aplicado) que efectivamente llega a otro tren.
+    
+    Cadena: E_cin × eta_motor (reg_bruta) × eta_red → reg_util
+    """
     if df_dia.empty: return {}
+    ETA_REGEN = _get_val('ETA_REGEN_NETA', 0.38)  # eficiencia eléctrica + pérdidas DC
     result = {}
     for via in [1, 2]:
         sub = df_dia[df_dia["Via"] == via].sort_values("t_ini")
@@ -611,187 +651,165 @@ def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
             headways = []
             if i > 0: headways.append(t_ini_vals[i] - t_ini_vals[i-1])
             if i < len(indices)-1: headways.append(t_ini_vals[i+1] - t_ini_vals[i])
-            if not headways: 
-                result[idx] = 0.10
+            if not headways:
+                result[idx] = 0.10 * ETA_REGEN
                 continue
             hw = min(headways)
-            if hw < 5.0: eta = 0.90
-            elif hw < 10.0: eta = 0.75 - ((hw - 5.0) / 5.0) * 0.45
-            else: eta = max(0.10, 0.30 - ((hw - 10.0) / 20.0) * 0.20)
-            result[idx] = min(eta, 0.90)
+            # Receptividad según headway: menor headway → más probable que haya receptor
+            if hw < 5.0:   recep = 0.90
+            elif hw < 10.0: recep = 0.75 - ((hw - 5.0) / 5.0) * 0.45
+            else:           recep = max(0.10, 0.30 - ((hw - 10.0) / 20.0) * 0.20)
+            # eta_red = receptividad × eficiencia eléctrica DC
+            result[idx] = min(recep, 0.90) * ETA_REGEN
     return result
 
 def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="primavera"):
-    regen_util_per_trip = {idx: 0.0 for idx in df_dia.index}
-    braking_ticks_per_trip = {idx: 0.0 for idx in df_dia.index}
+    """
+    Calcula la receptividad de la red DC para cada viaje usando el perfil de potencia
+    regenerada segundo a segundo calculado por simular_tramo_termodinamico.
     
+    Si df_dia tiene columna 'datos_sim' (generada por calcular_termodinamica_flota_v111),
+    usa el perfil real del motor. Si no, usa el modelo Probabilístico como fallback.
+    
+    Retorna dict {idx: eta_red} donde eta_red es la fracción de energía regenerada
+    que efectivamente llega a otro tren via la catenaria DC.
+    """
+    regen_util_per_trip = {idx: 0.0 for idx in df_dia.index}
     if df_dia.empty:
         return regen_util_per_trip
-    
-    t_min = int(df_dia['t_ini'].min())
-    t_max = int(df_dia['t_fin'].max())
-    dt_step = 10.0 / 60.0
-    time_steps = np.arange(t_min, t_max + 1, dt_step)
-    
-    LAMBDA_REGEN = _get_val('LAMBDA_REGEN_KM', 5.0)
-    ETA_MAX_VAL = _get_val('ETA_MAX', 0.70)
-    DISTANCIA_MAXIMA = LAMBDA_REGEN * 2.5
-    
+
+    # Si no hay datos_sim del motor, usar modelo probabilístico como fallback
+    if 'datos_sim' not in df_dia.columns or df_dia['datos_sim'].isna().all():
+        return calcular_receptividad_por_headway(df_dia)
+
+    LAMBDA_REGEN  = _get_val('LAMBDA_REGEN_KM', 5.0)
+    ETA_MAX_VAL   = _get_val('ETA_MAX', 0.70)
+    DIST_MAX      = LAMBDA_REGEN * 2.5  # km máximo para transferencia
+
+    # Construir índice temporal de eventos: cada paso del perfil es un evento
+    # Estructura: { t_bin → [(idx_viaje, km, p_regen_kw, p_dem_kw)] }
+    DT_BIN = 10.0 / 60.0  # bins de 10 segundos en minutos
+
+    # Recopilar todos los eventos de frenada y tracción por bin temporal
+    braking_events  = {}   # t_bin → [(idx, km, p_regen_kw)]
+    accel_events    = {}   # t_bin → [(idx, km, p_dem_kw)]
+    braking_ticks   = {idx: 0 for idx in df_dia.index}
+
+    # Cada vía tiene su propia catenaria DC independiente
+    # La regeneración solo ocurre entre trenes de la MISMA vía
     for via_ in [1, 2]:
-        via_trains = df_dia[df_dia['Via'] == via_]
-        if via_trains.empty:
+        via_df = df_dia[df_dia['Via'] == via_]
+        for idx, r in via_df.iterrows():
+            datos = r.get('datos_sim')
+            if not datos or not isinstance(datos, dict):
+                continue
+            perfil = datos.get('perfil', [])
+            if not perfil:
+                continue
+            f = _get_val('FLOTA', {}).get(r.get('tipo_tren', 'XT-100'), {})
+            n_uni = 2 if r.get('doble', False) else 1
+
+            for t_mins, km, v_kmh, estado, p_regen_kw in perfil:
+                t_bin = round(t_mins / DT_BIN) * DT_BIN
+
+                if p_regen_kw > 0:
+                    # p_regen_kw = E_cin × eta_motor (potencia eléctrica en catenaria)
+                    # Es la energía DISPONIBLE para otro tren en la misma vía
+                    if t_bin not in braking_events:
+                        braking_events[t_bin] = []
+                    braking_events[t_bin].append((idx, km, p_regen_kw, via_))
+                    braking_ticks[idx] += 1
+
+                elif estado == 'ACCEL' and v_kmh > 1.0:
+                    # Potencia demandada estimada desde el perfil real
+                    # Usando p_max como proxy de la demanda en ACCEL
+                    p_dem = f.get('p_max_kw', 720.0) * n_uni * 0.75
+                    if t_bin not in accel_events:
+                        accel_events[t_bin] = []
+                    accel_events[t_bin].append((idx, km, p_dem, via_))
+
+    # Para cada bin temporal: transferir energía de frenadores a aceleradores cercanos
+    regen_asignada = {idx: 0.0 for idx in df_dia.index}
+
+    for t_bin, frens in braking_events.items():
+        acels = accel_events.get(t_bin, [])
+        if not acels:
             continue
-        
-        via_indices = set(via_trains.index)
-        
-        trains_data = []
-        for idx, r in via_trains.iterrows():
-            nodos = r.get('nodos')
-            pct_operativo = obtener_pct_traccion_operativo(r, pct_trac_ui)
-            trains_data.append({
-                'idx': idx, 't_ini': r['t_ini'], 't_fin': r['t_fin'],
-                'Via': r['Via'], 'km_orig': r['km_orig'], 'km_dest': r['km_dest'],
-                'nodos': nodos,
-                't_arr': [n[0] for n in nodos] if nodos and len(nodos) >= 2 else None,
-                'tipo_tren': r.get('tipo_tren', 'XT-100'),
-                'doble': r.get('doble', False),
-                'pax_abordo': r.get('pax_abordo', 0),
-                'pct_trac': pct_operativo,
-                'maniobra': r.get('maniobra')
-            })
-        
-        braking_by_idx = [[] for _ in range(len(time_steps))]
-        accel_by_idx = [[] for _ in range(len(time_steps))]
-        
-        for tr in trains_data:
-            idx_start = np.searchsorted(time_steps, max(t_min, tr['t_ini']))
-            idx_end = np.searchsorted(time_steps, min(t_max, tr['t_fin']), side='right')
-            f = _get_val('FLOTA', {}).get(tr['tipo_tren'], {})
-            if not f: continue
-            
-            eta_m = f.get('eta_motor', 0.92)
-            eta_regen_neta = _get_val('ETA_REGEN_NETA', 0.38)
-            
-            km_man = None
-            maniobra_tr = str(tr.get('maniobra', '')).upper()
-            if 'CORTE_BTO' in maniobra_tr or 'ACOPLE_BTO' in maniobra_tr or 'CORTE_PU_SA_BTO' in maniobra_tr: km_man = 25.3
-            elif 'CORTE_SA' in maniobra_tr or 'ACOPLE_SA' in maniobra_tr: km_man = 29.1
-            dist_to_maniobra = abs(km_man - tr['km_orig']) if km_man is not None else -1
-            
-            for i in range(idx_start, idx_end):
-                m = time_steps[i]
-                state, v_kmh = get_train_state_and_speed(m, tr['Via'], use_rm, tr['km_orig'], tr['km_dest'], tr['nodos'], tr['t_arr'])
-                pos = km_at_t(tr['t_ini'], tr['t_fin'], m, tr['Via'], use_rm, tr['km_orig'], tr['km_dest'], tr['nodos'], tr['t_arr'])
-                v_ms = v_kmh / 3.6
-                
-                dist_recorrida_total = abs(pos - tr['km_orig'])
-                es_doble = tr['doble']
-                if km_man is not None and min(tr['km_orig'], tr['km_dest']) <= km_man <= max(tr['km_orig'], tr['km_dest']) and maniobra_tr:
-                    if 'CORTE' in maniobra_tr: es_doble = True if dist_recorrida_total <= dist_to_maniobra else False
-                    elif 'ACOPLE' in maniobra_tr: es_doble = False if dist_recorrida_total <= dist_to_maniobra else True
-                
-                n_uni = 2 if es_doble else 1
-                masa_estatica_kg = (f.get('tara_t', 86.1) * 1000 * n_uni) + (tr['pax_abordo'] * _get_val('PAX_KG', 75.0))
-                masa_dinamica_kg = masa_estatica_kg + (f.get('m_iner_t', 7.2) * 1000 * n_uni)
-                
-                idx_km = min(44999, max(0, int(pos * 1000)))
-                pend_permil = _PEND_ARRAY_V1[idx_km] if tr['Via'] == 1 else _PEND_ARRAY_V2[idx_km]
-                f_pend = masa_dinamica_kg * 9.81 * (pend_permil / 1000.0)
-                f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
-                
-                if n_uni == 2: f_davis = (f.get('davis_A',1615)*2) + (f.get('davis_B',0)*2*v_kmh) + (f.get('davis_C',0.54)*1.35*(v_kmh**2))
-                else: f_davis = f.get('davis_A',1615) + f.get('davis_B',0)*v_kmh + f.get('davis_C',0.54)*(v_kmh**2)
-                f_res_total = f_davis + f_pend + f_curva
-                
-                if state in ("BRAKE", "BRAKE_STATION", "BRAKE_OVERSPEED"):
-                    f_req_freno = max(0.0, masa_dinamica_kg * (f.get('a_freno_ms2', 1.2) * 0.9) - f_res_total)
-                    f_disp_freno = min(f.get('f_freno_max_kn', 105.0)*1000*n_uni, (f.get('p_freno_max_kw', f.get('p_max_kw',720)*1.2)*1000*n_uni)/max(0.1, v_ms)) if v_kmh >= f.get('v_freno_min', 3.81) else 0.0
-                    potencia_mecanica_frenado_kw = (min(f_req_freno, f_disp_freno) * v_ms) / 1000.0
-                    potencia_electrica_generada_kw = potencia_mecanica_frenado_kw * eta_m
-                    p_gen_kw = potencia_electrica_generada_kw * eta_regen_neta
-                    if p_gen_kw > 0:
-                        braking_by_idx[i].append((tr['idx'], pos, p_gen_kw))
-                    braking_ticks_per_trip[tr['idx']] += 1
-                
-                elif state in ("ACCEL", "CRUISE"):
-                    if estacion_anio == "invierno": aux_nom = f.get('aux_kw_heat', 67.0) * n_uni
-                    else: aux_nom = f.get('aux_kw_cool', 68.0) * n_uni
-                    p_aux_kw = calcular_aux_dinamico(tr['tipo_tren'], aux_nom, m / 60.0, tr['pax_abordo'], f.get('cap_max', 398) * n_uni, estacion_anio, state)
-                    p_dem_kw = p_aux_kw
-                    if state == "ACCEL":
-                        f_piloto = f.get('f_trac_max_kn', 110.0)*1000*n_uni*(tr['pct_trac']/100.0)
-                        p_piloto = f.get('p_max_kw', 720.0)*1000*n_uni*(tr['pct_trac']/100.0)
-                        f_piloto_disp = min(f_piloto, p_piloto/max(0.1, v_ms)) if v_ms > 0 else f_piloto
-                        f_motor = max(f_piloto_disp, f_res_total + (masa_dinamica_kg * 0.1))
-                        f_limite_total_abs = min(f.get('f_trac_max_kn', 110.0)*1000*n_uni, (f.get('p_max_kw', 720.0)*1000*n_uni)/max(0.1, v_ms))
-                        f_motor = min(f_motor, f_limite_total_abs)
-                        # Eficiencia del motor según tipo de tren (sin penalización por carga)
-                        p_dem_kw += ((f_motor * v_ms) / 1000.0 / eta_m)
-                    elif state == "CRUISE" and f_res_total > 0:
-                        p_dem_kw += (((f_res_total * v_ms) / 1000.0) / eta_m)
-                    accel_by_idx[i].append((tr['idx'], pos, p_dem_kw))
-        
-        for i in range(len(time_steps)):
-            braking_via = [b for b in braking_by_idx[i] if b[0] in via_indices]
-            accel_via = [a for a in accel_by_idx[i] if a[0] in via_indices]
-            if not braking_via or not accel_via: continue
-            
-            current_demands = {a[0]: a[2] for a in accel_via}
-            
-            for b_idx, b_pos, p_gen in braking_via:
-                if p_gen <= 0: continue
-                candidates = []
-                for a_idx, a_pos, a_demand in accel_via:
-                    if current_demands[a_idx] <= 0: continue
-                    dist = abs(a_pos - b_pos)
-                    if dist > DISTANCIA_MAXIMA: continue
-                    peso = 1.0 / max(0.1, dist)
-                    eta_dist = ETA_MAX_VAL * np.exp(-dist / LAMBDA_REGEN)
-                    candidates.append({'idx': a_idx, 'demand': current_demands[a_idx], 'dist': dist, 'peso': peso, 'eta_dist': eta_dist})
-                
-                if not candidates: continue
-                
-                total_peso = sum(c['peso'] for c in candidates)
-                energia_asignada_total = 0.0
-                for c in candidates:
-                    fraccion_peso = c['peso'] / total_peso if total_peso > 0 else 1.0 / len(candidates)
-                    p_ofrecida = p_gen * c['eta_dist'] * fraccion_peso
-                    p_transferida = min(p_ofrecida, c['demand'])
-                    current_demands[c['idx']] -= p_transferida
-                    energia_asignada_total += p_transferida
-                
-                if p_gen > 0:
-                    regen_util_per_trip[b_idx] += min(1.0, energia_asignada_total / p_gen)
-    
+        demanda_restante = {a[0]: a[2] for a in acels}
+
+        for b_idx, b_km, p_gen, b_via in frens:
+            if p_gen <= 0:
+                continue
+            candidatos = []
+            for a_idx, a_km, a_dem, a_via in acels:
+                # Solo misma vía — cada catenaria DC es independiente
+                if a_via != b_via:
+                    continue
+                if demanda_restante.get(a_idx, 0) <= 0:
+                    continue
+                dist = abs(a_km - b_km)
+                if dist > DIST_MAX:
+                    continue
+                eta_dist = ETA_MAX_VAL * np.exp(-dist / LAMBDA_REGEN)
+                candidatos.append((a_idx, demanda_restante[a_idx], eta_dist, dist))
+
+            if not candidatos:
+                continue
+
+            total_peso = sum(1.0 / max(0.1, c[3]) for c in candidatos)
+            energia_transferida = 0.0
+            for a_idx, dem, eta_d, dist in candidatos:
+                fraccion = (1.0 / max(0.1, dist)) / total_peso
+                p_ofrecida = p_gen * eta_d * fraccion
+                p_transf = min(p_ofrecida, demanda_restante[a_idx])
+                demanda_restante[a_idx] -= p_transf
+                energia_transferida += p_transf
+
+            regen_asignada[b_idx] += min(1.0, energia_transferida / p_gen)
+
+    # Normalizar: eta_red = fracción de p_gen que llegó a otro tren
+    # Multiplicar por ETA_REGEN_NETA (eficiencia eléctrica DC + pérdidas catenaria)
+    ETA_REGEN = _get_val('ETA_REGEN_NETA', 0.38)
     for idx in df_dia.index:
-        if braking_ticks_per_trip[idx] > 0:
-            regen_util_per_trip[idx] = min(1.0, regen_util_per_trip[idx] / braking_ticks_per_trip[idx])
+        ticks = braking_ticks.get(idx, 0)
+        if ticks > 0:
+            regen_util_per_trip[idx] = min(1.0, regen_asignada[idx] / ticks) * ETA_REGEN
         else:
             regen_util_per_trip[idx] = 0.0
-    
-    return regen_util_per_trip
 
+    return regen_util_per_trip
 
 def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use_regen, dict_regen, estacion_anio="primavera", prevenciones=None):
     df_e = df_dia.copy()
     if df_e.empty: return df_e
     
+    # Simular todos los viajes y capturar tiempos por estación
+    # para alimentar precalcular_red con datos reales del motor
+    _tiempos_sim = {}  # idx → lista (t_mins, km)
+    
     def _wrapper(r):
         pct_real = obtener_pct_traccion_operativo(r, pct_trac_ui)
-        (trc, aux_catenaria, reg_bruta, reg_panto_push,
+        (trc, aux_catenaria, reg_bruta, t_est_list,
          neto_ideal, t_h, prev_aplic) = simular_tramo_termodinamico(
             r['tipo_tren'], r.get('doble', False), r['km_orig'], r['km_dest'], r['Via'], 
             pct_real, use_rm, use_pend, r.get('nodos'), r.get('pax_d', {}), r.get('pax_abordo', 0), 
             None, r.get('maniobra'), estacion_anio, r.get('t_ini', 0.0), False, prevenciones
         )
+        # Guardar perfil completo para precalcular_red
+        if isinstance(t_est_list, dict):
+            _tiempos_sim[r.name] = t_est_list
         
-        # reg_bruta: energía regenerativa calculada por el motor (siempre se aplica)
-        # use_regen + dict_regen: receptividad adicional de la red por subestaciones
+        # reg_bruta: energía eléctrica disponible en catenaria (E_cin × eta_motor)
+        # La receptividad de la red se aplica aquí:
+        #   - Modelo físico: eta_red viene de precalcular_red (receptividad calculada)
+        #   - Modelo probabilístico: eta_red = ETA_REGEN_NETA (receptividad calibrada)
+        #   - Sin modelo: eta_red = ETA_REGEN_NETA por defecto
+        eta_regen_def = _get_val('ETA_REGEN_NETA', 0.38)
         if use_regen and dict_regen:
-            eta_red = dict_regen.get(r.name, 0.0)
-            reg_util = reg_bruta * eta_red
+            eta_red = dict_regen.get(r.name, eta_regen_def)
         else:
-            reg_util = reg_bruta  # regeneración siempre se devuelve a la red
+            eta_red = eta_regen_def
+        reg_util = reg_bruta * eta_red
         kwh_reostato = max(0.0, reg_bruta - reg_util)
         neto = max(0.0, trc + aux_catenaria - reg_util)
         
@@ -799,6 +817,10 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
         
     df_e[['kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato',
           'kwh_viaje_neto', 't_viaje_h', 'prevencion_aplicada']] = df_e.apply(_wrapper, axis=1)
+    
+    # Enriquecer df_e con nodos_sim (tiempos reales por estación del motor)
+    # precalcular_red_electrica_v111 los usará si están disponibles
+    df_e['datos_sim'] = df_e.index.map(lambda idx: _tiempos_sim.get(idx))
     df_e['t_fin'] = df_e['t_ini'] + df_e['t_viaje_h'] * 60.0
     df_e['tren_km']    = df_e.apply(_calc_tren_km_real_motor, axis=1)
     # dist_via_km: distancia de vía recorrida (sin factor doble) — para IDE
