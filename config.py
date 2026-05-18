@@ -155,8 +155,8 @@ FLOTA = {
         "f_freno_max_kn": 105.0,  
         "p_max_kw"     : 720.0,
         "p_freno_max_kw": 864.0,
-        "aux_kw_cool"  : 116.0,         # 2 coches × 2 unidades × 29kW — manual TRA 001
-        "aux_kw_heat"  : 80.0,          # Estimado proporcional XT-M (sin dato explícito en manual)
+        "aux_kw_cool"  : 68.0,          # Potencia eléctrica: 4u×29kW_frio/COP2.5 + compres + ilum + vent — manual TRA 001
+        "aux_kw_heat"  : 67.0,          # Calef. salón estimada + cabina 5kW + compres + ilum + vent
         "p_compresor_kw": 3.68,         # ALSTOM VFD Soft-Load
         "p_puertas_kw" : 0.9,           # 6 puertas x 150W (Unilateral)
         "p_vent_trac_kw": 7.6,          # Ventilación forzada
@@ -182,8 +182,8 @@ FLOTA = {
         "f_freno_max_kn": 110.0,  
         "p_max_kw"     : 1040.0,
         "p_freno_max_kw": 1248.0,
-        "aux_kw_cool"  : 95.0,          # Auxiliares verano: HVAC frío 70kW + base + comp (manual MC-EFER)
-        "aux_kw_heat"  : 80.0,          # Auxiliares invierno: calef+piso 59kW + base + comp
+        "aux_kw_cool"  : 52.0,          # Potencia eléctrica: 2u×35kW_frio/COP2.5 + compres + ilum + vent — manual MC-EFER
+        "aux_kw_heat"  : 84.0,          # Calef. directa: 40kW+19.2kW+1kW + compres + ilum + vent — manual MC-EFER
         "p_compresor_kw": 4.60,  
         "p_puertas_kw" : 0.9,    
         "p_vent_trac_kw": 8.5,
@@ -209,8 +209,8 @@ FLOTA = {
         "f_freno_max_kn": 190.0,  
         "p_max_kw"     : 2400.0,
         "p_freno_max_kw": 2800.0,
-        "aux_kw_cool"  : 158.0,          # 2u×25kW×3coches + 2cab×4kW — especif. técnicas 2025
-        "aux_kw_heat"  : 49.0,           # 8kW×3 + 6kW×3 + 2kW×2 + 1.5kW×2 — especif. técnicas 2025
+        "aux_kw_cool"  : 97.0,          # Potencia eléctrica: 6u×25kW_frio/COP2.5 + cab + compres + ilum + vent — especif. 2025
+        "aux_kw_heat"  : 72.0,          # BdC calor + resist. directa 24kW + cabina + compres + ilum + vent — especif. 2025
         "p_compresor_kw": 8.50,  
         "p_puertas_kw" : 1.35,          # 9 puertas x 150W (Unilateral)
         "p_vent_trac_kw": 11.4,
