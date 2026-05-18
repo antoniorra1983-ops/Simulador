@@ -127,57 +127,79 @@ def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos=None, t_
 # 2.5. FUNCIÓN DE AUXILIARES CON DUTY CYCLE REAL
 # =============================================================================
 def calcular_aux_dinamico(tipo_tren, aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE"):
+    # ── Perfil horario HVAC ──────────────────────────────────────────────────
     hora_int = int(hora_decimal) % 24
     try: perfil = _get_val('AUX_HVAC_HORA', {}).get(estacion_anio, [0.5]*24)
     except: perfil = [0.5]*24
     if not perfil or len(perfil) < 24: perfil = [0.5]*24
-    
     f_hvac = perfil[hora_int]
+
+    # Factor de ocupación sobre HVAC (más pax → más carga térmica en verano,
+    # menos en invierno por calor corporal)
     f_ocup = 1.0
     if cap_max > 0:
         ocup = min(1.0, pax_abordo / cap_max)
-        if estacion_anio == "verano": f_ocup = 1.0 + 0.05 * ocup
+        if estacion_anio == "verano":   f_ocup = 1.0 + 0.05 * ocup
         elif estacion_anio == "invierno": f_ocup = 1.0 - 0.12 * ocup
-        else: f_ocup = 1.0 - 0.06 * ocup
-    
-    if tipo_tren == "XT-100":
-        duty_compresor = {
-            "ACCEL": 0.10, "CRUISE": 0.08, "BRAKE": 0.45,
-            "BRAKE_STATION": 0.45, "BRAKE_OVERSPEED": 0.45,
-            "COAST": 0.08, "DWELL": 0.12
-        }
-    elif tipo_tren == "XT-M":
-        duty_compresor = {
-            "ACCEL": 0.20, "CRUISE": 0.18, "BRAKE": 0.65,
-            "BRAKE_STATION": 0.65, "BRAKE_OVERSPEED": 0.65,
-            "COAST": 0.18, "DWELL": 0.80
-        }
-    else:
-        duty_compresor = {
-            "ACCEL": 0.25, "CRUISE": 0.22, "BRAKE": 0.70,
-            "BRAKE_STATION": 0.70, "BRAKE_OVERSPEED": 0.70,
-            "COAST": 0.22, "DWELL": 0.85
-        }
-    
-    dc_comp = duty_compresor.get(estado_marcha, 0.10)
-    
-    duty_ventilacion = {
-        "ACCEL": 1.00, "CRUISE": 0.60, "BRAKE": 0.40,
-        "BRAKE_STATION": 0.40, "BRAKE_OVERSPEED": 0.40,
+        else:                             f_ocup = 1.0 - 0.06 * ocup
+
+    # ── Potencias reales por componente (desde manuales de fabricante) ───────
+    # HVAC: potencia eléctrica de entrada del compresor del AA
+    #   aux_kw_nominal ya es la potencia total correcta del tren (cool o heat)
+    #   La fracción HVAC varía según tren — calculada desde los manuales:
+    #     XT-100 cool: 46.4 kW de 68 kW = 68%
+    #     XT-M   cool: 28.0 kW de 52 kW = 54%
+    #     SFE    cool: 63.2 kW de 97 kW = 65%
+    #   Invierno: calefacción eléctrica directa (sin COP)
+    #     XT-100 heat: ~40 kW de 67 kW = 60%
+    #     XT-M   heat:  59.2 kW de 84 kW = 70%
+    #     SFE    heat:  42.4 kW de 72 kW = 59%
+    hvac_fracs = {
+        "XT-100": {"verano": 0.68, "primavera": 0.68, "otoño": 0.68, "invierno": 0.60},
+        "XT-M":   {"verano": 0.54, "primavera": 0.54, "otoño": 0.54, "invierno": 0.70},
+        "SFE":    {"verano": 0.65, "primavera": 0.65, "otoño": 0.65, "invierno": 0.59},
+    }
+    frac_hvac = hvac_fracs.get(tipo_tren, {}).get(estacion_anio, 0.65)
+    aux_hvac = aux_kw_nominal * frac_hvac * f_hvac * f_ocup
+
+    # Compresor neumático principal: potencia real × duty según estado
+    #   XT-100: compresor espiral, potencia estimada ~9.8 kW (igual al XT-M)
+    #   XT-M:   2 × VV80T 14 kW = 28 kW pico → duty ciclo real
+    #   SFE:    2 compresores CA, estimado ~15 kW pico
+    # Duty: en DWELL el compresor llena el depósito (máximo trabajo)
+    #       en CRUISE poco consumo (depósito lleno, solo fugas mínimas)
+    comp_pico_kw = {"XT-100": 9.8, "XT-M": 9.8, "SFE": 15.0}
+    duty_comp_map = {
+        "XT-100": {"ACCEL": 0.15, "CRUISE": 0.10, "BRAKE": 0.40,
+                   "BRAKE_STATION": 0.40, "BRAKE_OVERSPEED": 0.40,
+                   "COAST": 0.10, "DWELL": 0.50},
+        "XT-M":   {"ACCEL": 0.20, "CRUISE": 0.15, "BRAKE": 0.55,
+                   "BRAKE_STATION": 0.55, "BRAKE_OVERSPEED": 0.55,
+                   "COAST": 0.15, "DWELL": 0.80},
+        "SFE":    {"ACCEL": 0.25, "CRUISE": 0.20, "BRAKE": 0.60,
+                   "BRAKE_STATION": 0.60, "BRAKE_OVERSPEED": 0.60,
+                   "COAST": 0.20, "DWELL": 0.85},
+    }
+    p_comp = comp_pico_kw.get(tipo_tren, 9.8)
+    dc_comp = duty_comp_map.get(tipo_tren, duty_comp_map["XT-100"]).get(estado_marcha, 0.15)
+    aux_comp = p_comp * dc_comp
+
+    # Ventilación convertidores de tracción: proporcional a la carga del motor
+    # Alta en ACCEL (máxima disipación), baja en DWELL (motor frío)
+    vent_pico_kw = {"XT-100": 4.0, "XT-M": 6.0, "SFE": 8.0}
+    duty_vent = {
+        "ACCEL": 1.00, "CRUISE": 0.60, "BRAKE": 0.50,
+        "BRAKE_STATION": 0.50, "BRAKE_OVERSPEED": 0.50,
         "COAST": 0.20, "DWELL": 0.10
     }
-    dc_vent = duty_ventilacion.get(estado_marcha, 0.30)
-    
-    frac_hvac = 0.75
-    frac_comp = 0.05
-    frac_vent = 0.05
-    frac_base = 0.15
-    
-    aux_hvac = aux_kw_nominal * frac_hvac * f_hvac * f_ocup
-    aux_comp = aux_kw_nominal * frac_comp * dc_comp
-    aux_vent = aux_kw_nominal * frac_vent * dc_vent
-    aux_base = aux_kw_nominal * frac_base
-    
+    dc_vent = duty_vent.get(estado_marcha, 0.30)
+    aux_vent = vent_pico_kw.get(tipo_tren, 4.0) * dc_vent
+
+    # Base: alumbrado + electrónica + cargador baterías + enchufes
+    # Todo lo que no depende del estado de marcha ni del HVAC
+    base_kw = {"XT-100": 8.0, "XT-M": 6.0, "SFE": 10.0}
+    aux_base = base_kw.get(tipo_tren, 8.0)
+
     return aux_base + aux_hvac + aux_comp + aux_vent
 
 # =============================================================================
