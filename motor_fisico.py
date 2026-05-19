@@ -52,17 +52,21 @@ for ki, kf, _, vn, vr in _profile:
 
 _PEND_ARRAY_V1 = np.zeros(45000, dtype=float)
 _PEND_ARRAY_V2 = np.zeros(45000, dtype=float)
-_e_km = _get_val('_ELEV_KM', [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13])
-_e_m = _get_val('_ELEV_M', [12, 10, 10, 10, 18, 15, 12, 15, 35, 50, 55, 88, 122, 132, 142, 148, 155, 162, 175, 198, 216])
+# Perfiles de elevación independientes por vía — Google Earth
+_e_km   = _get_val('_ELEV_KM',   [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13])
+_e_m_v1 = _get_val('_ELEV_M_V1', _get_val('_ELEV_M', [12,10,10,10,18,15,12,15,35,50,55,88,122,132,142,148,155,162,175,198,216]))
+_e_m_v2 = _get_val('_ELEV_M_V2', _e_m_v1)  # fallback a V1 si no existe V2
 
-if len(_e_km) == len(_e_m) and len(_e_km) > 1:
+# Construir pendientes V1 y V2 independientes desde sus perfiles de elevación
+if len(_e_km) == len(_e_m_v1) and len(_e_km) > 1:
     for j in range(1, len(_e_km)):
         s_m = int(_e_km[j-1] * 1000)
         e_m = min(int(_e_km[j] * 1000), 44999)
         if e_m > s_m:
-            pend = ((_e_m[j] - _e_m[j-1]) / max(0.001, (_e_km[j] - _e_km[j-1])*1000)) * 1000.0
-            _PEND_ARRAY_V1[s_m:e_m] = pend
-            _PEND_ARRAY_V2[s_m:e_m] = -pend
+            pend_v1 = ((_e_m_v1[j] - _e_m_v1[j-1]) / max(0.001, (_e_km[j] - _e_km[j-1])*1000)) * 1000.0
+            pend_v2 = ((_e_m_v2[j] - _e_m_v2[j-1]) / max(0.001, (_e_km[j] - _e_km[j-1])*1000)) * 1000.0
+            _PEND_ARRAY_V1[s_m:e_m] =  pend_v1   # V1: positivo = sube PU→LI
+            _PEND_ARRAY_V2[s_m:e_m] = -pend_v2   # V2: invertido LI→PU
 
 _CURVA_ARRAY = np.zeros(45000, dtype=float)
 _curvas = _get_val('CURVAS_KM', [])
