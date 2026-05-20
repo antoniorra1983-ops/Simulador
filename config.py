@@ -81,11 +81,14 @@ PAX_KG    = 75.0
 DWELL_DEF = 25.0  # Dwell real por estacion MERVAL: mediana 25s (calibrado THDR 02-04-2026, n=4002)
 DAVIS_E_N_PERMIL = 9.81
 
+# Perfil horario HVAC — fracción de uso según temperatura exterior
+# aux_kw_heat/cool = potencia máxima medida TRA305
+# f_hvac = fracción de uso real (TRA305: 50% promedio anual)
 AUX_HVAC_HORA = {
-    "verano": [0.45,0.40,0.40,0.40,0.45,0.55, 0.65,0.75,0.85,0.90,0.95,0.98, 1.00,1.00,1.00,0.98,0.95,0.85, 0.75,0.65,0.55,0.50,0.48,0.45],
-    "otoño": [0.30,0.28,0.25,0.25,0.28,0.35, 0.45,0.50,0.55,0.60,0.63,0.65, 0.66,0.66,0.65,0.63,0.60,0.55, 0.50,0.45,0.40,0.35,0.33,0.31],
-    "invierno": [0.65,0.65,0.68,0.68,0.70,0.74, 0.80,0.84,0.86,0.85,0.82,0.78, 0.75,0.73,0.72,0.73,0.76,0.80, 0.82,0.80,0.78,0.76,0.74,0.73],
-    "primavera": [0.35,0.32,0.30,0.30,0.32,0.40, 0.50,0.58,0.65,0.70,0.72,0.75, 0.78,0.80,0.78,0.74,0.70,0.60, 0.55,0.50,0.45,0.40,0.38,0.36],
+    "verano":    [0.30,0.28,0.25,0.25,0.28,0.35, 0.45,0.55,0.65,0.72,0.78,0.80, 0.80,0.78,0.75,0.70,0.65,0.58, 0.50,0.43,0.38,0.35,0.33,0.31],
+    "otoño":     [0.35,0.32,0.30,0.30,0.32,0.38, 0.45,0.50,0.54,0.57,0.59,0.60, 0.60,0.58,0.56,0.54,0.52,0.48, 0.45,0.42,0.40,0.38,0.37,0.36],
+    "invierno":  [0.55,0.55,0.57,0.57,0.58,0.62, 0.67,0.70,0.72,0.71,0.69,0.66, 0.64,0.62,0.61,0.62,0.64,0.67, 0.68,0.67,0.65,0.63,0.61,0.58],
+    "primavera": [0.25,0.22,0.20,0.20,0.22,0.28, 0.36,0.43,0.50,0.55,0.58,0.60, 0.61,0.60,0.58,0.55,0.52,0.46, 0.40,0.35,0.32,0.30,0.28,0.26],
 }
 
 # Fracciones de carga (Componentes Vitales)
@@ -161,8 +164,8 @@ FLOTA = {
         "f_freno_max_kn": 105.0,  
         "p_max_kw"     : 720.0,
         "p_freno_max_kw": 864.0,
-        "aux_kw_cool"  : 68.0,          # Potencia eléctrica: 4u×29kW_frio/COP2.5 + compres + ilum + vent — manual TRA 001
-        "aux_kw_heat"  : 67.0,          # Calef. salón estimada + cabina 5kW + compres + ilum + vent
+        "aux_kw_cool"  : 45.28,         # TRA305: 11.32kW/equipo × 4 equipos (refrigeración)
+        "aux_kw_heat"  : 58.08,         # TRA305: 14.52kW/equipo × 4 equipos (calefacción)
         "p_compresor_kw": 3.68,         # ALSTOM VFD Soft-Load
         "p_puertas_kw" : 0.9,           # 6 puertas x 150W (Unilateral)
         "p_vent_trac_kw": 7.6,          # Ventilación forzada
