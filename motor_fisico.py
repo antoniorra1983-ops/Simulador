@@ -142,78 +142,63 @@ def get_train_state_and_speed(t, r_via, use_rm, km_orig, km_dest, nodos=None, t_
 # 2.5. FUNCIÓN DE AUXILIARES CON DUTY CYCLE REAL
 # =============================================================================
 def calcular_aux_dinamico(tipo_tren, aux_kw_nominal, hora_decimal, pax_abordo, cap_max, estacion_anio, estado_marcha="CRUISE"):
-    # ── Perfil horario HVAC ──────────────────────────────────────────────────
+    """
+    Calcula potencia auxiliar instantánea (kW) usando valores reales por componente.
+    
+    XT-100: calibrado contra TRA 305 (Alstom, ensayo El Belloto-Puerto, enero 2006)
+      - Base:       5.897 kW  (electrónica, ilum. emergencia, BT)
+      - HVAC:      14.52 kW/equipo calef | 11.32 kW/equipo refrig × 4 equipos
+      - Ventilación tracción: 7.685 kW (80% uso promedio)
+      - Compresor:  3.680 kW (20% uso promedio)
+      - Iluminación: 1.782 kW (50% uso promedio)
+      Total promedio TRA305: 42.7 kW (calef) / 36.3 kW (refrig)
+    """
     hora_int = int(hora_decimal) % 24
+
+    # ── Perfil horario HVAC (fracción de uso según hora y estación) ─────────
     try: perfil = _get_val('AUX_HVAC_HORA', {}).get(estacion_anio, [0.5]*24)
     except: perfil = [0.5]*24
     if not perfil or len(perfil) < 24: perfil = [0.5]*24
     f_hvac = perfil[hora_int]
 
-    # Factor de ocupación sobre HVAC (más pax → más carga térmica en verano,
-    # menos en invierno por calor corporal)
+    # Factor de ocupación sobre HVAC
     f_ocup = 1.0
     if cap_max > 0:
         ocup = min(1.0, pax_abordo / cap_max)
-        if estacion_anio == "verano":   f_ocup = 1.0 + 0.05 * ocup
+        if estacion_anio == "verano":     f_ocup = 1.0 + 0.05 * ocup
         elif estacion_anio == "invierno": f_ocup = 1.0 - 0.12 * ocup
         else:                             f_ocup = 1.0 - 0.06 * ocup
 
-    # ── Potencias reales por componente (desde manuales de fabricante) ───────
-    # HVAC: potencia eléctrica de entrada del compresor del AA
-    #   aux_kw_nominal ya es la potencia total correcta del tren (cool o heat)
-    #   La fracción HVAC varía según tren — calculada desde los manuales:
-    #     XT-100 cool: 46.4 kW de 68 kW = 68%
-    #     XT-M   cool: 28.0 kW de 52 kW = 54%
-    #     SFE    cool: 63.2 kW de 97 kW = 65%
-    #   Invierno: calefacción eléctrica directa (sin COP)
-    #     XT-100 heat: ~40 kW de 67 kW = 60%
-    #     XT-M   heat:  59.2 kW de 84 kW = 70%
-    #     SFE    heat:  42.4 kW de 72 kW = 59%
-    hvac_fracs = {
-        "XT-100": {"verano": 0.68, "primavera": 0.68, "otoño": 0.68, "invierno": 0.60},
-        "XT-M":   {"verano": 0.54, "primavera": 0.54, "otoño": 0.54, "invierno": 0.70},
-        "SFE":    {"verano": 0.65, "primavera": 0.65, "otoño": 0.65, "invierno": 0.59},
-    }
-    frac_hvac = hvac_fracs.get(tipo_tren, {}).get(estacion_anio, 0.65)
-    aux_hvac = aux_kw_nominal * frac_hvac * f_hvac * f_ocup
+    # ── Potencias reales por componente ─────────────────────────────────────
+    # HVAC: potencia por equipo medida en TRA 305, × número de equipos
+    # El aux_kw_nominal de config ya es la potencia TOTAL del HVAC del tren
+    # (calef o refrig según estación). Se modula con f_hvac × f_ocup.
+    aux_hvac = aux_kw_nominal * f_hvac * f_ocup
 
-    # Compresor neumático principal: potencia real × duty según estado
-    #   XT-100: compresor espiral, potencia estimada ~9.8 kW (igual al XT-M)
-    #   XT-M:   2 × VV80T 14 kW = 28 kW pico → duty ciclo real
-    #   SFE:    2 compresores CA, estimado ~15 kW pico
-    # Duty: en DWELL el compresor llena el depósito (máximo trabajo)
-    #       en CRUISE poco consumo (depósito lleno, solo fugas mínimas)
-    comp_pico_kw = {"XT-100": 9.8, "XT-M": 9.8, "SFE": 15.0}
-    duty_comp_map = {
-        "XT-100": {"ACCEL": 0.15, "CRUISE": 0.10, "BRAKE": 0.40,
-                   "BRAKE_STATION": 0.40, "BRAKE_OVERSPEED": 0.40,
-                   "COAST": 0.10, "DWELL": 0.50},
-        "XT-M":   {"ACCEL": 0.20, "CRUISE": 0.15, "BRAKE": 0.55,
-                   "BRAKE_STATION": 0.55, "BRAKE_OVERSPEED": 0.55,
-                   "COAST": 0.15, "DWELL": 0.80},
-        "SFE":    {"ACCEL": 0.25, "CRUISE": 0.20, "BRAKE": 0.60,
-                   "BRAKE_STATION": 0.60, "BRAKE_OVERSPEED": 0.60,
-                   "COAST": 0.20, "DWELL": 0.85},
-    }
-    p_comp = comp_pico_kw.get(tipo_tren, 9.8)
-    dc_comp = duty_comp_map.get(tipo_tren, duty_comp_map["XT-100"]).get(estado_marcha, 0.15)
-    aux_comp = p_comp * dc_comp
-
-    # Ventilación convertidores de tracción: proporcional a la carga del motor
-    # Alta en ACCEL (máxima disipación), baja en DWELL (motor frío)
-    vent_pico_kw = {"XT-100": 4.0, "XT-M": 6.0, "SFE": 8.0}
+    # Ventilación onduladores de tracción — TRA 305: 7.685 kW pico, 80% uso promedio
+    # Varía con la carga del motor: máxima en ACCEL, mínima en DWELL
+    vent_pico = {"XT-100": 7.685, "XT-M": 9.0, "SFE": 12.0}
     duty_vent = {
-        "ACCEL": 1.00, "CRUISE": 0.60, "BRAKE": 0.50,
-        "BRAKE_STATION": 0.50, "BRAKE_OVERSPEED": 0.50,
-        "COAST": 0.20, "DWELL": 0.10
+        "ACCEL": 1.00, "CRUISE": 0.80, "BRAKE": 0.60,
+        "BRAKE_STATION": 0.60, "BRAKE_OVERSPEED": 0.60,
+        "COAST": 0.30, "DWELL": 0.10
     }
-    dc_vent = duty_vent.get(estado_marcha, 0.30)
-    aux_vent = vent_pico_kw.get(tipo_tren, 4.0) * dc_vent
+    aux_vent = vent_pico.get(tipo_tren, 7.685) * duty_vent.get(estado_marcha, 0.50)
 
-    # Base: alumbrado + electrónica + cargador baterías + enchufes
-    # Todo lo que no depende del estado de marcha ni del HVAC
-    base_kw = {"XT-100": 8.0, "XT-M": 6.0, "SFE": 10.0}
-    aux_base = base_kw.get(tipo_tren, 8.0)
+    # Compresor neumático — TRA 305: 3.680 kW, 20% uso promedio
+    # Mayor duty en paradas (repone presión) y frenadas (actuación frenos)
+    comp_pico = {"XT-100": 7.360, "XT-M": 5.0, "SFE": 6.0}  # TRA305: 2 compresores × 3.68 kW
+    duty_comp = {
+        "ACCEL": 0.15, "CRUISE": 0.10, "BRAKE": 0.35,
+        "BRAKE_STATION": 0.45, "BRAKE_OVERSPEED": 0.35,
+        "COAST": 0.10, "DWELL": 0.50
+    }
+    aux_comp = comp_pico.get(tipo_tren, 3.680) * duty_comp.get(estado_marcha, 0.20)
+
+    # Base: electrónica, iluminación emergencia, BT — TRA 305: 5.897 kW constante
+    # Iluminación sala pasajeros: 1.782 kW, ~50% uso
+    base_kw = {"XT-100": 5.897 + 1.782*0.50, "XT-M": 5.0 + 1.5*0.50, "SFE": 7.0 + 2.0*0.50}
+    aux_base = base_kw.get(tipo_tren, 6.8)
 
     return aux_base + aux_hvac + aux_comp + aux_vent
 
