@@ -163,7 +163,7 @@ FLOTA = {
         "f_trac_max_kn": 110.0,   
         "f_freno_max_kn": 105.0,  
         "p_max_kw"     : 720.0,
-        "p_freno_max_kw": 864.0,
+        "p_freno_max_kw": 365.0,         # Acto 1: potencia nominal de rueda XT-100
         "aux_kw_cool"  : 45.28,         # TRA305: 11.32kW/equipo × 4 equipos (refrigeración)
         "aux_kw_heat"  : 58.08,         # TRA305: 14.52kW/equipo × 4 equipos (calefacción)
         "p_compresor_kw": 3.68,         # ALSTOM VFD Soft-Load
