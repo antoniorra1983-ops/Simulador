@@ -622,14 +622,12 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
 def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
     """Receptividad de la red DC según headway entre trenes de la misma vía.
     
-    Retorna eta_red = receptividad_headway × ETA_REGEN_NETA, que representa
-    la fracción de la energía eléctrica disponible en catenaria (reg_bruta,
-    ya sin ETA_REGEN_NETA aplicado) que efectivamente llega a otro tren.
+    Retorna la fracción de receptividad pura (0-1) según headway.
+    El wrapper aplica ETA_REGEN_NETA separado como eficiencia eléctrica.
     
-    Cadena: E_cin × eta_motor (reg_bruta) × eta_red → reg_util
+    Cadena: E_cin × eta_motor (reg_bruta) × ETA_REGEN_NETA × receptividad → reg_util
     """
     if df_dia.empty: return {}
-    ETA_REGEN = _get_val('ETA_REGEN_NETA', 0.38)  # eficiencia eléctrica + pérdidas DC
     result = {}
     for via in [1, 2]:
         sub = df_dia[df_dia["Via"] == via].sort_values("t_ini")
@@ -641,15 +639,13 @@ def calcular_receptividad_por_headway(df_dia: pd.DataFrame) -> dict:
             if i > 0: headways.append(t_ini_vals[i] - t_ini_vals[i-1])
             if i < len(indices)-1: headways.append(t_ini_vals[i+1] - t_ini_vals[i])
             if not headways:
-                result[idx] = 0.10 * ETA_REGEN
+                result[idx] = 0.10
                 continue
             hw = min(headways)
-            # Receptividad según headway: menor headway → más probable que haya receptor
             if hw < 5.0:   recep = 0.90
             elif hw < 10.0: recep = 0.75 - ((hw - 5.0) / 5.0) * 0.45
             else:           recep = max(0.10, 0.30 - ((hw - 10.0) / 20.0) * 0.20)
-            # eta_red = receptividad × eficiencia eléctrica DC
-            result[idx] = min(recep, 0.90) * ETA_REGEN
+            result[idx] = min(recep, 0.90)
     return result
 
 def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="primavera"):
@@ -793,12 +789,17 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
         #   - Modelo físico: eta_red viene de precalcular_red (receptividad calculada)
         #   - Modelo probabilístico: eta_red = ETA_REGEN_NETA (receptividad calibrada)
         #   - Sin modelo: eta_red = ETA_REGEN_NETA por defecto
-        eta_regen_def = _get_val('ETA_REGEN_NETA', 0.38)
+        # Cadena de regeneración:
+        # reg_bruta = E_cin × eta_motor (sale del motor, energía en catenaria DC)
+        # ETA_REGEN_NETA = eficiencia eléctrica DC (pérdidas catenaria, inversores)
+        # receptividad = fracción que absorbe otro tren (del modelo headway/físico)
+        # reg_util = reg_bruta × ETA_REGEN_NETA × receptividad
+        ETA_REGEN = _get_val('ETA_REGEN_NETA', 0.38)
         if use_regen and dict_regen:
-            eta_red = dict_regen.get(r.name, eta_regen_def)
+            receptividad = dict_regen.get(r.name, 0.53)  # 0.53 = promedio headway MERVAL
         else:
-            eta_red = eta_regen_def
-        reg_util = reg_bruta * eta_red
+            receptividad = 0.53  # sin modelo: receptividad promedio MERVAL
+        reg_util = reg_bruta * ETA_REGEN * receptividad
         kwh_reostato = max(0.0, reg_bruta - reg_util)
         neto = max(0.0, trc + aux_catenaria - reg_util)
         
