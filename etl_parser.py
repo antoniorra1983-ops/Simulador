@@ -827,66 +827,85 @@ def cargar_prevenciones(data, fname):
 # =============================================================================
 def asignar_flota_planilla(df):
     """
-    Asigna tipo_tren y doble a cada viaje según la flota real de MERVAL:
-      - 27 XT-100 (max 13 dobles simultáneos)
-      - 8  XT-M   (max  4 dobles simultáneos)
-      - 1  SFE    (nunca doble)
-    La asignación se basa en perfil de demanda horaria típica de MERVAL.
+    Asigna tipo_tren a cada viaje según la flota real de MERVAL.
+    La asignación se hace POR SERVICIO COMPLETO (num_servicio) para
+    respetar el carrusel — todos los viajes de un servicio usan el mismo tren.
+
+    Flota MERVAL:
+      - 1  SFE   → servicio 6xx completo de mayor extensión (simple)
+      - 8  XT-M  → servicios 4xx cortos (SA-PU) con doble, o 6xx simples
+      - 27 XT-100 → resto
     """
     import numpy as np
 
-    FLOTA_UNIDADES = {'XT-100': 27, 'XT-M': 8, 'SFE': 1}
-    MAX_DOBLES     = {'XT-100': 13, 'XT-M':  4, 'SFE': 0}
-    CAP_SIMPLE     = {'XT-100': 473, 'XT-M': 376, 'SFE': 780}
-
-    # Perfil de demanda horaria relativa (punta AM=8h, punta PM=18h)
-    DEMANDA_HORA = {
-        6: 0.35, 7: 0.75, 8: 1.00, 9: 0.80, 10: 0.50,
-        11: 0.45, 12: 0.55, 13: 0.60, 14: 0.55, 15: 0.50,
-        16: 0.65, 17: 0.90, 18: 1.00, 19: 0.85, 20: 0.60,
-        21: 0.40, 22: 0.30, 23: 0.20,
-    }
-    PAX_MAX = 800  # pasajeros máximos estimados por servicio en peak
+    SFE_MAX       = 1
+    XTM_UNIDADES  = 8   # unidades individuales (doble usa 2)
 
     df = df.copy()
-    df['demanda'] = df['t_ini'].apply(lambda t: DEMANDA_HORA.get(min(int(t//60), 23), 0.3))
-    df['pax_est'] = (df['demanda'] * PAX_MAX).astype(int)
+    df['tipo_tren'] = 'XT-100'  # default
 
-    # Ordenar por demanda descendente
-    orden = df.sort_values('pax_est', ascending=False).index.tolist()
+    # Agrupar por servicio y calcular características del carrusel
+    servicios = {}
+    for svc, grp in df.groupby('num_servicio'):
+        tipos_svc   = list(grp.sort_values('t_ini')['svc_type'])
+        es_completo = any(s in ('PU-LI','LI-PU') for s in tipos_svc)
+        es_corto    = all(s in ('PU-SA','SA-PU','PU-EB','EB-PU') for s in tipos_svc)
+        doble       = bool(grp['doble'].any())
+        unidades    = 2 if doble else 1
+        servicios[svc] = {
+            'idx':         list(grp.index),
+            'n':           len(grp),
+            't_ini':       grp['t_ini'].min(),
+            'es_completo': es_completo,
+            'es_corto':    es_corto,
+            'doble':       doble,
+            'unidades':    unidades,
+            'tipos':       tipos_svc,
+        }
 
-    # Guardar dobles originales de la planilla (columna Múltiple)
-    doble_original = df['doble'].copy()
-    # Inicializar tipo con XT-100 (se sobreescribe según demanda)
-    df['tipo_tren'] = 'XT-100'
-    df['doble']     = doble_original  # conservar dobles de la planilla
+    asignados = set()  # servicios ya asignados a SFE o XT-M
 
-    sfe_usado = 0
-    xtm_disp  = FLOTA_UNIDADES['XT-M']
-
-    for idx in orden:
-        pax = df.loc[idx, 'pax_est']
-        orig_doble = df.loc[idx, 'doble']
-
-        # 1. SFE — solo servicios LI-PU o PU-LI, simples
-        svc_idx = df.loc[idx, 'svc_type']
-        if sfe_usado == 0 and not df.loc[idx, 'doble'] and svc_idx in ('LI-PU','PU-LI'):
+    # 1. SFE — servicio 6xx completo (PU-LI/LI-PU), simple, más viajes
+    candidatos_sfe = sorted(
+        [s for s, v in servicios.items()
+         if v['es_completo'] and not v['doble']],
+        key=lambda s: servicios[s]['n'], reverse=True
+    )
+    sfe_asignados = 0
+    for svc in candidatos_sfe:
+        if sfe_asignados >= SFE_MAX:
+            break
+        for idx in servicios[svc]['idx']:
             df.loc[idx, 'tipo_tren'] = 'SFE'
-            sfe_usado = 1
-            continue
+        asignados.add(svc)
+        sfe_asignados += 1
 
-        # 2. XT-M — alta demanda
-        # doble NO se toca — viene de la planilla
-        unidades_req = 2 if df.loc[idx, 'doble'] else 1
-        if xtm_disp >= unidades_req and pax > CAP_SIMPLE['XT-100'] * 0.7:
+    # 2. XT-M — preferir servicios cortos con doble, luego cortos simples,
+    #           luego completos simples de menor cantidad de viajes
+    candidatos_xtm = sorted(
+        [s for s, v in servicios.items() if s not in asignados],
+        key=lambda s: (
+            not servicios[s]['es_corto'],      # cortos primero
+            not servicios[s]['doble'],          # dobles primero
+            -servicios[s]['n'],                 # más viajes primero
+            servicios[s]['t_ini']               # más temprano primero
+        )
+    )
+    xtm_disp = XTM_UNIDADES
+    for svc in candidatos_xtm:
+        v = servicios[svc]
+        if xtm_disp < v['unidades']:
+            continue
+        for idx in v['idx']:
             df.loc[idx, 'tipo_tren'] = 'XT-M'
-            xtm_disp -= unidades_req
-            continue
+        asignados.add(svc)
+        xtm_disp -= v['unidades']
+        if xtm_disp <= 0:
+            break
 
-        # 3. XT-100 — doble ya viene de la planilla
-        # (no se modifica)
-
-    # doble viene de la planilla y no se modifica
+    # 3. XT-100 — ya es el default para todo lo no asignado
+    df['pax_est'] = 0
+    df['demanda'] = 0
 
     # Asignar número de motriz usando rostering greedy
     # XT-100: 1-27 | XT-M: 28-35 | SFE: 412
