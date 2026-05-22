@@ -827,13 +827,20 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     frac_hvac_pp = _get_val('FRAC_HVAC', 0.50)  # HVAC al 50% en prepost
     flota_db_pp  = _get_val('FLOTA', {})
 
-    motrices_viajes = {}
+    # Agrupar por tren FÍSICO único (no por combinación doble)
+    # "1+16" → tren 1 y tren 16 son 2 trenes distintos
+    # Primero construir mapa: tren_fisico → lista de idx donde aparece
+    tren_fisico_viajes = {}  # num_individual → [idx, ...]
     for idx, row in df_e.iterrows():
         mn = str(row.get('motriz_num', ''))
         nums = _re.findall(r'\d+', mn)
         for n in nums:
-            if n not in motrices_viajes: motrices_viajes[n] = []
-            motrices_viajes[n].append(idx)
+            if n not in tren_fisico_viajes: tren_fisico_viajes[n] = []
+            tren_fisico_viajes[n].append(idx)
+
+    # Para el prepost: cada tren físico tiene 1 pre y 1 post por día
+    # Se distribuye su coste entre todos los viajes en que participa
+    motrices_viajes = tren_fisico_viajes
 
     aux_prepost_por_idx = {idx: 0.0 for idx in df_e.index}
     if not motrices_viajes:
