@@ -678,7 +678,9 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             sub = df_acum[df_acum['tipo_tren'] == f_type]
             energy_by_fleet_comercial[f_type] = sub['kwh_viaje_neto'].sum() if not sub.empty else 0.0
 
-    total_ser_kwh_44kv = sum(max(0.0, val) for val in ser_accum_visual.values()) / ETA_SER_RECTIFICADOR
+    # ✅ CORRECCIÓN: La SEAT mide el flujo neto (entrada – salida)
+    # Se suman algebraicamente todos los aportes de las SER (incluyendo negativos por regeneración inyectada a 44 kV)
+    total_ser_kwh_44kv = max(0.0, sum(ser_accum_visual.values()) / ETA_SER_RECTIFICADOR)
     t_elap = max(0.001, hora_m1 / 60.0)
     flujo_avg = calcular_flujo_ac_nodo({k: max(0.0, v) / ETA_SER_RECTIFICADOR / t_elap for k, v in ser_accum_visual.items()})
     total_ac_loss_kwh = flujo_avg['P_loss_kw'] * (1.15**2) * t_elap
