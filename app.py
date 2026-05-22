@@ -197,7 +197,7 @@ def simular_dia_historico_cached(_df_dia, pct_trac_hist, use_rm, use_pend, use_r
 # =============================================================================
 # FUNCIÓN PARA GENERAR TRAYECTORIA DETALLADA POR ESTACIONES
 # =============================================================================
-def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, km_orig, km_dest, use_rm, prevenciones=None):
+def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, estacion_anio, km_orig, km_dest, use_rm, use_pend=True, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_ACUM, DWELL_DEF
     from motor_fisico import simular_tramo_termodinamico
 
@@ -230,7 +230,7 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
         try:
             _, _, _, _, _, t_h, _ = simular_tramo_termodinamico(
                 tipo_tren, doble, km_ini_seg, km_fin_seg, via, pct_trac,
-                use_rm, True, None, {}, 150, None, None, estacion_anio, t_actual, False, prevenciones
+                use_rm, use_pend, None, {}, 150, None, None, estacion_anio, t_actual, False, prevenciones
             )
         except Exception:
             t_h = 0.0
@@ -353,7 +353,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         # ✅ Generar trayectoria detallada con timestamps reales para el mapa
         trayectoria = generar_trayectoria_sintetica(
             r['tipo_tren'], r['doble'], r['Via'], pct_trac_plan, r['t_ini'],
-            estacion_anio_plan, r['km_orig'], r['km_dest'], use_rm, _prevenciones
+            estacion_anio_plan, r['km_orig'], r['km_dest'], use_rm, use_pend, _prevenciones
         )
         if trayectoria:
             t_fin_sintetico = trayectoria[-1][0]
@@ -851,7 +851,7 @@ def main():
                     st.session_state['simulacion_plan_lista'] = True
 
             if st.session_state.get('simulacion_plan_lista', False) and 'raw_plan_df' in st.session_state:
-                plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature + str(sorted([(p.get('km_min',0),p.get('km_max',0),p.get('v_kmh',0),p.get('via',0)) for p in (prevenciones_list or [])], key=lambda x: x[0])) + str(use_pend) + str(use_rm) + str(use_regen) + str(tipo_regen) + str(estacion_anio_plan)
+                plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature + str(sorted([(p.get('km_min',0),p.get('km_max',0),p.get('v_kmh',0),p.get('via',0)) for p in (prevenciones_list or [])], key=lambda x: x[0])) + str(use_pend) + str(use_rm) + str(use_regen) + str(tipo_regen) + str(estacion_anio_plan) + str(pct_trac_plan)
                 df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig)
                 
                 # Forzar tipos numéricos
