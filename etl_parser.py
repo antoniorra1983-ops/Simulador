@@ -988,6 +988,29 @@ def asignar_flota_planilla(df):
     pool_xtm   = list(range(28, 36))
     pool_xt100 = list(range(1,  28))
 
+    # Limitar pool al mínimo necesario según viajes del día
+    # Estimación: mínimo trenes = pico de viajes simultáneos + margen 20%
+    import math as _math
+    n_xt100 = len([r for _,r in df.iterrows() if r['tipo_tren']=='XT-100'])
+    n_xtm   = len([r for _,r in df.iterrows() if r['tipo_tren']=='XT-M'])
+    # Pico simultáneo estimado: max viajes en ventana de 60 min
+    df_s = df.sort_values('t_ini')
+    pico_xt100 = max(
+        len(df_s[(df_s['tipo_tren']=='XT-100') &
+                 (df_s['t_ini']>=t) & (df_s['t_ini']<t+60)])
+        for t in range(300, 1440, 30)
+    ) if n_xt100 > 0 else 1
+    pico_xtm = max(
+        len(df_s[(df_s['tipo_tren']=='XT-M') &
+                 (df_s['t_ini']>=t) & (df_s['t_ini']<t+60)])
+        for t in range(300, 1440, 30)
+    ) if n_xtm > 0 else 1
+    # Limitar pool al pico × 1.3 (margen operacional), mínimo 5
+    n_pool_xt100 = min(27, max(5, _math.ceil(pico_xt100 * 1.3)))
+    n_pool_xtm   = min(8,  max(1, _math.ceil(pico_xtm   * 1.3)))
+    pool_xt100 = list(range(1, 1 + n_pool_xt100))
+    pool_xtm   = list(range(28, 28 + n_pool_xtm))
+
     def mi_pool(tipo):
         if tipo=='SFE':  return pool_sfe
         if tipo=='XT-M': return pool_xtm
