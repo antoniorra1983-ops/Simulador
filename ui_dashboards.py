@@ -11,11 +11,6 @@ from red_electrica import calcular_flujo_ac_nodo, distribuir_potencia_sers_kw, d
 from motor_fisico import km_at_t, vel_at_km, get_train_state_and_speed, calcular_aux_dinamico, simular_tramo_termodinamico
 
 # =============================================================================
-# PARÁMETRO DE INVERSIÓN A LA RED AC (calibrable)
-# =============================================================================
-INVERSION_FRACTION = 0.30  # Fracción del reóstato que se devuelve a 44 kV
-
-# =============================================================================
 # MOTOR VISUAL 1: RENDERIZADO ESTÁTICO PYTHON (DOM SVG INYECTADO)
 # =============================================================================
 def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, titulo_extra="", active_sers_list=SER_DATA, gap_vias=200):
@@ -153,10 +148,13 @@ def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, tit
     return svg.replace('\n', ''), H
 
 # =============================================================================
-# MOTOR VISUAL 2: SCADA JAVASCRIPT (CLIENT-SIDE RENDERING + POPUPS)
+# MOTOR VISUAL 2: SCADA JAVASCRIPT (CLIENT-SIDE RENDERING + POPUPS) – CORREGIDO
 # =============================================================================
 def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titulo_extra, active_sers_list, gap_vias, use_rm):
-    # (esta función no sufre cambios)
+    """
+    Empaqueta el perfil matemático y genera el Iframe HTML para la animación SCADA a 60FPS.
+    ✅ CORREGIDO: Los trenes se ordenan por posición en la vía, color naranja en frenado.
+    """
     trips_data = []
     
     for _, row in df_dia_e.iterrows():
@@ -195,7 +193,7 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
             'motriz': str(row.get('motriz_num', '')),
             'tipo': str(row.get('tipo_tren', 'XT-100')),
             'doble': bool(row.get('doble', False)),
-            'kwh_total': float(row.get('kwh_viaje_neto', 0)),  # en SCADA se ve el neto acumulado; se podría recalcular si se desea
+            'kwh_total': float(row.get('kwh_viaje_neto', 0)),
             'pax_arr': pax_arr,
             'traj': traj
         })
@@ -268,6 +266,7 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
         let html = '';
         let activeTrips = trips.filter(tr => currentTime >= tr.t_ini && currentTime <= tr.t_fin + 5.0);
         
+        // Ordenar trenes por vía y luego por posición
         activeTrips.sort((a, b) => {
             if (a.Via !== b.Via) return a.Via - b.Via;
             let kmA = getPos(a.traj, Math.min(currentTime, a.t_fin));
@@ -285,9 +284,10 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
             let km = getPos(tr.traj, current_t);
             let xp = xkm(km);
             
+            // Detectar frenado comparando posición futura con actual
             let is_braking = false;
             if (!is_parked) {
-                let delta = 0.02;
+                let delta = 0.02; // minutos
                 let km_future = getPos(tr.traj, current_t + delta);
                 let speed_now = (km_future - km) / delta;
                 let km_past = getPos(tr.traj, Math.max(tr.t_ini, current_t - delta));
@@ -300,7 +300,7 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
             let y_ln = tr.Via === 2 ? Y_V2 : Y_V1;
             let color = tr.Via === 2 ? '#c62828' : '#1565c0';
             if (is_parked) color = '#4CAF50';
-            else if (is_braking) color = '#FF8C00';
+            else if (is_braking) color = '#FF8C00';   // Naranja frenado
             
             let r_c = tr.doble ? 18 : 11;
             
@@ -515,23 +515,9 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     if not df_act.empty:
         df_act['is_parked'] = hora_m1 >= df_act['t_fin']
         df_act['frac_act'] = np.minimum(1.0, (hora_m1 - df_act['t_ini']) / np.maximum(0.001, df_act['t_fin'] - df_act['t_ini']))
-        # ✅ CORRECCIÓN: Calcular el consumo instantáneo usando el pct_trac actual
-        def _calc_kwh_neto_instant(row):
-            if row['is_parked']:
-                return 0.0
-            # Simular el viaje completo para obtener trc, aux, reg con el % actual
-            trc, aux, reg, _, _, _, _ = simular_tramo_termodinamico(
-                row['tipo_tren'], row['doble'], row['km_orig'], row['km_dest'], row['Via'],
-                pct_trac, use_rm, use_pend,
-                row.get('nodos'), row.get('pax_d', {}), row.get('pax_abordo', 0),
-                None, row.get('maniobra'), estacion_anio, row['t_ini'],
-                es_vacio=False, prevenciones=None
-            )
-            return (trc + aux - reg) * row['frac_act']
-        df_act['kwh_neto'] = df_act.apply(_calc_kwh_neto_instant, axis=1)
+        df_act['kwh_neto'] = df_act['kwh_viaje_neto'] * df_act['frac_act']
         df_act['km_pos'] = df_act.apply(lambda r: km_at_t(r['t_ini'], r['t_fin'], min(hora_m1, r['t_fin']), r['Via'], use_rm, r['km_orig'], r['km_dest'], r.get('nodos'), r.get('t_arr')), axis=1)
         
-        # (resto del código para vel, pax, sep_next, tooltip sin cambios)
         def _vel_real(r):
             if r['is_parked']: return 0.0
             km_now = r['km_pos']
@@ -555,7 +541,6 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         df_act['sep_next'] = df_act.apply(lambda r: _sep_next(r, df_act[df_act['Via']==r['Via']].drop(index=r.name)), axis=1)
 
         def _make_tooltip_and_power(row):
-            # (sin cambios)
             m_num = str(row.get('motriz_num', ''))
             tipo = str(row.get('tipo_tren', 'XT-100'))
             serv = str(row.get('num_servicio', ''))
@@ -612,9 +597,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     vacio_kwh_total, vacio_km_total = 0.0, 0.0
     energy_by_fleet = {'XT-100': 0.0, 'XT-M': 0.0, 'SFE': 0.0}
     ser_accum_visual = {s[1]: 0.0 for s in active_sers}
-    reostato_injection = {s[1]: 0.0 for s in active_sers}  # para guardar la parte que se invierte a la red
     
-    # (procesamiento de vacíos sin cambios)
     if not df_vacios_real.empty:
         vacios_dia = df_vacios_real[df_vacios_real['Fecha_str'] == fecha_sel].to_dict('records')
     else:
@@ -676,41 +659,16 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                     for s_name, e_val in distribuir_energia_sers(e_panto_b, th_b, km_orig, km_dest, active_sers).items(): ser_accum_visual[s_name] += e_val
 
     t_regen_acum = 0.0
-    # ✅ CORRECCIÓN: Recalcular energía de cada viaje activo con el pct_trac actual, incluyendo inyección de reóstato
     for idx, r in df_dia_e[df_dia_e['t_ini'] <= hora_m1].iterrows():
         t_eval = min(hora_m1, r['t_fin'])
         frac = (t_eval - r['t_ini']) / max(0.001, r['t_fin'] - r['t_ini'])
         km_now = km_at_t(r['t_ini'], r['t_fin'], t_eval, r['Via'], use_rm, r['km_orig'], r['km_dest'], r.get('nodos'), r.get('t_arr'))
-
-        # Simular el viaje completo con el % de tracción actual
-        trc, aux, reg, _, _, t_h, _ = simular_tramo_termodinamico(
-            r['tipo_tren'], r['doble'], r['km_orig'], r['km_dest'], r['Via'],
-            pct_trac, use_rm, use_pend,
-            r.get('nodos'), r.get('pax_d', {}), r.get('pax_abordo', 0),
-            None, r.get('maniobra'), estacion_anio, r['t_ini'],
-            es_vacio=False, prevenciones=None
-        )
-        e_p_frac = (trc + aux - reg) * frac
-        # Reóstato: energía que se disiparía sin ser aprovechada
-        # Asumimos que reg es la regeneración bruta, y que una fracción (1 - ETA_REGEN_NETA) se va a reóstato
-        # En la simulación, reg ya es la energía eléctrica disponible en catenaria; la no utilizada se quema.
-        # Para simplificar, usamos la fórmula: reostato = reg * (1 - ETA_REGEN_NETA) * frac.
-        # Ajustamos con el valor real si está en el df, pero para consistencia recalculamos.
-        reostato_frac = reg * (1 - ETA_REGEN_NETA) * frac
-        
-        # Acumular consumo normal
-        for s_name, e_val in distribuir_energia_sers(e_p_frac, (t_eval - r['t_ini'])/60.0, r['km_orig'], km_now, active_sers).items():
-            ser_accum_visual[s_name] += e_val
-        
-        # Inyección a la red: una fracción del reóstato se devuelve
-        if reostato_frac > 0:
-            for s_name, e_val in distribuir_energia_sers(reostato_frac * INVERSION_FRACTION, (t_eval - r['t_ini'])/60.0, r['km_orig'], km_now, active_sers).items():
-                reostato_injection[s_name] += e_val
-        
-        t_regen_acum += reg * frac
+        e_p_frac = (r['kwh_viaje_trac'] + r['kwh_viaje_aux'] - r['kwh_viaje_regen']) * frac
+        for s_name, e_val in distribuir_energia_sers(e_p_frac, (t_eval - r['t_ini']) / 60.0, r['km_orig'], km_now, active_sers).items(): ser_accum_visual[s_name] += e_val 
 
     df_acum = df_dia_e[df_dia_e['t_ini'] <= hora_m1]
     if not df_acum.empty:
+        t_regen_acum = df_acum['kwh_viaje_regen'].sum()
         for f_type in ['XT-100', 'XT-M', 'SFE']:
             sub = df_acum[df_acum['tipo_tren'] == f_type]
             if not sub.empty:
@@ -719,31 +677,20 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         for f_type in ['XT-100', 'XT-M', 'SFE']:
             sub = df_acum[df_acum['tipo_tren'] == f_type]
             energy_by_fleet_comercial[f_type] = sub['kwh_viaje_neto'].sum() if not sub.empty else 0.0
-    else:
-        energy_by_fleet_comercial = {'XT-100': 0.0, 'XT-M': 0.0, 'SFE': 0.0}
 
-    # ✅ CORRECCIÓN: Restar la inyección de reóstato para obtener el neto real por SER
-    ser_neto_visual = {}
-    for s_name in ser_accum_visual.keys():
-        neto = ser_accum_visual[s_name] - reostato_injection.get(s_name, 0.0)
-        ser_neto_visual[s_name] = max(0.0, neto)  # una SER nunca exporta más de lo que importó en el acumulado diario
-
-    # La SEAT mide la suma algebraica (entrada - salida) a 44 kV
-    total_ser_kwh_44kv = max(0.0, sum(ser_neto_visual.values()) / ETA_SER_RECTIFICADOR)
+    total_ser_kwh_44kv = sum(max(0.0, val) for val in ser_accum_visual.values()) / ETA_SER_RECTIFICADOR
     t_elap = max(0.001, hora_m1 / 60.0)
-    flujo_avg = calcular_flujo_ac_nodo({k: max(0.0, v) / ETA_SER_RECTIFICADOR / t_elap for k, v in ser_neto_visual.items()})
+    flujo_avg = calcular_flujo_ac_nodo({k: max(0.0, v) / ETA_SER_RECTIFICADOR / t_elap for k, v in ser_accum_visual.items()})
     total_ac_loss_kwh = flujo_avg['P_loss_kw'] * (1.15**2) * t_elap
     seat_accum_1 = (total_ser_kwh_44kv + total_ac_loss_kwh) / 0.99
 
-    # Renderizado del mapa (usa ser_neto_visual para mostrar kWh netos por SER)
     if "SCADA" in modo:
-        html_scada, H_scada = draw_scada_js(df_dia_e, ser_neto_visual, seat_accum_1, hora_m1, "", active_sers, gap_vias, use_rm)
+        html_scada, H_scada = draw_scada_js(df_dia_e, {k: max(0.0, v) for k, v in ser_accum_visual.items()}, seat_accum_1, hora_m1, "", active_sers, gap_vias, use_rm)
         components.html(html_scada, height=H_scada + 100)
         st.info("💡 **Modo SCADA Activado:** La animación gráfica se procesa a 60 FPS en el cliente.")
     else:
-        st.markdown(draw_diagram_svg(df_act, ser_neto_visual, seat_accum_1, hora_s1[:5], "", active_sers, gap_vias)[0], unsafe_allow_html=True)
+        st.markdown(draw_diagram_svg(df_act, {k: max(0.0, v) for k, v in ser_accum_visual.items()}, seat_accum_1, hora_s1[:5], "", active_sers, gap_vias)[0], unsafe_allow_html=True)
 
-    # Métricas instantáneas (usan df_act ya recalculado)
     n_circ = len(df_act) if not df_act.empty else 0
     n_d    = int(df_act['doble'].sum()) if not df_act.empty else 0
     n_v1   = int((df_act['Via']==1).sum()) if not df_act.empty else 0
@@ -769,7 +716,6 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     r2c.metric("📏 Tren-km Inst.", f"{trenkm:,.1f}")
     r2d.metric("💡 IDE inst.", f"{ide_i:.3f} kWh/km")
 
-    # Cargabilidad instantánea (no cambia)
     st.divider()
     st.markdown("#### 🔌 Cargabilidad Instantánea de Subestaciones (Squeeze Control)")
     if not active_sers:
@@ -828,9 +774,14 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         e_cols = st.columns(3)
         for i, f_type in enumerate(['XT-100', 'XT-M', 'SFE']):
             tot_e_com = energy_by_fleet_comercial.get(f_type, 0.0)
-            subset_inic = df_inic[df_inic['tipo_tren'] == f_type]
+            tot_e_tot = energy_by_fleet.get(f_type, 0.0)
+            subset_acum = df_acum[df_acum['tipo_tren'] == f_type] if not df_acum.empty else pd.DataFrame()
+            subset_inic = df_inic[df_inic['tipo_tren'] == f_type] if not df_inic.empty else pd.DataFrame()
             cnt_v   = subset_inic.shape[0]
-            e_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; text-align:center; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333;'>Flota {f_type}</div><div style='font-size:22px; font-weight:bold; color:#2E7D32; margin:10px 0;'>{tot_e_com:,.0f} kWh</div><div style='font-size:12px; color:#666;'>Viajes iniciados: {cnt_v}</div></div>", unsafe_allow_html=True)
+            km_flota = subset_acum['tren_km'].sum() if not subset_acum.empty else 0.0
+            ide_flota = tot_e_com / km_flota if km_flota > 0 else 0.0
+            prom_flota = tot_e_com / cnt_v if cnt_v > 0 else 0.0
+            e_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; text-align:center; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333;'>Flota {f_type}</div><div style='font-size:22px; font-weight:bold; color:#2E7D32; margin:10px 0;'>{tot_e_com:,.0f} kWh</div><div style='font-size:12px; color:#666;'>Viajes iniciados: {cnt_v}</div><div style='font-size:13px; color:#1565C0; font-weight:bold; margin-top:5px;'>Promedio: {prom_flota:,.1f} kWh/v</div><div style='font-size:14px; color:#E65100; font-weight:bold; margin-top:4px;'>IDE: {ide_flota:,.2f} kWh/km</div></div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
         km_total_red = df_inic['tren_km'].sum() + vacio_km_total
@@ -838,7 +789,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         if active_sers:
             ser_cols = st.columns(len(active_sers))
             for i, ser_info in enumerate(active_sers):
-                e_44 = max(0.0, ser_neto_visual.get(ser_info[1], 0.0)) / ETA_SER_RECTIFICADOR
+                e_44 = max(0.0, ser_accum_visual.get(ser_info[1], 0.0)) / ETA_SER_RECTIFICADOR
                 ser_cols[i].markdown(f"<div style='background-color:#FFF3E0; border-radius:8px; padding:15px; text-align:center; border: 1px solid #FFCC80;'><div style='font-size:14px; font-weight:bold; color:#E65100;'>{ser_info[1]}</div><div style='font-size:22px; font-weight:bold; color:#E65100; margin:10px 0;'>{e_44:,.0f} kWh</div><div style='font-size:12px; color:#666;'>Km Total Red: {km_total_red:,.3f} km</div><div style='font-size:14px; color:#C62828; font-weight:bold; margin-top:4px;'>Aporte IDE: {e_44/max(1.0, km_total_red):,.3f} kWh/km</div></div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -867,7 +818,6 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         st.subheader("📈 Consumo Total y Requerimientos Aguas Arriba (SER & SEAT)")
         with st.expander("📊 Resumen de Energía del Día y Comportamiento de Subestaciones", expanded=True):
             if not df_dia_e.empty:
-                # (tablas de resumen sin cambios)
                 res_flota = df_dia_e.groupby('tipo_tren').agg(viajes=('_id', 'count'), trac_kwh=('kwh_viaje_trac', 'sum'), regen_kwh=('kwh_viaje_regen', 'sum'), neto_kwh=('kwh_viaje_neto', 'sum')).reset_index()
                 res_flota['neto_prom'] = res_flota['neto_kwh'] / res_flota['viajes']
                 res_flota.rename(columns={'tipo_tren': 'Flota', 'viajes': 'N° Viajes', 'trac_kwh': 'Tracción [kWh]', 'regen_kwh': 'Regen. [kWh]', 'neto_kwh': 'Neto Total [kWh]', 'neto_prom': 'Promedio [kWh/viaje]'}, inplace=True)
