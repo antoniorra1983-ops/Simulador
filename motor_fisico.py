@@ -752,13 +752,12 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
 
             regen_asignada[b_idx] += min(1.0, energia_transferida / p_gen)
 
-    # Normalizar: eta_red = fracción de p_gen que llegó a otro tren
-    # Multiplicar por ETA_REGEN_NETA (eficiencia eléctrica DC + pérdidas catenaria)
-    ETA_REGEN = _get_val('ETA_REGEN_NETA', 0.38)
+    # Normalizar: receptividad pura (0-1) = fracción de energía regenerada que llega a otro tren
+    # NO aplicar ETA_REGEN aquí — se aplica en calcular_termodinamica_flota_v111
     for idx in df_dia.index:
         ticks = braking_ticks.get(idx, 0)
         if ticks > 0:
-            regen_util_per_trip[idx] = min(1.0, regen_asignada[idx] / ticks) * ETA_REGEN
+            regen_util_per_trip[idx] = min(1.0, regen_asignada[idx] / ticks)
         else:
             regen_util_per_trip[idx] = 0.0
 
