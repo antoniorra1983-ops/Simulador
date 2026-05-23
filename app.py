@@ -376,7 +376,15 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         if "Probabilístico" in tipo_regen:
             dict_regen_sint = calcular_receptividad_por_headway(df_sint_final)
         else:
-            dict_regen_sint = precalcular_red_electrica_v111(df_sint_final, pct_trac_plan, use_rm, estacion_anio_plan)
+            # Modo físico: requiere datos_sim → primera pasada para generarlos
+            try:
+                df_sint_e_pass1 = calcular_termodinamica_flota_v111(
+                    df_sint_final, pct_trac_plan, use_pend, use_rm, False, {}, estacion_anio_plan, prevenciones=_prevenciones)
+            except TypeError:
+                df_sint_e_pass1 = calcular_termodinamica_flota_v111(
+                    df_sint_final, pct_trac_plan, use_pend, use_rm, False, {}, estacion_anio_plan)
+            # Segunda pasada: calcular receptividad física con datos_sim reales
+            dict_regen_sint = precalcular_red_electrica_v111(df_sint_e_pass1, pct_trac_plan, use_rm, estacion_anio_plan)
     else:
         dict_regen_sint = {}
         
