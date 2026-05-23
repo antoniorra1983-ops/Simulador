@@ -819,8 +819,8 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     )
         
     import re as _re
-    T_PRE_H  = 1.0
-    T_POST_H = 10.0/60.0
+    T_PRE_H  = 0.5        # 30 min antes del primer viaje
+    T_POST_H = 10.0/60.0  # 10 min después del último
     F_HVAC_PRE  = 0.30
     F_HVAC_POST = 0.10
     frac_base_pp = _get_val('FRAC_BASE', 0.15)  # base = 15% del nominal
