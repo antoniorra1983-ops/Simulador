@@ -795,10 +795,12 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
         # receptividad = fracción que absorbe otro tren (del modelo headway/físico)
         # reg_util = reg_bruta × ETA_REGEN_NETA × receptividad
         ETA_REGEN = _get_val('ETA_REGEN_NETA', 0.38)
-        if use_regen and dict_regen:
-            receptividad = dict_regen.get(r.name, 0.53)  # 0.53 = promedio headway MERVAL
+        if not use_regen:
+            receptividad = 0.0   # sin regeneración
+        elif dict_regen:
+            receptividad = dict_regen.get(r.name, 0.53)  # probabilístico por headway
         else:
-            receptividad = 0.53  # sin modelo: receptividad promedio MERVAL
+            receptividad = 1.0   # físico: toda la regen bruta del motor se aprovecha
         reg_util = reg_bruta * ETA_REGEN * receptividad
         kwh_reostato = max(0.0, reg_bruta - reg_util)
         neto = max(0.0, trc + aux_catenaria - reg_util)
