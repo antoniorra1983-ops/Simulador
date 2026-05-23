@@ -190,9 +190,9 @@ FLOTA = {
         "f_trac_max_kn": 115.0,   
         "f_freno_max_kn": 110.0,  
         "p_max_kw"     : 1040.0,
-        "p_freno_max_kw": 1248.0,
-        "aux_kw_cool"  : 52.0,          # Potencia eléctrica: 2u×35kW_frio/COP2.5 + compres + ilum + vent — manual MC-EFER
-        "aux_kw_heat"  : 84.0,          # Calef. directa: 40kW+19.2kW+1kW + compres + ilum + vent — manual MC-EFER
+        "p_freno_max_kw": 300.0,          # Calibrado telemetría XT-31: regen=98.5 kWh real
+        "aux_kw_cool"  : 70.0,          # Manual MC-EFER: 35kW × 2 equipos sala
+        "aux_kw_heat"  : 59.2,          # Manual MC-EFER: (20+9.6)kW × 2 equipos sala
         "p_compresor_kw": 4.60,  
         "p_puertas_kw" : 0.9,    
         "p_vent_trac_kw": 8.5,
