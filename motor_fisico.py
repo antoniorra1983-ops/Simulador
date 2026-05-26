@@ -501,15 +501,12 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             if a_net_target > a_prev + jerk_limit: a_net = a_prev + jerk_limit
             elif a_net_target < a_prev - jerk_limit: a_net = a_prev - jerk_limit
             else: a_net = a_net_target
-            # Clamp físico: a_net no puede superar a_max ni a_freno del tren
-            # Aceleración bifásica: algunos trenes (XT-100) tienen a_max reducida
-            # a alta velocidad (p.ej. 0.71 m/s² sobre 55 km/h — manual TRA 001)
-            a_max_ms2   = f.get('a_max_ms2',  1.0)
-            a_max_v2    = f.get('a_max_ms2_v2', a_max_ms2)   # 2° régimen (por defecto = 1° régimen)
-            v_trans_kmh = f.get('v_trans_accel_kmh', 999.0)  # velocidad de transición
-            a_max_actual = a_max_v2 if v_kmh > v_trans_kmh else a_max_ms2
+            # Clamp físico: solo limita el frenado — la aceleración emerge naturalmente
+            # de f_trac_max_kn y p_max_kw sin clamp adicional de a_max_ms2.
+            # a_max_ms2 y a_max_ms2_v2 quedan como referencia informativa en config
+            # pero no limitan el loop — evita inconsistencia entre fuerza y aceleración.
             a_freno_ms2 = f.get('a_freno_ms2', 1.2)
-            a_net = max(-a_freno_ms2, min(a_max_actual, a_net))
+            a_net = max(-a_freno_ms2, a_net)
             a_prev = a_net
             
             v_new, dt_actual = v_ms + a_net * dt, dt
