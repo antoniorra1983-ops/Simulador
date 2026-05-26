@@ -828,8 +828,9 @@ def cargar_prevenciones(data, fname):
 def asignar_flota_planilla(df):
     """
     Asigna tipo_tren a cada viaje según la flota real de MERVAL.
-    La asignación se hace POR SERVICIO COMPLETO (num_servicio) para
-    respetar el carrusel — todos los viajes de un servicio usan el mismo tren.
+    Si el viaje ya tiene motriz_num desde la planilla maestra, respeta
+    el tipo_tren derivado del número de motriz y no lo sobreescribe.
+    Solo aplica asignación automática a viajes sin motriz asignada.
 
     Flota MERVAL:
       - 1  SFE   → servicio 6xx completo de mayor extensión (simple)
@@ -842,6 +843,21 @@ def asignar_flota_planilla(df):
     XTM_UNIDADES  = 8   # unidades individuales (doble usa 2)
 
     df = df.copy()
+
+    # Si viene motriz_num de la planilla, tipo_tren ya está derivado — respetar
+    tiene_motriz = (
+        'motriz_num' in df.columns and
+        df['motriz_num'].notna().any() and
+        df['motriz_num'].astype(str).str.strip().ne('').any()
+    )
+    if tiene_motriz:
+        # Solo resetear los que no tienen motriz asignada
+        sin_motriz = df['motriz_num'].isna() | df['motriz_num'].astype(str).str.strip().eq('')
+        df.loc[sin_motriz, 'tipo_tren'] = 'XT-100'
+        # Los que tienen motriz ya traen tipo_tren correcto — no tocar
+        return df
+
+    # Sin datos de motriz — asignación automática completa
     df['tipo_tren'] = 'XT-100'  # default
 
     # Agrupar por servicio y calcular características del carrusel
