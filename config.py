@@ -157,10 +157,10 @@ FLOTA = {
         "jerk_ms3"     : 1.3,           # ALSTOM: Dinámica certificada
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.92,  
-        "davis_A"      : 1615.00,  
-        "davis_B"      : 0.00,
-        "davis_C"      : 0.5458,     
-        "f_trac_max_kn": 110.0,   
+        "davis_A"      : 1678.70,        # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5
+        "davis_B"      : 13.97,          # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5
+        "davis_C"      : 0.57,           # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5
+        "f_trac_max_kn": 47.1,           # Derivado: P_max/v_trans = 720kW/(55/3.6) — sin fuente directa anterior
         "f_freno_max_kn": 105.0,  
         "p_max_kw"     : 720.0,
         "p_freno_max_kw": 365.0,         # Acto 1: potencia nominal de rueda XT-100
@@ -174,20 +174,21 @@ FLOTA = {
     "XT-M": {
         "largo_m"      : 46.0,           # Largo real del tren (m)
         "tara_t"       : 80.0,          # 80.000 kg
-        "m_iner_t"     : 8.0,  
+        "m_iner_t"     : 3.90,           # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5 (era 8.0 — sin fuente)
         "coches"       : 2,  
         "cap_sent"     : 94,  
         "cap_max"      : 376,
         "n_motores"    : 4,  
-        "a_max_ms2"    : 0.9,           # Deceleración máx 0.9 m/s²
+        "a_max_ms2"    : 0.9,            # Manual MC-EFER — aceleración máxima de servicio
+        "v_trans_accel_kmh"  : 49.6,         # Derivado: P_max/F_trac = 1040kW/75.5kN = 13.8 m/s
         "a_freno_ms2"  : 1.0,
         "jerk_ms3"     : 1.3,           # Igualado a XT-100 (Alstom certificado)
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.95,          # Eficiencia Certificada SEPSA/Alstom
-        "davis_A"      : 1440.60,  
-        "davis_B"      : 0.00,
-        "davis_C"      : 0.35,      
-        "f_trac_max_kn": 115.0,   
+        "davis_A"      : 1440.60,        # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5 ✓
+        "davis_B"      : 0.00,           # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5 ✓
+        "davis_C"      : 0.39,           # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5 (era 0.35)
+        "f_trac_max_kn": 75.5,           # Derivado: a_max × m_din = 0.9 × 83.900 kg — sin fuente directa anterior
         "f_freno_max_kn": 110.0,  
         "p_max_kw"     : 1040.0,
         "p_freno_max_kw": 300.0,          # Calibrado telemetría XT-31: regen=98.5 kWh real
