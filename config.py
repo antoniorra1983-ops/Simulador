@@ -158,7 +158,7 @@ FLOTA = {
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.92,  
         "davis_A"      : 1678.70,        # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5
-        "davis_B"      : 13.97,          # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5
+        "davis_B"      : 0,              # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5
         "davis_C"      : 0.57,           # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5
         "f_trac_max_kn": 93.3,           # Derivado: a_max × m_din = 1.0 m/s² × 93.300 kg — Manual TRA 001
         "f_freno_max_kn": 105.0,  
