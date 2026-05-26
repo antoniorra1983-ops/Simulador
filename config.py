@@ -180,7 +180,7 @@ FLOTA = {
         "cap_max"      : 376,
         "n_motores"    : 4,  
         "a_max_ms2"    : 0.9,            # Manual MC-EFER — aceleración máxima de servicio
-        "v_trans_accel_kmh"  : 49.6,         # Derivado: P_max/F_trac = 1040kW/75.5kN = 13.8 m/s
+        "v_trans_accel_kmh"  : 32.1,         # Derivado: P_max/F_trac = 1040kW/116.5kN = 8.93 m/s — Manual MC-EFER
         "a_freno_ms2"  : 1.0,
         "jerk_ms3"     : 1.3,           # Igualado a XT-100 (Alstom certificado)
         "v_freno_min"  : 3.81,  
@@ -188,7 +188,7 @@ FLOTA = {
         "davis_A"      : 1440.60,        # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5 ✓
         "davis_B"      : 0.00,           # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5 ✓
         "davis_C"      : 0.39,           # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5 (era 0.35)
-        "f_trac_max_kn": 75.5,           # Derivado: a_max × m_din = 0.9 × 83.900 kg — sin fuente directa anterior
+        "f_trac_max_kn": 116.5,          # Manual MC-EFER p.7-5: esfuerzo máximo en tracción
         "f_freno_max_kn": 110.0,  
         "p_max_kw"     : 1040.0,
         "p_freno_max_kw": 300.0,          # Calibrado telemetría XT-31: regen=98.5 kWh real
