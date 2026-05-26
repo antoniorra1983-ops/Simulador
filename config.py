@@ -160,10 +160,10 @@ FLOTA = {
         "davis_A"      : 1678.70,        # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5
         "davis_B"      : 13.97,          # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5
         "davis_C"      : 0.57,           # Informe Energía Rev.prelim-10.07.2020_A_(HMP) Tabla A.5
-        "f_trac_max_kn": 47.1,           # Derivado: P_max/v_trans = 720kW/(55/3.6) — sin fuente directa anterior
+        "f_trac_max_kn": 93.3,           # Derivado: a_max × m_din = 1.0 m/s² × 93.300 kg — Manual TRA 001
         "f_freno_max_kn": 105.0,  
         "p_max_kw"     : 720.0,
-        "p_freno_max_kw": 720.0,         # Acto 1: potencia nominal de rueda XT-100
+        "p_freno_max_kw": 365.0,         # Acto 1: potencia nominal de rueda XT-100
         "aux_kw_cool"  : 45.28,         # TRA305: 11.32kW/equipo × 4 equipos (refrigeración)
         "aux_kw_heat"  : 58.08,         # TRA305: 14.52kW/equipo × 4 equipos (calefacción)
         "p_compresor_kw": 3.68,         # ALSTOM VFD Soft-Load
@@ -191,7 +191,7 @@ FLOTA = {
         "f_trac_max_kn": 75.5,           # Derivado: a_max × m_din = 0.9 × 83.900 kg — sin fuente directa anterior
         "f_freno_max_kn": 110.0,  
         "p_max_kw"     : 1040.0,
-        "p_freno_max_kw": 1040.0,          # Calibrado telemetría XT-31: regen=98.5 kWh real
+        "p_freno_max_kw": 300.0,          # Calibrado telemetría XT-31: regen=98.5 kWh real
         "aux_kw_cool"  : 70.0,          # Manual MC-EFER: 35kW × 2 equipos sala
         "aux_kw_heat"  : 59.2,          # Manual MC-EFER: (20+9.6)kW × 2 equipos sala
         "p_compresor_kw": 4.60,  
@@ -207,7 +207,9 @@ FLOTA = {
         "coches"       : 3,  
         "cap_max"      : 597,            # AW2 (4 pax/m²) — especif. técnicas 2025
         "n_motores"    : 8,       
-        "a_max_ms2"    : 1.02,
+        "a_max_ms2"          : 1.02,           # Aceleración 0→40 km/h AW3 ≥1.0 m/s² — especif. técnicas SFE
+        "a_max_ms2_v2"       : 0.48,           # Aceleración promedio 0→140 km/h AW3 ≥0.48 m/s² — especif. técnicas SFE
+        "v_trans_accel_kmh"  : 40.0,           # Transición par→potencia constante — especif. técnicas SFE
         "a_freno_ms2"  : 0.85,           # Freno servicio ≥0.85 m/s² — especif. técnicas 2025
         "jerk_ms3"     : 0.75,           # Tasa de impacto ≤0.75 m/s³ — especif. técnicas 2025
         "v_freno_min"  : 0.833,          # Freno eléctrico desde 3 km/h = 0.833 m/s — especif. 2025
