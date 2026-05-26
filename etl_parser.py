@@ -1133,6 +1133,8 @@ def parsear_planilla_maestra(data, fname):
                 srv_col = None
                 hora_col = None
                 unidad_col = None
+                motriz1_col = None
+                motriz2_col = None
                 
                 for c, val in enumerate(headers):
                     val_norm = str(val).strip().upper()
@@ -1150,6 +1152,12 @@ def parsear_planilla_maestra(data, fname):
                     if any(p in val_sin_tilde for p in ['UNIDAD', 'UNID', 'CONF', 'TIPO', 'FORMA', 'OBS']):
                         if unidad_col is None:
                             unidad_col = c
+                    if 'MOTRIZ' in val_sin_tilde and '1' in val_sin_tilde:
+                        if motriz1_col is None:
+                            motriz1_col = c
+                    if 'MOTRIZ' in val_sin_tilde and '2' in val_sin_tilde:
+                        if motriz2_col is None:
+                            motriz2_col = c
                 
                 if srv_col is None:
                     for c in range(df.shape[1]):
@@ -1189,14 +1197,59 @@ def parsear_planilla_maestra(data, fname):
                         continue
                     servicio_num = int(m_srv.group(1))
                     
-                    if not re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', hora_str):
-                        continue
-                    t_ini = parse_time_to_mins(hora_str)
+                    # Parsear hora — soporta HH:MM y decimal Excel (0.333 = 8:00)
+                    t_ini = None
+                    if re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', hora_str):
+                        t_ini = parse_time_to_mins(hora_str)
+                    else:
+                        try:
+                            frac = float(hora_str)
+                            if 0.0 <= frac <= 1.0:
+                                t_ini = round(frac * 24 * 60, 2)  # fracción del día → minutos
+                        except ValueError:
+                            pass
                     if t_ini is None:
                         continue
                     
-                    es_doble = False
-                    if unidad_col is not None and pd.notna(row.get(unidad_col)):
+                    # Leer Motriz 1 y Motriz 2 si están disponibles
+                    def _extract_motriz(col_idx):
+                        if col_idx is None:
+                            return None
+                        val = row.iloc[col_idx] if isinstance(col_idx, int) else row.get(col_idx)
+                        if pd.isna(val) or str(val).strip().lower() in ('nan', '', '0', '0.0'):
+                            return None
+                        m = re.search(r'(\d+)', str(val))
+                        return int(m.group(1)) if m else None
+
+                    n1 = _extract_motriz(motriz1_col)
+                    n2 = _extract_motriz(motriz2_col)
+
+                    # Determinar tipo_tren desde número de motriz
+                    # XT-100: 1-27 | XT-M: 28-35 | SFE: 410-414
+                    def _tipo_desde_num(n):
+                        if n is None:
+                            return 'XT-100'
+                        if 1 <= n <= 27:
+                            return 'XT-100'
+                        if 28 <= n <= 35:
+                            return 'XT-M'
+                        if 410 <= n <= 414:
+                            return 'SFE'
+                        return 'XT-100'
+
+                    tipo_tren_planilla = _tipo_desde_num(n1 or n2)
+
+                    # motriz_num: "X+Y" para dobles, "X" para simples
+                    if n1 and n2:
+                        motriz_num_planilla = f"{n1}+{n2}"
+                    elif n1:
+                        motriz_num_planilla = str(n1)
+                    else:
+                        motriz_num_planilla = ''
+
+                    es_doble = bool(n1 and n2)  # doble si hay dos motrices
+                    # Fallback: columna Unidad si no hay Motriz 2
+                    if not es_doble and unidad_col is not None and pd.notna(row.get(unidad_col)):
                         unidad_str = str(row[unidad_col]).strip().upper()
                         unidad_norm = ''.join(ch for ch in unicodedata.normalize('NFD', unidad_str) if unicodedata.category(ch) != 'Mn')
                         if any(kw in unidad_norm for kw in ['MULTIPLE', 'MULT', 'DOBLE', 'DOB', 'ACOPL', '2 UNID', '2UNID', '2UND', '2 UNIDADES', 'DOBLE UNIDAD', 'DUPLA']):
@@ -1260,8 +1313,9 @@ def parsear_planilla_maestra(data, fname):
                         'km_orig': km_orig,
                         'km_dest': km_dest,
                         'nodos': nodos_via,
-                        'tipo_tren': 'XT-100',
+                        'tipo_tren': tipo_tren_planilla,
                         'doble': es_doble,
+                        'motriz_num': motriz_num_planilla,
                         'num_servicio': str(servicio_num),
                         'svc_type': ruta,
                         'maniobra': None,
@@ -1361,6 +1415,7 @@ def parsear_planilla_maestra(data, fname):
                                 'nodos': nodos_via,
                                 'tipo_tren': 'XT-100',
                                 'doble': es_doble,
+                                'motriz_num': '',
                                 'num_servicio': str(servicio_num),
                                 'svc_type': ruta,
                                 'maniobra': None
@@ -1369,6 +1424,44 @@ def parsear_planilla_maestra(data, fname):
         df_viajes = pd.DataFrame(viajes)
         if not df_viajes.empty:
             df_viajes = df_viajes.drop_duplicates(subset=['_id'])
+
+        # Calcular dwell_terminal: tiempo en minutos que cada motriz espera
+        # en terminal entre el arribo de un viaje y la salida del siguiente.
+        # Requiere t_fin estimado = t_ini + tiempo_viaje_aprox
+        # Usamos velocidad media operativa MERVAL ~42 km/h como estimación
+        if not df_viajes.empty and 'motriz_num' in df_viajes.columns:
+            V_MEDIA_KMH = 42.0
+            df_viajes['t_fin_est'] = df_viajes['t_ini'] + (
+                abs(df_viajes['km_dest'] - df_viajes['km_orig']) / V_MEDIA_KMH * 60.0
+            )
+            df_viajes['dwell_terminal_min'] = None
+
+            # Para cada motriz individual (separar dobles en sus componentes)
+            motriz_viajes = {}
+            for idx, row in df_viajes.iterrows():
+                mn = str(row.get('motriz_num', ''))
+                if not mn or mn == '':
+                    continue
+                for m in mn.split('+'):
+                    m = m.strip()
+                    if m:
+                        if m not in motriz_viajes:
+                            motriz_viajes[m] = []
+                        motriz_viajes[m].append(idx)
+
+            for motriz, indices in motriz_viajes.items():
+                viajes_motriz = df_viajes.loc[indices].sort_values('t_ini')
+                for i in range(len(viajes_motriz) - 1):
+                    idx_actual = viajes_motriz.index[i]
+                    idx_siguiente = viajes_motriz.index[i + 1]
+                    t_arribo = df_viajes.loc[idx_actual, 't_fin_est']
+                    t_salida_sig = df_viajes.loc[idx_siguiente, 't_ini']
+                    dwell = round(t_salida_sig - t_arribo, 1)
+                    if 0 < dwell < 240:  # máximo 4 horas, descartar negativos
+                        df_viajes.at[idx_siguiente, 'dwell_terminal_min'] = dwell
+
+            df_viajes = df_viajes.drop(columns=['t_fin_est'], errors='ignore')
+
         df_viajes = asignar_flota_planilla(df_viajes)
         return df_viajes, "ok"
     except Exception as e:
