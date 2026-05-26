@@ -150,8 +150,8 @@ FLOTA = {
         "cap_sent"     : 94,  
         "cap_max"      : 398,           # C2 (4 pax/m²) — manual TRA 001
         "n_motores"    : 4,  
-        "a_max_ms2"    : 1.0,  
-        "a_max_ms2_v2"       : 0.71,          # Aceleración >55 km/h — manual TRA 001
+        "a_max_ms2"    : 1.0,            # Aceleración 0-55 km/h — Acto 1 TRA 001
+        "a_max_ms2_v2"       : 0.71,          # Aceleración >55 km/h (régimen potencia constante)
         "v_trans_accel_kmh"  : 55.0,          # Velocidad de transición 1°→2° régimen
         "a_freno_ms2"  : 0.94,          # Freno servicio normal >=0.94 m/s² — manual TRA 001
         "jerk_ms3"     : 1.3,           # ALSTOM: Dinámica certificada
