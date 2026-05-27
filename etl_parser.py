@@ -1134,6 +1134,14 @@ def parsear_planilla_maestra(data, fname):
                 via_from_sheet = 1
             elif 'V2' in sheet_upper or 'VIA 2' in sheet_upper:
                 via_from_sheet = 2
+
+            # Solo procesar hojas V1/V2 explícitas — evita que hojas
+            # como "Planilla" o "Planilla + Maniobras" generen viajes duplicados
+            # sin motriz que sobreescriben los correctos de V1/V2
+            if via_from_sheet is None and any(
+                kw in sheet_upper for kw in ['PLANILLA', 'MANIOBRA', 'CANTIDAD', 'RESUMEN', 'HOJA']
+            ):
+                continue
             
             header_idx = -1
             for i in range(min(20, len(df))):
