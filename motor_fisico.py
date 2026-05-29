@@ -269,10 +269,18 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     paradas_km = [n[1] for n in nodos] if nodos else [k_s, k_e]
     k_min, k_max = min(k_s, k_e), max(k_s, k_e)
     paradas_km = [k for k in paradas_km if k_min <= k <= k_max]
+    # Modo vacío: el tren NO se detiene en estaciones intermedias, solo pasa a velocidad
+    # reducida (30 km/h). Guardamos las posiciones de las estaciones intermedias para
+    # aplicar el límite de paso, y dejamos solo origen y destino como paradas reales.
+    estaciones_paso_km = []
+    if es_vacio:
+        estaciones_paso_km = [k for k in paradas_km if k not in (k_s, k_e)]
+        paradas_km = [k_s, k_e]
     if k_s not in paradas_km: paradas_km.append(k_s)
     if k_e not in paradas_km: paradas_km.append(k_e)
     paradas_km = list(set(paradas_km))
     paradas_km.sort(reverse=(via_op == 2))
+    V_PASO_VACIO_KMH = 30.0  # velocidad de paso por estación en modo vacío
     
     ser_data = _get_val('SER_DATA', [(4.9, "SER PO"), (12.7, "SER ES"), (25.5, "SER EB"), (28.7, "SER VA")])
     dt = 1.0  
@@ -348,6 +356,14 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             v_cons_kmh = max(5.0, _v_raw)
             if v_consigna_override is not None: v_cons_kmh = min(v_cons_kmh, v_consigna_override)
             v_cons_kmh = min(v_cons_kmh, v_limit_thdr)
+
+            # Modo vacío: limitar a 30 km/h al pasar cerca de una estación intermedia
+            # (zona de andén ±150m). El tren reduce a velocidad de paso pero no se detiene.
+            if es_vacio and estaciones_paso_km:
+                for _km_est in estaciones_paso_km:
+                    if abs(km_actual - _km_est) <= 0.15:
+                        v_cons_kmh = min(v_cons_kmh, V_PASO_VACIO_KMH)
+                        break
             
             # =============================================================
             # APLICACIÓN DE PREVENCIONES — aviso dinámico por distancia de frenado
