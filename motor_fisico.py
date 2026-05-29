@@ -392,21 +392,16 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                                 v_cons_kmh = min(v_cons_kmh, v_prev)
                                 prevencion_aplicada += 1
 
-            # Restricción de terminal — considera largo del tren
-            # La velocidad se reduce cuando la CABEZA del tren está en zona de andén
-            # y debe mantenerse hasta que el ÚLTIMO VAGÓN haya cruzado el umbral
-            # V1 terminal Limache (km 43.13): zona restringida desde km 42.93
+            # Restricción de terminal — solo en la zona real de andén (últimos ~50m)
+            # El tren frena progresivamente mediante BRAKE_STATION, no se arrastra
+            # V1 terminal Limache (km 43.13)
             if via_op == 1:
-                if km_actual >= (43.13 - long_tren_km - 0.20):  # 200m antes del andén
-                    v_cons_kmh = min(v_cons_kmh, 20.0)
-                if km_actual >= (43.13 - long_tren_km - 0.10):  # 100m antes del andén
-                    v_cons_kmh = min(v_cons_kmh, 10.0)
-            # V2 terminal Puerto (km 0.00): zona restringida hasta km 0.20
+                if km_actual >= (43.13 - 0.05):  # 50m finales (largo andén)
+                    v_cons_kmh = min(v_cons_kmh, 15.0)
+            # V2 terminal Puerto (km 0.00) — solo zona de andén al llegar
             if via_op == 2:
-                if km_actual <= (long_tren_km + 0.20):  # hasta que todo el tren salió
-                    v_cons_kmh = min(v_cons_kmh, 20.0)
-                if km_actual <= (long_tren_km + 0.10):  # zona más cercana al andén
-                    v_cons_kmh = min(v_cons_kmh, 10.0)
+                if km_actual <= 0.05:  # 50m finales (largo andén)
+                    v_cons_kmh = min(v_cons_kmh, 15.0)
             
             v_kmh = v_ms * 3.6
             if n_uni_inst == 2: f_davis = (f.get('davis_A',1615.0)*2) + (f.get('davis_B',0.0)*2*v_kmh) + (f.get('davis_C',0.54)*1.35*(v_kmh**2))
