@@ -153,7 +153,7 @@ FLOTA = {
         "a_max_ms2"    : 1.0,            # Aceleración 0-55 km/h — Acto 1 TRA 001
         "a_max_ms2_v2"       : 0.71,          # Aceleración >55 km/h — Manual TRA 001
         "v_trans_accel_kmh"  : 55.0,          # Clamp aceleración: 1.0→0.71 m/s² — Manual TRA 001
-        "v_trans_fisica_kmh" : 25.4,          # Transición física par→potencia: 870kW/123.2kN
+        "v_trans_fisica_kmh" : 21.0,          # Transición física par→potencia: 720kW/123.2kN
         "a_freno_ms2"  : 0.94,          # Freno servicio normal >=0.94 m/s² — manual TRA 001
         "jerk_ms3"     : 1.3,           # ALSTOM: Dinámica certificada
         "v_freno_min"  : 3.81,  
@@ -163,7 +163,7 @@ FLOTA = {
         "davis_C"      : 0.57,           # Informe HMP Tabla A.5     
         "f_trac_max_kn": 123.2,          # Derivado: a_max × m_din_C2 = 1.0 m/s² × 123.150 kg — sensor peso TCU
         "f_freno_max_kn": 105.0,  
-        "p_max_kw"     : 870.0,          # Calibrado empíricamente con THDR — manual garantiza mínimo 720 kW (180kW×4 motores a 60km/h)
+        "p_max_kw"     : 720.0,          # Manual: 4 × 180 kW a 60 km/h (mínimo garantizado fabricante)
         "p_freno_max_kw": 365.0,         # Acto 1: potencia nominal de rueda XT-100
         "aux_kw_cool"  : 45.28,         # TRA305: 11.32kW/equipo × 4 equipos (refrigeración)
         "aux_kw_heat"  : 58.08,         # TRA305: 14.52kW/equipo × 4 equipos (calefacción)
@@ -182,7 +182,7 @@ FLOTA = {
         "n_motores"    : 4,  
         "a_max_ms2"    : 0.9,            # Manual MC-EFER — Aceleración Reducida (modo default)
         "v_trans_accel_kmh"  : 999.0,    # Sin segundo régimen — 0.9 m/s² todo el rango
-        "v_trans_fisica_kmh" : 32.1,     # Transición física par→potencia: 791kW/116.5kN
+        "v_trans_fisica_kmh" : 32.1,     # Transición física par→potencia: 1040kW/116.5kN
         "a_freno_ms2"  : 1.0,
         "jerk_ms3"     : 1.3,           # Igualado a XT-100 (Alstom certificado)
         "v_freno_min"  : 3.81,  
@@ -192,7 +192,7 @@ FLOTA = {
         "davis_C"      : 0.39,           # Informe HMP Tabla A.5      
         "f_trac_max_kn": 116.5,          # Manual MC-EFER p.7-5
         "f_freno_max_kn": 110.0,  
-        "p_max_kw"     : 791.0,          # Modo Aceleración Reducida: 0.9 m/s² × 83.900 kg — Manual MC-EFER
+        "p_max_kw"     : 1040.0,         # Manual MC-EFER: 260 kW × 4 motores (potencia en rueda)
         "p_freno_max_kw": 300.0,          # Calibrado telemetría XT-31: regen=98.5 kWh real
         "aux_kw_cool"  : 25.0,          # Manual MC-EFER: 35kW térmico/coche × 2 / COP 2.8 = 25 kW eléctrico
         "aux_kw_heat"  : 59.2,          # Manual MC-EFER: (20+9.6)kW × 2 equipos sala
