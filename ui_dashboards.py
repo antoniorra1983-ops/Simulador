@@ -784,6 +784,24 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             e_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; text-align:center; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333;'>Flota {f_type}</div><div style='font-size:22px; font-weight:bold; color:#2E7D32; margin:10px 0;'>{tot_e_com:,.0f} kWh</div><div style='font-size:12px; color:#666;'>Viajes iniciados: {cnt_v}</div><div style='font-size:13px; color:#1565C0; font-weight:bold; margin-top:5px;'>Promedio: {prom_flota:,.1f} kWh/v</div><div style='font-size:14px; color:#E65100; font-weight:bold; margin-top:4px;'>IDE: {ide_flota:,.2f} kWh/km</div></div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
+        # IDE por tipo de tren desglosado por servicio (trayecto)
+        st.markdown("##### ⚡ IDE por Tipo de Tren y Servicio (Neto Pantógrafo)")
+        ide_svc_cols = st.columns(3)
+        for i, f_type in enumerate(['XT-100', 'XT-M', 'SFE']):
+            subset_acum = df_acum[df_acum['tipo_tren'] == f_type] if not df_acum.empty else pd.DataFrame()
+            filas_svc = ""
+            if not subset_acum.empty:
+                for svc in sorted(subset_acum['svc_type'].unique()):
+                    sub_svc = subset_acum[subset_acum['svc_type'] == svc]
+                    km_svc = sub_svc['tren_km'].sum()
+                    e_svc = sub_svc['kwh_viaje_neto'].sum()
+                    ide_svc = e_svc / km_svc if km_svc > 0 else 0.0
+                    filas_svc += f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:13px; color:#555;'>{svc}</span><span style='font-size:13px; font-weight:bold; color:#E65100;'>{ide_svc:,.2f} kWh/km</span></div>"
+            if not filas_svc:
+                filas_svc = "<div style='font-size:12px; color:#999; padding:8px 0;'>Sin viajes</div>"
+            ide_svc_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333; text-align:center; margin-bottom:10px;'>Flota {f_type}</div>{filas_svc}</div>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+
         km_total_red = df_inic['tren_km'].sum() + vacio_km_total
         st.markdown("##### ⚡ Consumo Acumulado por Subestación Rectificadora (SER a 44kV)")
         if active_sers:
