@@ -799,7 +799,13 @@ def main():
                                 )
                         
                         try:
-                            distrib_sb = distribuir_energia_sers(neto_sb, th_sb, km_o, km_d, active_sers)
+                            # Laboratorio = un solo tren circulando: no hay otro tren que absorba
+                            # la regeneración exportada, así que la receptividad de red es 0.
+                            # simular_tramo retorna neto_ideal = trc + aux - reg_exportable (receptividad 1.0).
+                            # Recalculamos el neto sin el excedente regenerado: el excedente va al reóstato.
+                            # (El autoconsumo de aux durante frenado ya está descontado dentro del motor.)
+                            neto_lab = trc_sb + aux_sb  # sin aprovechar reg_exportable (receptividad=0)
+                            distrib_sb = distribuir_energia_sers(neto_lab, th_sb, km_o, km_d, active_sers)
                             try: eta_ser = getattr(config, 'ETA_SER_RECTIFICADOR', 0.96)
                             except NameError: eta_ser = 0.96
                             
