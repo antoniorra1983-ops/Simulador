@@ -480,13 +480,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             elif estado_marcha == "ACCEL":
                 # pct_trac limita la potencia máxima disponible del motor
                 p_max_pct_w = p_max_op_w_real * (pct_trac / 100.0)
-                # v_trans_fisica_kmh: transición física par→potencia (separado del clamp a_max)
-                _v_trans_fis_ms = f.get('v_trans_fisica_kmh',
-                    (p_max_op_w_real / max(1.0, f_trac_max_n_nominal)) * 3.6) / 3.6
-                if v_ms <= _v_trans_fis_ms:
-                    f_absoluta_disp = min(f_disp_trac_real, f_trac_max_n_nominal * (pct_trac / 100.0))
-                else:
-                    f_absoluta_disp = min(f_disp_trac_real, p_max_pct_w / max(0.1, v_ms))
+                f_limite_potencia = p_max_pct_w / max(0.1, v_ms)
+                f_absoluta_disp = min(f_disp_trac_real, f_limite_potencia)
                 f_piloto = f_trac_max_n_nominal * (pct_trac / 100.0)
                 f_motor = min(f_piloto, f_absoluta_disp)
                 a_net_target = (f_motor - f_res_total) / masa_dinamica_kg
@@ -718,44 +713,59 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
                         accel_events[t_bin] = []
                     accel_events[t_bin].append((idx, km, p_dem, via_))
 
-    # Para cada bin temporal: transferir energía de frenadores a aceleradores cercanos
+    # Para cada bin temporal: balance de potencia simétrico entre frenadores y aceleradores
+    # En cada bin de 10s, todos los frenadores generan simultáneamente y todos los aceleradores
+    # absorben simultáneamente. La receptividad es la misma para todos los frenadores del bin.
     regen_asignada = {idx: 0.0 for idx in df_dia.index}
+
+    # Modelo óhmico de catenaria DC: eta = 1 - (P × r × dist) / V²
+    R_CAT_OHM_KM = 0.04      # Ohm/km típico catenaria 3kV
+    V_NOM_DC     = 3000.0    # V nominal
+    DIST_MAX_REAL = 30.0     # km máximo (largo línea)
+    ETA_INV      = 0.92      # Eficiencia inversor regenerativo
 
     for t_bin, frens in braking_events.items():
         acels = accel_events.get(t_bin, [])
         if not acels:
             continue
-        demanda_restante = {a[0]: a[2] for a in acels}
 
-        for b_idx, b_km, p_gen, b_via in frens:
-            if p_gen <= 0:
-                continue
-            candidatos = []
-            for a_idx, a_km, a_dem, a_via in acels:
-                # Solo misma vía — cada catenaria DC es independiente
-                if a_via != b_via:
-                    continue
-                if demanda_restante.get(a_idx, 0) <= 0:
-                    continue
-                dist = abs(a_km - b_km)
-                if dist > DIST_MAX:
-                    continue
-                eta_dist = ETA_MAX_VAL * np.exp(-dist / LAMBDA_REGEN)
-                candidatos.append((a_idx, demanda_restante[a_idx], eta_dist, dist))
-
-            if not candidatos:
+        for via_target in [1, 2]:
+            frens_via = [(b_idx, b_km, p_gen) for b_idx, b_km, p_gen, b_via in frens if b_via == via_target and p_gen > 0]
+            acels_via = [(a_idx, a_km, a_dem) for a_idx, a_km, a_dem, a_via in acels if a_via == via_target]
+            if not frens_via or not acels_via:
                 continue
 
-            total_peso = sum(1.0 / max(0.1, c[3]) for c in candidatos)
-            energia_transferida = 0.0
-            for a_idx, dem, eta_d, dist in candidatos:
-                fraccion = (1.0 / max(0.1, dist)) / total_peso
-                p_ofrecida = p_gen * eta_d * fraccion
-                p_transf = min(p_ofrecida, demanda_restante[a_idx])
-                demanda_restante[a_idx] -= p_transf
-                energia_transferida += p_transf
+            p_gen_total = sum(p for _, _, p in frens_via)
+            p_dem_total = sum(d for _, _, d in acels_via)
+            if p_gen_total <= 0 or p_dem_total <= 0:
+                continue
 
-            regen_asignada[b_idx] += min(1.0, energia_transferida / p_gen)
+            # Calcular eficiencia promedio óhmica ponderada
+            # eta = ETA_INV × (1 - P×r×dist/V²)
+            eta_promedio = 0.0
+            peso_total = 0.0
+            for b_idx, b_km, p_gen in frens_via:
+                for a_idx, a_km, a_dem in acels_via:
+                    dist = abs(a_km - b_km)
+                    if dist > DIST_MAX_REAL:
+                        continue
+                    # Pérdida óhmica: I²R donde I = P/V
+                    eta_dist = ETA_INV * max(0.0, 1.0 - p_gen * 1000.0 * R_CAT_OHM_KM * dist / (V_NOM_DC ** 2))
+                    eta_promedio += eta_dist * p_gen * a_dem
+                    peso_total += p_gen * a_dem
+
+            if peso_total <= 0:
+                continue
+            eta_promedio /= peso_total
+
+            # Receptividad simétrica: todos los frenadores del bin reciben la misma
+            # = min(1, demanda/(oferta×eta)) × eta
+            potencia_efectiva = p_gen_total * eta_promedio
+            absorcion_real   = min(potencia_efectiva, p_dem_total)
+            receptividad_bin = absorcion_real / p_gen_total if p_gen_total > 0 else 0.0
+
+            for b_idx, _, _ in frens_via:
+                regen_asignada[b_idx] += receptividad_bin
 
     # Normalizar: receptividad pura (0-1) = fracción de energía regenerada que llega a otro tren
     # NO aplicar ETA_REGEN aquí — se aplica en calcular_termodinamica_flota_v111
