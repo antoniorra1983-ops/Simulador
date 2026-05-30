@@ -94,6 +94,11 @@ def get_config_hash():
     except Exception:
         return "no_config"
 
+try:
+    from optimizador_flota import optimizar_asignacion_flota
+except ImportError:
+    optimizar_asignacion_flota = None
+
 # =============================================================================
 # 1. FUNCIONES DE CARGA Y AGRUPACIÓN (BLINDADAS)
 # =============================================================================
@@ -677,8 +682,9 @@ def main():
 
     fechas = sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)]))) if not df_all.empty else []
 
-    tab_planificador, = st.tabs([
-        "🔮 Planificador de Escenarios"
+    tab_planificador, tab_optimizador = st.tabs([
+        "🔮 Planificador de Escenarios",
+        "⚡ Optimizador de Flota"
     ])
     
     with tab_planificador:
@@ -898,6 +904,95 @@ def main():
                     render_tablas_thdr_planificador(df_sint_final, pct_trac_plan, estacion_anio_plan, use_rm, prevenciones_list)
                 except Exception as e:
                     st.error(f"Fallo al graficar UI del Planificador: {e}")
+
+    with tab_optimizador:
+        st.subheader("⚡ Optimizador de Distribución de Flota")
+        st.markdown(
+            "Reasigna el **tipo de tren** asignado a cada servicio para minimizar el consumo "
+            "energético, respetando la flota disponible y la capacidad de pasajeros. "
+            "Los trenes más eficientes (XT-M) se asignan a los servicios de mayor distancia. "
+            "**No altera los horarios** — solo qué unidad cubre cada servicio."
+        )
+
+        if optimizar_asignacion_flota is None:
+            st.error("Módulo optimizador no disponible (falta optimizador_flota.py).")
+        elif not st.session_state.get('simulacion_plan_lista', False) or 'raw_plan_df' not in st.session_state:
+            st.info("👈 Primero carga y ejecuta una malla en la pestaña **Planificador de Escenarios**. "
+                    "Luego vuelve aquí para optimizar la asignación de flota.")
+        else:
+            df_base_opt = st.session_state['raw_plan_df'].copy()
+
+            col_o1, col_o2 = st.columns([1, 1])
+            with col_o1:
+                priorizar_opt = st.radio("Criterio de optimización",
+                                         ["Minimizar consumo total (kWh)", "Minimizar IDE promedio"],
+                                         key="opt_crit")
+            with col_o2:
+                st.caption("Flota disponible (config):")
+                fd = {}
+                try:
+                    for t, p in getattr(config, 'FLOTA', {}).items():
+                        fd[t] = p.get('unidades_disponibles', 0)
+                except Exception:
+                    pass
+                if not any(fd.values()):
+                    fd = {'XT-100': 27, 'XT-M': 8, 'SFE': 5}
+                st.write(" · ".join(f"**{k}**: {v}" for k, v in fd.items()))
+
+            if st.button("🔧 Optimizar Distribución de Flota", use_container_width=True, type="primary"):
+                with st.spinner("Calculando asignación óptima de flota..."):
+                    try:
+                        # Asegurar t_fin
+                        if 't_fin' not in df_base_opt.columns:
+                            df_base_opt['t_fin'] = df_base_opt['t_ini'] + 55
+                        prio = 'energia' if "consumo" in priorizar_opt else 'eficiencia'
+                        df_opt, resumen = optimizar_asignacion_flota(df_base_opt, config, priorizar=prio)
+
+                        st.success(f"Optimización completada: {resumen['n_cambios']} de {resumen['n_servicios']} servicios reasignados.")
+
+                        # Métricas de ahorro
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("Consumo Actual", f"{resumen['kwh_actual']:,.0f} kWh")
+                        m2.metric("Consumo Optimizado", f"{resumen['kwh_optimo']:,.0f} kWh",
+                                  delta=f"-{resumen['ahorro_kwh']:,.0f} kWh")
+                        m3.metric("Ahorro", f"{resumen['ahorro_pct']:.1f} %")
+
+                        st.divider()
+
+                        # Composición de flota antes/después
+                        st.markdown("##### Composición de la flota (servicios por tipo)")
+                        comp_cols = st.columns(2)
+                        with comp_cols[0]:
+                            st.caption("**Distribución actual**")
+                            for tipo, n in sorted(resumen['comp_antes'].items()):
+                                st.write(f"  {tipo}: {n} servicios")
+                        with comp_cols[1]:
+                            st.caption("**Distribución optimizada**")
+                            for tipo, n in sorted(resumen['comp_despues'].items()):
+                                st.write(f"  {tipo}: {n} servicios")
+
+                        st.divider()
+
+                        # Tabla de cambios propuestos
+                        st.markdown("##### Cambios propuestos")
+                        cambios = df_opt[df_opt['tipo_tren'] != df_opt['tipo_optimo']].copy()
+                        if not cambios.empty:
+                            cols_mostrar = ['num_servicio', 'Via', 'svc_type', 'km_tramo',
+                                            'tipo_tren', 'tipo_optimo', 'kwh_actual', 'kwh_optimo']
+                            cols_disp = [c for c in cols_mostrar if c in cambios.columns]
+                            tabla = cambios[cols_disp].rename(columns={
+                                'num_servicio': 'Servicio', 'svc_type': 'Trayecto',
+                                'km_tramo': 'km', 'tipo_tren': 'Actual', 'tipo_optimo': 'Óptimo',
+                                'kwh_actual': 'kWh actual', 'kwh_optimo': 'kWh óptimo'
+                            })
+                            st.dataframe(tabla.round(1), use_container_width=True, height=400)
+                        else:
+                            st.info("La distribución actual ya es óptima — no se proponen cambios.")
+
+                    except Exception as e:
+                        st.error(f"Error en la optimización: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
 
 if __name__ == "__main__": 
     main()
