@@ -28,19 +28,55 @@ def _flota_disponible(config):
         return {'XT-100': 27, 'XT-M': 8, 'SFE': 5}
 
 
+def calcular_seat_total(df_e, config, active_sers, distribuir_fn, flujo_fn):
+    """
+    Calcula el SEAT total (kWh) idéntico a como lo hace el dashboard del planificador:
+    SEAT = (Σ energía_por_SER / ETA_RECTIFICADOR + pérdidas_AC) / 0.99
+
+    df_e: DataFrame con kwh_viaje_trac, kwh_viaje_aux, kwh_viaje_regen, t_viaje_h,
+          km_orig, km_dest por servicio (salida del motor).
+    Devuelve (seat_total_kwh, km_total).
+    """
+    try:
+        eta_ser = getattr(config, 'ETA_SER_RECTIFICADOR', 0.96)
+    except Exception:
+        eta_ser = 0.96
+
+    ser_accum = {s[1]: 0.0 for s in active_sers}
+    t_total_h = 0.0
+    km_total = 0.0
+
+    for _, r in df_e.iterrows():
+        e_panto = (r.get('kwh_viaje_trac', 0) + r.get('kwh_viaje_aux', 0) - r.get('kwh_viaje_regen', 0))
+        th = r.get('t_viaje_h', 0.0)
+        km_o, km_d = r['km_orig'], r['km_dest']
+        t_total_h += th
+        km_total += abs(km_d - km_o)
+        for s_name, e_val in distribuir_fn(e_panto, th, km_o, km_d, active_sers).items():
+            ser_accum[s_name] = ser_accum.get(s_name, 0.0) + e_val
+
+    total_ser_44kv = sum(max(0.0, v) for v in ser_accum.values()) / eta_ser
+    t_elap = max(0.001, t_total_h)
+    flujo = flujo_fn({k: max(0.0, v) / eta_ser / t_elap for k, v in ser_accum.items()})
+    loss_ac = flujo.get('P_loss_kw', 0.0) * (1.15 ** 2) * t_elap
+    seat = (total_ser_44kv + loss_ac) / 0.99
+    return seat, km_total
+
+
 def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
                                 df_consumo_base=None, simular_fn=None,
                                 precalcular_fn=None, params_sim=None,
-                                prevenciones=None):
+                                prevenciones=None, active_sers=None,
+                                distribuir_fn=None, flujo_fn=None):
     """
     Reasigna tipos de tren a los servicios para minimizar el consumo.
 
-    df_servicios: DataFrame de la malla (km_orig, km_dest, doble, tipo_tren,
-                  pax_abordo, num_servicio, t_ini, Via, svc_type, [t_fin]).
-    df_consumo_base: DataFrame df_sint_e ya calculado por el simulador, con
-                  'kwh_viaje_neto' por servicio. Si se entrega, es la LÍNEA BASE real.
-    simular_fn / precalcular_fn / params_sim: funciones y parámetros del motor para
-                  recalcular el consumo de la versión optimizada con física completa.
+    El consumo se calcula como SEAT total (idéntico al dashboard del planificador):
+    incluye pérdidas de rectificador, distribución por subestación y pérdidas AC.
+
+    df_consumo_base: df_sint_e ya calculado por el simulador (línea base real).
+    simular_fn/precalcular_fn/params_sim: motor para recalcular la versión optimizada.
+    active_sers/distribuir_fn/flujo_fn: para calcular el SEAT igual que el dashboard.
 
     Retorna: (df_optimizado, resumen_dict)
     """
@@ -55,8 +91,6 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
 
     df['cap_req'] = df.apply(lambda r: r.get('pax_abordo', 0) or 0, axis=1)
 
-    # IDE de referencia SOLO para decidir el orden de preferencia de tipos
-    # (no para el cálculo de consumo, que se hace con el motor real)
     ide_ref = {'XT-100': 3.88, 'XT-M': 3.28, 'SFE': 5.77}
     tipos_ordenados = sorted(ide_ref.keys(), key=lambda t: ide_ref[t])
     cap_tipo = {t: flota.get(t, {}).get('cap_max', 398) for t in ide_ref}
@@ -77,7 +111,6 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
                 count[tp] = count.get(tp, 0) + 1
         return count
 
-    # Asignación greedy por km descendente
     orden = df['km_tramo'].sort_values(ascending=False).index
     for idx in orden:
         cap_req = df.at[idx, 'cap_req']
@@ -93,32 +126,25 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
                 break
         df.at[idx, 'tipo_optimo'] = mejor_tipo
 
-    # === CONSUMO ACTUAL (línea base real del simulador) ===
-    if df_consumo_base is not None and 'kwh_viaje_neto' in df_consumo_base.columns:
-        # emparejar por num_servicio + Via + t_ini para traer el kwh real
-        base = df_consumo_base.copy()
-        key_cols = [c for c in ['num_servicio', 'Via', 't_ini'] if c in base.columns and c in df.columns]
-        if key_cols:
-            base_idx = base.set_index(key_cols)['kwh_viaje_neto']
-            df['kwh_actual'] = df.apply(
-                lambda r: base_idx.get(tuple(r[c] for c in key_cols), np.nan), axis=1)
-        else:
-            df['kwh_actual'] = base['kwh_viaje_neto'].values[:len(df)]
-        # fallback para los que no emparejaron
-        df['kwh_actual'] = pd.to_numeric(df['kwh_actual'], errors='coerce')
-        kwh_actual_total = df['kwh_actual'].sum()
+    puede_seat = (active_sers is not None and distribuir_fn is not None and flujo_fn is not None)
+
+    # === CONSUMO ACTUAL (SEAT real, línea base del simulador) ===
+    km_total = df['km_tramo'].sum()
+    if df_consumo_base is not None and puede_seat:
+        kwh_actual_total, km_total = calcular_seat_total(
+            df_consumo_base, config, active_sers, distribuir_fn, flujo_fn)
+    elif df_consumo_base is not None and 'kwh_viaje_neto' in df_consumo_base.columns:
+        kwh_actual_total = df_consumo_base['kwh_viaje_neto'].sum()
     else:
-        # sin línea base: estimar por IDE (menos preciso)
         df['kwh_actual'] = df.apply(
             lambda r: ide_ref.get(r['tipo_tren'], 3.88) * r['km_tramo'] * (2 if r['doble'] else 1), axis=1)
         kwh_actual_total = df['kwh_actual'].sum()
 
-    # === CONSUMO OPTIMIZADO (recalculado con el motor real) ===
+    # === CONSUMO OPTIMIZADO (recalculado con motor real → SEAT) ===
     if simular_fn is not None and params_sim is not None:
         df_opt_sim = df.copy()
-        df_opt_sim['tipo_tren'] = df_opt_sim['tipo_optimo']  # aplicar reasignación
+        df_opt_sim['tipo_tren'] = df_opt_sim['tipo_optimo']
         p = params_sim
-        # pasada 1 — firma: (df, pct, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones)
         df_e1 = simular_fn(df_opt_sim, p['pct_trac'], p['use_pend'], p['use_rm'],
                            p['use_regen'], {}, p['estacion_anio'], prevenciones=prevenciones)
         dict_r = {}
@@ -129,8 +155,11 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
                 dict_r = {}
         df_e = simular_fn(df_opt_sim, p['pct_trac'], p['use_pend'], p['use_rm'],
                           p['use_regen'], dict_r, p['estacion_anio'], prevenciones=prevenciones)
-        df['kwh_optimo'] = pd.to_numeric(df_e['kwh_viaje_neto'].values, errors='coerce')
-        kwh_optimo_total = df['kwh_optimo'].sum()
+        if puede_seat:
+            kwh_optimo_total, _ = calcular_seat_total(
+                df_e, config, active_sers, distribuir_fn, flujo_fn)
+        else:
+            kwh_optimo_total = pd.to_numeric(df_e['kwh_viaje_neto'], errors='coerce').sum()
     else:
         df['kwh_optimo'] = df.apply(
             lambda r: ide_ref.get(r['tipo_optimo'], 3.88) * r['km_tramo'] * (2 if r['doble'] else 1), axis=1)
@@ -145,12 +174,15 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
         'kwh_optimo': kwh_optimo_total,
         'ahorro_kwh': ahorro,
         'ahorro_pct': ahorro_pct,
+        'km_total': km_total,
+        'ide_actual': kwh_actual_total / km_total if km_total > 0 else 0.0,
+        'ide_optimo': kwh_optimo_total / km_total if km_total > 0 else 0.0,
         'n_cambios': len(cambios),
         'n_servicios': len(df),
         'comp_antes': df['tipo_tren'].value_counts().to_dict(),
         'comp_despues': df['tipo_optimo'].value_counts().to_dict(),
         'flota_disponible': flota_disp,
-        'usa_motor_real': (simular_fn is not None and df_consumo_base is not None),
+        'usa_seat_real': (puede_seat and df_consumo_base is not None and simular_fn is not None),
     }
 
     return df, resumen
