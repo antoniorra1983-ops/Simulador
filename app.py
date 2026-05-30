@@ -889,6 +889,13 @@ def main():
             if st.session_state.get('simulacion_plan_lista', False) and 'raw_plan_df' in st.session_state:
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature + str(sorted([(p.get('km_min',0),p.get('km_max',0),p.get('v_kmh',0),p.get('via',0)) for p in (prevenciones_list or [])], key=lambda x: x[0])) + str(use_pend) + str(use_rm) + str(use_regen) + str(tipo_regen) + str(estacion_anio_plan) + str(pct_trac_plan)
                 df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig, config_sig=get_config_hash())
+                # Guardar resultados para el Optimizador de Flota
+                st.session_state['opt_df_sint_e'] = df_sint_e
+                st.session_state['opt_params'] = {
+                    'pct_trac': pct_trac_plan, 'use_rm': use_rm, 'use_pend': use_pend,
+                    'use_regen': use_regen, 'tipo_regen': tipo_regen,
+                    'estacion_anio': estacion_anio_plan,
+                }
                 
                 # Forzar tipos numéricos
                 cols_num = ['t_ini', 't_fin', 'kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto', 't_viaje_h', 'tren_km']
@@ -947,7 +954,15 @@ def main():
                         if 't_fin' not in df_base_opt.columns:
                             df_base_opt['t_fin'] = df_base_opt['t_ini'] + 55
                         prio = 'energia' if "consumo" in priorizar_opt else 'eficiencia'
-                        df_opt, resumen = optimizar_asignacion_flota(df_base_opt, config, priorizar=prio)
+                        df_base_consumo = st.session_state.get('opt_df_sint_e', None)
+                        params_sim = st.session_state.get('opt_params', None)
+                        df_opt, resumen = optimizar_asignacion_flota(
+                            df_base_opt, config, priorizar=prio,
+                            df_consumo_base=df_base_consumo,
+                            simular_fn=calcular_termodinamica_flota_v111,
+                            precalcular_fn=precalcular_red_electrica_v111,
+                            params_sim=params_sim,
+                            prevenciones=prevenciones_list)
 
                         st.success(f"Optimización completada: {resumen['n_cambios']} de {resumen['n_servicios']} servicios reasignados.")
 
