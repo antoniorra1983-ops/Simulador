@@ -690,45 +690,47 @@ def main():
     
     with tab_planificador:
         st.subheader("🔮 Proyección de Malla y Capex Operativo")
-        
-        col_p1, col_p2 = st.columns([1, 2])
-        with col_p1:
-            st.markdown("##### 🌡️ Variables Externas")
+
+        # Variables Externas y Rendimiento del Tren ahora en el sidebar (junto a archivos)
+        with st.sidebar:
+            st.divider()
+            st.subheader("🌡️ Variables Externas")
             estacion_anio_plan = st.selectbox("Estación del Año (HVAC)", ["verano", "otoño", "invierno", "primavera"], index=3, key="est_plan")
             tipo_dia_plan = st.selectbox("Tipo de Día para Demanda", ["Laboral", "Sábado", "Domingo/Festivo"], key="td_plan")
-            
-            st.markdown("##### 🎛️ Rendimiento del Tren")
+
+            st.subheader("🎛️ Rendimiento del Tren")
             pct_trac_plan = st.slider("% Tracción Máxima (Aceleración)", 30, 100, 90, 5, help="Limita la fuerza de tracción disponible. Valores bajos reducen consumo pero aumentan el tiempo de viaje. En pendientes pronunciadas el tren puede no alcanzar la velocidad consigna.")
-            
+
             pax_promedio_viaje = {"Laboral": 280, "Sábado": 160, "Domingo/Festivo": 110}[tipo_dia_plan]
-            
+
             df_px_filtered = pd.DataFrame()
             nombre_perfil = f"Estático ({pax_promedio_viaje} pax)"
-            
+
             if not df_px.empty:
                 fechas_disp_todas = sorted([str(x) for x in df_px['Fecha_s'].dropna().unique() if str(x).strip() and str(x).lower() not in ["none", "nan", "fecha no detectada", "nat"]])
                 fechas_disp_tipo = [f for f in fechas_disp_todas if clasificar_dia(f) == tipo_dia_plan]
-                
+
                 if fechas_disp_tipo:
                     fechas_sel_plan = st.multiselect(
-                        f"📅 Fechas disponibles ({tipo_dia_plan}) para promediar:", 
-                        fechas_disp_tipo, 
+                        f"📅 Fechas disponibles ({tipo_dia_plan}) para promediar:",
+                        fechas_disp_tipo,
                         default=fechas_disp_tipo,
                         key="ms_pax_plan"
                     )
-                    
+
                     if fechas_sel_plan:
                         st.success(f"✅ Promediando demanda de {len(fechas_sel_plan)} día(s) tipo {tipo_dia_plan}.")
                         nombre_perfil = f"Promedio Real ({len(fechas_sel_plan)} días {tipo_dia_plan})"
                         df_px_filtered = df_px[df_px['Fecha_s'].isin(fechas_sel_plan)].copy()
-                    else: 
+                    else:
                         st.warning(f"⚠️ Selecciona al menos una fecha. Usando perfil estático: {pax_promedio_viaje} pax")
-                else: 
-                    st.warning(f"⚠️ No hay datos cargados para días tipo '{tipo_dia_plan}'. Usando perfil estático: {pax_promedio_viaje} pax")
-            else: 
+                else:
+                    st.warning(f"⚠️ No hay datos para días tipo '{tipo_dia_plan}'. Usando perfil estático: {pax_promedio_viaje} pax")
+            else:
                 st.warning(f"⚠️ Sin datos de pasajeros cargados. Usando perfil estático: {pax_promedio_viaje} pax")
-            
-        with col_p2:
+
+        # Fuente de Datos a pantalla completa (ancho completo)
+        if True:
             modo_plan = st.radio("Fuente de Datos", ["Planilla Maestra (Subir CSV/Excel)", "Matriz Sintética", "Laboratorio (Tramo Único)"], horizontal=True)
             
             if modo_plan == "Matriz Sintética":
