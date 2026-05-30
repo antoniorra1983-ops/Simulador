@@ -6,18 +6,12 @@ respetando la flota disponible y la capacidad de pasajeros requerida, de modo qu
 los trenes más eficientes (XT-M, menor IDE) cubran los servicios de mayor km/demanda.
 
 No altera los horarios (t_ini, t_fin) ni la malla — solo qué unidad hace cada servicio.
+
+El consumo se calcula con el MISMO motor físico que el simulador (no por IDE fijo),
+por lo que la línea base coincide exactamente con lo que muestra el Gemelo Digital.
 """
 import pandas as pd
 import numpy as np
-
-
-def _ide_referencia(config):
-    """IDE aproximado por tipo de tren (kWh/km) calibrado del simulador."""
-    return {
-        'XT-100': 3.88,
-        'XT-M':   3.28,
-        'SFE':    5.77,
-    }
 
 
 def _flota_disponible(config):
@@ -27,7 +21,6 @@ def _flota_disponible(config):
         disp = {}
         for tipo, params in flota.items():
             disp[tipo] = int(params.get('unidades_disponibles', 0))
-        # Fallback a valores conocidos MERVAL si no están en config
         if not any(disp.values()):
             disp = {'XT-100': 27, 'XT-M': 8, 'SFE': 5}
         return disp
@@ -35,106 +28,117 @@ def _flota_disponible(config):
         return {'XT-100': 27, 'XT-M': 8, 'SFE': 5}
 
 
-def optimizar_asignacion_flota(df_servicios, config, priorizar='energia'):
+def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
+                                df_consumo_base=None, simular_fn=None,
+                                precalcular_fn=None, params_sim=None,
+                                prevenciones=None):
     """
     Reasigna tipos de tren a los servicios para minimizar el consumo.
 
-    df_servicios: DataFrame con columnas km_orig, km_dest, doble, tipo_tren,
-                  pax_abordo (o demanda), motriz_num, t_ini, Via, svc_type
-    priorizar: 'energia' (minimizar kWh) o 'eficiencia' (minimizar IDE promedio)
+    df_servicios: DataFrame de la malla (km_orig, km_dest, doble, tipo_tren,
+                  pax_abordo, num_servicio, t_ini, Via, svc_type, [t_fin]).
+    df_consumo_base: DataFrame df_sint_e ya calculado por el simulador, con
+                  'kwh_viaje_neto' por servicio. Si se entrega, es la LÍNEA BASE real.
+    simular_fn / precalcular_fn / params_sim: funciones y parámetros del motor para
+                  recalcular el consumo de la versión optimizada con física completa.
 
     Retorna: (df_optimizado, resumen_dict)
     """
     df = df_servicios.copy().reset_index(drop=True)
-    ide_ref = _ide_referencia(config)
     flota_disp = _flota_disponible(config)
-
-    # Distancia de cada servicio
     df['km_tramo'] = (df['km_dest'] - df['km_orig']).abs()
 
-    # Capacidad requerida por servicio (si viene de pasajeros)
     try:
         flota = getattr(config, 'FLOTA', {})
     except Exception:
         flota = {}
 
-    def cap_requerida(row):
-        # demanda de pasajeros; si no hay dato, usar la capacidad del tren actual
-        pax = row.get('pax_abordo', 0) or 0
-        return pax
+    df['cap_req'] = df.apply(lambda r: r.get('pax_abordo', 0) or 0, axis=1)
 
-    df['cap_req'] = df.apply(cap_requerida, axis=1)
-
-    # --- Asignación de tipos por simultaneidad ---
-    # Restricción real: en cada instante no puede haber más trenes de un tipo
-    # circulando que unidades disponibles de ese tipo. Calculamos solapamiento.
-
-    # Orden de preferencia energética: el tipo con menor IDE primero
+    # IDE de referencia SOLO para decidir el orden de preferencia de tipos
+    # (no para el cálculo de consumo, que se hace con el motor real)
+    ide_ref = {'XT-100': 3.88, 'XT-M': 3.28, 'SFE': 5.77}
     tipos_ordenados = sorted(ide_ref.keys(), key=lambda t: ide_ref[t])
+    cap_tipo = {t: flota.get(t, {}).get('cap_max', 398) for t in ide_ref}
 
-    # Estrategia: asignar XT-M (más eficiente) a los servicios de MAYOR km
-    # mientras haya unidades disponibles sin exceder simultaneidad.
-    df = df.sort_values('km_tramo', ascending=False).reset_index(drop=True)
+    df['tipo_optimo'] = df['tipo_tren']
 
-    df['tipo_optimo'] = df['tipo_tren']  # default: mantener
-
-    # Contar simultaneidad: para cada servicio, cuántos otros se solapan en tiempo
-    def trenes_simultaneos(idx, tipo_asignado_col):
+    def trenes_simultaneos(idx, tipo_col):
         t_ini = df.at[idx, 't_ini']
-        t_fin = df.at[idx, 't_fin'] if 't_fin' in df.columns else t_ini + 60
+        t_fin = df.at[idx, 't_fin'] if 't_fin' in df.columns else t_ini + 55
         count = {}
         for j in range(len(df)):
             if j == idx:
                 continue
             tj_ini = df.at[j, 't_ini']
-            tj_fin = df.at[j, 't_fin'] if 't_fin' in df.columns else tj_ini + 60
-            if tj_ini < t_fin and tj_fin > t_ini:  # solapan
-                tp = df.at[j, tipo_asignado_col]
+            tj_fin = df.at[j, 't_fin'] if 't_fin' in df.columns else tj_ini + 55
+            if tj_ini < t_fin and tj_fin > t_ini:
+                tp = df.at[j, tipo_col]
                 count[tp] = count.get(tp, 0) + 1
         return count
 
-    # Asignación greedy: recorrer servicios de mayor a menor km,
-    # asignar el tipo más eficiente que (a) tenga capacidad suficiente,
-    # (b) no exceda la flota disponible en simultaneidad
-    cap_tipo = {t: flota.get(t, {}).get('cap_max', 398) for t in ide_ref}
-
-    for idx in range(len(df)):
+    # Asignación greedy por km descendente
+    orden = df['km_tramo'].sort_values(ascending=False).index
+    for idx in orden:
         cap_req = df.at[idx, 'cap_req']
         es_doble = bool(df.at[idx, 'doble'])
-
         mejor_tipo = df.at[idx, 'tipo_tren']
         for tipo in tipos_ordenados:
             cap_disp = cap_tipo.get(tipo, 398) * (2 if es_doble else 1)
             if cap_disp < cap_req:
-                continue  # no alcanza la capacidad
-            # verificar simultaneidad
+                continue
             simult = trenes_simultaneos(idx, 'tipo_optimo')
-            usados_tipo = simult.get(tipo, 0)
-            if usados_tipo < flota_disp.get(tipo, 0):
+            if simult.get(tipo, 0) < flota_disp.get(tipo, 0):
                 mejor_tipo = tipo
                 break
         df.at[idx, 'tipo_optimo'] = mejor_tipo
 
-    # Restaurar orden original
-    df = df.sort_values('t_ini').reset_index(drop=True)
+    # === CONSUMO ACTUAL (línea base real del simulador) ===
+    if df_consumo_base is not None and 'kwh_viaje_neto' in df_consumo_base.columns:
+        # emparejar por num_servicio + Via + t_ini para traer el kwh real
+        base = df_consumo_base.copy()
+        key_cols = [c for c in ['num_servicio', 'Via', 't_ini'] if c in base.columns and c in df.columns]
+        if key_cols:
+            base_idx = base.set_index(key_cols)['kwh_viaje_neto']
+            df['kwh_actual'] = df.apply(
+                lambda r: base_idx.get(tuple(r[c] for c in key_cols), np.nan), axis=1)
+        else:
+            df['kwh_actual'] = base['kwh_viaje_neto'].values[:len(df)]
+        # fallback para los que no emparejaron
+        df['kwh_actual'] = pd.to_numeric(df['kwh_actual'], errors='coerce')
+        kwh_actual_total = df['kwh_actual'].sum()
+    else:
+        # sin línea base: estimar por IDE (menos preciso)
+        df['kwh_actual'] = df.apply(
+            lambda r: ide_ref.get(r['tipo_tren'], 3.88) * r['km_tramo'] * (2 if r['doble'] else 1), axis=1)
+        kwh_actual_total = df['kwh_actual'].sum()
 
-    # --- Calcular consumo antes y después (estimación por IDE) ---
-    df['kwh_actual'] = df.apply(
-        lambda r: ide_ref.get(r['tipo_tren'], 3.88) * r['km_tramo'] * (2 if r['doble'] else 1), axis=1)
-    df['kwh_optimo'] = df.apply(
-        lambda r: ide_ref.get(r['tipo_optimo'], 3.88) * r['km_tramo'] * (2 if r['doble'] else 1), axis=1)
+    # === CONSUMO OPTIMIZADO (recalculado con el motor real) ===
+    if simular_fn is not None and params_sim is not None:
+        df_opt_sim = df.copy()
+        df_opt_sim['tipo_tren'] = df_opt_sim['tipo_optimo']  # aplicar reasignación
+        p = params_sim
+        # pasada 1 — firma: (df, pct, use_pend, use_rm, use_regen, dict_regen, estacion_anio, prevenciones)
+        df_e1 = simular_fn(df_opt_sim, p['pct_trac'], p['use_pend'], p['use_rm'],
+                           p['use_regen'], {}, p['estacion_anio'], prevenciones=prevenciones)
+        dict_r = {}
+        if precalcular_fn is not None:
+            try:
+                dict_r = precalcular_fn(df_e1, p['pct_trac'], p['use_rm'], p['estacion_anio'])
+            except Exception:
+                dict_r = {}
+        df_e = simular_fn(df_opt_sim, p['pct_trac'], p['use_pend'], p['use_rm'],
+                          p['use_regen'], dict_r, p['estacion_anio'], prevenciones=prevenciones)
+        df['kwh_optimo'] = pd.to_numeric(df_e['kwh_viaje_neto'].values, errors='coerce')
+        kwh_optimo_total = df['kwh_optimo'].sum()
+    else:
+        df['kwh_optimo'] = df.apply(
+            lambda r: ide_ref.get(r['tipo_optimo'], 3.88) * r['km_tramo'] * (2 if r['doble'] else 1), axis=1)
+        kwh_optimo_total = df['kwh_optimo'].sum()
 
-    kwh_actual_total = df['kwh_actual'].sum()
-    kwh_optimo_total = df['kwh_optimo'].sum()
     ahorro = kwh_actual_total - kwh_optimo_total
     ahorro_pct = (ahorro / kwh_actual_total * 100) if kwh_actual_total > 0 else 0.0
-
-    # Conteo de cambios
     cambios = df[df['tipo_tren'] != df['tipo_optimo']]
-
-    # Composición antes/después
-    comp_antes = df['tipo_tren'].value_counts().to_dict()
-    comp_despues = df['tipo_optimo'].value_counts().to_dict()
 
     resumen = {
         'kwh_actual': kwh_actual_total,
@@ -143,9 +147,10 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia'):
         'ahorro_pct': ahorro_pct,
         'n_cambios': len(cambios),
         'n_servicios': len(df),
-        'comp_antes': comp_antes,
-        'comp_despues': comp_despues,
+        'comp_antes': df['tipo_tren'].value_counts().to_dict(),
+        'comp_despues': df['tipo_optimo'].value_counts().to_dict(),
         'flota_disponible': flota_disp,
+        'usa_motor_real': (simular_fn is not None and df_consumo_base is not None),
     }
 
     return df, resumen
