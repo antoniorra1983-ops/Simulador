@@ -81,6 +81,19 @@ from red_electrica import (
 )
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 
+def get_config_hash():
+    """Hash de los parámetros físicos del config — si cambia, invalida la caché."""
+    import hashlib, json
+    try:
+        flota = getattr(config, 'FLOTA', {})
+        eta   = getattr(config, 'ETA_REGEN_NETA', 0.38)
+        snap  = {t: {k: v for k, v in f.items() if isinstance(v, (int, float, str, bool))}
+                 for t, f in flota.items()}
+        snap['_ETA_REGEN_NETA'] = eta
+        return hashlib.md5(json.dumps(snap, sort_keys=True).encode()).hexdigest()[:8]
+    except Exception:
+        return "no_config"
+
 # =============================================================================
 # 1. FUNCIONES DE CARGA Y AGRUPACIÓN (BLINDADAS)
 # =============================================================================
@@ -181,7 +194,7 @@ def procesar_prevenciones_independiente(_bp, sig_ligera):
     return prev_list
 
 @st.cache_data(show_spinner="Simulando termodinámica histórica...")
-def simular_dia_historico_cached(_df_dia, pct_trac_hist, use_rm, use_pend, use_regen, tipo_regen, estacion_anio, _prevenciones, data_sig_fisica):
+def simular_dia_historico_cached(_df_dia, pct_trac_hist, use_rm, use_pend, use_regen, tipo_regen, estacion_anio, _prevenciones, data_sig_fisica, config_sig=""):
     dict_regen = {}
     if use_regen:
         # Modelo Probabilístico: receptividad según headway real entre trenes
@@ -254,7 +267,7 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
     return trayectoria
 
 @st.cache_data(show_spinner="Integrando física y demanda en Planificador...")
-def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig):
+def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig, config_sig=""):
     viajes_completos = []
     perfiles_por_servicio = {}
     perfiles_por_via = {}
@@ -774,10 +787,6 @@ def main():
                 with col_s2: sb_dest = st.selectbox("Estación Destino", est_safe, index=max(0, len(est_safe)-1), key="sb_d")
                 with col_s3: sb_flota = st.selectbox("Tipo de Tren", ["XT-100", "XT-M", "SFE"], key="sb_f")
                 with col_s4: sb_pax = st.number_input("Pasajeros a bordo", 0, 1000, 150)
-
-                sb_modo = st.radio("Modo de Circulación", ["Modo Servicio", "Modo Vacío"], horizontal=True,
-                                   help="Servicio: el tren se detiene en cada estación. Vacío: pasa por las estaciones a 30 km/h sin detenerse.")
-                sb_es_vacio = (sb_modo == "Modo Vacío")
                 
                 if st.button("⚡ Simular Tramo", use_container_width=True):
                     if sb_orig != sb_dest:
@@ -794,22 +803,16 @@ def main():
                             try:
                                 trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb, _ = simular_tramo_termodinamico(
                                     sb_flota, False, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
-                                    None, estacion_anio_plan, 480.0, es_vacio=sb_es_vacio, prevenciones=prevenciones_list
+                                    None, estacion_anio_plan, 480.0, es_vacio=False, prevenciones=prevenciones_list
                                 )
                             except TypeError:
                                 trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb, _ = simular_tramo_termodinamico(
                                     sb_flota, False, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
-                                    None, estacion_anio_plan, 480.0, es_vacio=sb_es_vacio
+                                    None, estacion_anio_plan, 480.0, es_vacio=False
                                 )
                         
                         try:
-                            # Laboratorio = un solo tren circulando: no hay otro tren que absorba
-                            # la regeneración exportada, así que la receptividad de red es 0.
-                            # simular_tramo retorna neto_ideal = trc + aux - reg_exportable (receptividad 1.0).
-                            # Recalculamos el neto sin el excedente regenerado: el excedente va al reóstato.
-                            # (El autoconsumo de aux durante frenado ya está descontado dentro del motor.)
-                            neto_lab = trc_sb + aux_sb  # sin aprovechar reg_exportable (receptividad=0)
-                            distrib_sb = distribuir_energia_sers(neto_lab, th_sb, km_o, km_d, active_sers)
+                            distrib_sb = distribuir_energia_sers(neto_sb, th_sb, km_o, km_d, active_sers)
                             try: eta_ser = getattr(config, 'ETA_SER_RECTIFICADOR', 0.96)
                             except NameError: eta_ser = 0.96
                             
@@ -870,7 +873,7 @@ def main():
 
             if st.session_state.get('simulacion_plan_lista', False) and 'raw_plan_df' in st.session_state:
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature + str(sorted([(p.get('km_min',0),p.get('km_max',0),p.get('v_kmh',0),p.get('via',0)) for p in (prevenciones_list or [])], key=lambda x: x[0])) + str(use_pend) + str(use_rm) + str(use_regen) + str(tipo_regen) + str(estacion_anio_plan) + str(pct_trac_plan)
-                df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig)
+                df_sint_final, df_sint_e = procesar_planificador_reactivo(st.session_state['raw_plan_df'], df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig, config_sig=get_config_hash())
                 
                 # Forzar tipos numéricos
                 cols_num = ['t_ini', 't_fin', 'kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto', 't_viaje_h', 'tren_km']
