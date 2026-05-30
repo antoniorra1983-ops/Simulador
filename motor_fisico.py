@@ -729,11 +729,15 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
     # absorben simultáneamente. La receptividad es la misma para todos los frenadores del bin.
     regen_asignada = {idx: 0.0 for idx in df_dia.index}
 
-    # Modelo óhmico de catenaria DC: eta = 1 - (P × r × dist) / V²
-    R_CAT_OHM_KM = 0.04      # Ohm/km típico catenaria 3kV
-    V_NOM_DC     = 3000.0    # V nominal
-    DIST_MAX_REAL = 30.0     # km máximo (largo línea)
-    ETA_INV      = 0.92      # Eficiencia inversor regenerativo
+    # Modelo de receptividad por separación entre trenes en la misma vía.
+    # Físicamente, la energía regenerada solo llega a un tren receptor si está
+    # eléctricamente cerca: las subestaciones rectificadoras (SER, cada ~8 km) NO son
+    # reversibles, así que la energía no cruza de un tramo de alimentación a otro.
+    # Si el receptor está más allá de la subestación más cercana, la receptividad cae.
+    V_NOM_DC      = 3000.0    # V nominal
+    ETA_INV       = 0.92      # Eficiencia inversor regenerativo (a distancia ~0)
+    DIST_SER_KM   = 8.0       # separación típica entre subestaciones (tramo de alimentación)
+    DIST_MAX_REAL = 12.0      # más allá: receptor en otro tramo, sin transferencia útil
 
     for t_bin, frens in braking_events.items():
         acels = accel_events.get(t_bin, [])
@@ -751,19 +755,26 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
             if p_gen_total <= 0 or p_dem_total <= 0:
                 continue
 
-            # Calcular eficiencia promedio óhmica ponderada
-            # eta = ETA_INV × (1 - P×r×dist/V²)
+            # Eficiencia de transferencia según distancia al receptor más cercano:
+            #  - dentro del mismo tramo de SER (< 8 km): pérdida óhmica suave (eta ~0.85-0.92)
+            #  - entre 8 y 12 km: el receptor está pasando una subestación → caída lineal a 0
+            #  - > 12 km: sin transferencia (la energía se disipa en reóstato)
             eta_promedio = 0.0
             peso_total = 0.0
             for b_idx, b_km, p_gen in frens_via:
-                for a_idx, a_km, a_dem in acels_via:
-                    dist = abs(a_km - b_km)
-                    if dist > DIST_MAX_REAL:
-                        continue
-                    # Pérdida óhmica: I²R donde I = P/V
-                    eta_dist = ETA_INV * max(0.0, 1.0 - p_gen * 1000.0 * R_CAT_OHM_KM * dist / (V_NOM_DC ** 2))
-                    eta_promedio += eta_dist * p_gen * a_dem
-                    peso_total += p_gen * a_dem
+                # receptor más cercano a este frenador
+                dist_min = min(abs(a_km - b_km) for a_idx, a_km, a_dem in acels_via)
+                if dist_min > DIST_MAX_REAL:
+                    eta_dist = 0.0
+                elif dist_min <= DIST_SER_KM:
+                    # pérdida óhmica dentro del tramo
+                    eta_dist = ETA_INV * max(0.0, 1.0 - 0.05 * dist_min / DIST_SER_KM)
+                else:
+                    # zona de transición 8→12 km: cae linealmente a 0 al cruzar SER
+                    frac = (DIST_MAX_REAL - dist_min) / (DIST_MAX_REAL - DIST_SER_KM)
+                    eta_dist = ETA_INV * 0.95 * max(0.0, frac)
+                eta_promedio += eta_dist * p_gen
+                peso_total += p_gen
 
             if peso_total <= 0:
                 continue
