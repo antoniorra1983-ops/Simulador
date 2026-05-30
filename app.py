@@ -976,12 +976,14 @@ def main():
                                   delta=f"-{resumen['ahorro_kwh']:,.0f} kWh")
                         m3.metric("Ahorro", f"{resumen['ahorro_pct']:.1f} %")
 
-                        m4, m5 = st.columns(2)
+                        m4, m5, m6 = st.columns(3)
                         m4.metric("IDE Actual", f"{resumen.get('ide_actual', 0):.3f} kWh/km")
                         m5.metric("IDE Optimizado", f"{resumen.get('ide_optimo', 0):.3f} kWh/km")
+                        m6.metric("Kilometraje (Tren-km)", f"{resumen.get('km_total', 0):,.1f} km")
                         if resumen.get('usa_seat_real'):
                             st.caption("✅ Consumo calculado como SEAT total (incluye pérdidas de rectificador y AC), "
-                                       "idéntico al del Planificador, con la misma carga de pasajeros y prevenciones.")
+                                       "idéntico al del Planificador, con la misma carga de pasajeros y prevenciones. "
+                                       "El IDE usa el kilometraje Tren-km (formaciones dobles cuentan 2×).")
 
                         st.divider()
 
