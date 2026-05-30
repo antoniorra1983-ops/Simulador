@@ -264,7 +264,13 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
     
     function drawTrains() {
         let html = '';
-        let activeTrips = trips.filter(tr => currentTime >= tr.t_ini && currentTime <= tr.t_fin + 5.0);
+        // Un tren se muestra solo durante su viaje activo (sin margen de 5 min que
+        // causaba que un servicio terminado se viera junto al siguiente del mismo tren).
+        // Si el mismo tren físico (motriz) ya inició otro viaje, el anterior desaparece.
+        let activeTrips = trips.filter(tr => {
+            if (currentTime < tr.t_ini || currentTime > tr.t_fin) return false;
+            return true;
+        });
         
         // Ordenar trenes por vía y luego por posición
         activeTrips.sort((a, b) => {
@@ -279,7 +285,8 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
         let via2Index = 0;
         
         activeTrips.forEach((tr) => {
-            let is_parked = currentTime >= tr.t_fin;
+            // Estacionado solo en el último instante del viaje (llegada a terminal)
+            let is_parked = currentTime >= tr.t_fin - 0.1;
             let current_t = Math.min(currentTime, tr.t_fin); 
             let km = getPos(tr.traj, current_t);
             let xp = xkm(km);
