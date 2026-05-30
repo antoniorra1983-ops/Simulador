@@ -149,3 +149,132 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia'):
     }
 
     return df, resumen
+
+
+# Rangos de numeración de motrices por tipo (MERVAL)
+_RANGOS_MOTRIZ = {
+    'XT-100': list(range(1, 28)),    # 1-27
+    'XT-M':   list(range(28, 36)),   # 28-35
+    'SFE':    list(range(410, 415)), # 410-414
+}
+
+
+def _asignar_motrices_por_tipo(df_opt):
+    """
+    Asigna números de motriz concretos según el tipo óptimo, respetando que
+    cada motriz física no esté en dos servicios solapados en el tiempo.
+    Retorna el df con columnas 'motriz_1_opt' y 'motriz_2_opt'.
+    """
+    df = df_opt.copy().sort_values('t_ini').reset_index(drop=True)
+    df['motriz_1_opt'] = None
+    df['motriz_2_opt'] = None
+
+    # Disponibilidad temporal: para cada motriz, lista de (t_ini, t_fin) ocupados
+    ocupacion = {}  # motriz_num -> lista de intervalos
+
+    def libre(motriz, t_ini, t_fin):
+        for (oi, of) in ocupacion.get(motriz, []):
+            if oi < t_fin and of > t_ini:
+                return False
+        return True
+
+    for idx in range(len(df)):
+        tipo = df.at[idx, 'tipo_optimo']
+        t_ini = df.at[idx, 't_ini']
+        t_fin = df.at[idx, 't_fin'] if 't_fin' in df.columns else t_ini + 55
+        es_doble = bool(df.at[idx, 'doble'])
+        rango = _RANGOS_MOTRIZ.get(tipo, _RANGOS_MOTRIZ['XT-100'])
+
+        # Buscar primera motriz libre del tipo
+        asignadas = []
+        n_necesarias = 2 if es_doble else 1
+        for m in rango:
+            if libre(m, t_ini, t_fin):
+                asignadas.append(m)
+                if len(asignadas) >= n_necesarias:
+                    break
+        # Registrar ocupación
+        for m in asignadas:
+            ocupacion.setdefault(m, []).append((t_ini, t_fin))
+
+        if len(asignadas) >= 1:
+            df.at[idx, 'motriz_1_opt'] = asignadas[0]
+        if es_doble and len(asignadas) >= 2:
+            df.at[idx, 'motriz_2_opt'] = asignadas[1]
+
+    return df
+
+
+def generar_planillas_xlsx(df_opt, ruta_v1, ruta_v2):
+    """
+    Genera dos archivos xlsx (V1 y V2) con el formato de las planillas originales:
+    Columnas: N° Viaje | Servicio | Hr Partida | N° Partida | Intervalo | Unidad | Motriz 1 | Motriz 2
+
+    df_opt debe tener: Via, num_servicio, t_ini, doble, tipo_optimo (y t_fin opcional).
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    df = _asignar_motrices_por_tipo(df_opt)
+
+    def _fmt_hora(t_mins):
+        try:
+            h = int(t_mins // 60); m = int(t_mins % 60); s = int(round((t_mins - int(t_mins)) * 60))
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        except Exception:
+            return ""
+
+    cols = ['N° Viaje', 'Servicio', 'Hr Partida', 'N° Partida', 'Intervalo', 'Unidad', 'Motriz 1', 'Motriz 2']
+
+    for via, ruta in [(1, ruta_v1), (2, ruta_v2)]:
+        sub = df[df['Via'] == via].sort_values('t_ini').reset_index(drop=True)
+        wb = Workbook(); ws = wb.active; ws.title = f"V{via}"
+
+        # Encabezado
+        head_font = Font(name='Arial', bold=True, color='FFFFFF', size=11)
+        head_fill = PatternFill('solid', start_color='1565C0' if via == 1 else 'C62828')
+        center = Alignment(horizontal='center', vertical='center')
+        thin = Side(style='thin', color='CCCCCC')
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        for c_idx, col in enumerate(cols, start=1):
+            cell = ws.cell(row=1, column=c_idx, value=col)
+            cell.font = head_font; cell.fill = head_fill
+            cell.alignment = center; cell.border = border
+
+        prev_t = None
+        for r_idx, (_, row) in enumerate(sub.iterrows(), start=2):
+            t_ini = row['t_ini']
+            n_viaje = row.get('num_servicio', '')
+            servicio = row.get('num_servicio', '')
+            # Intervalo respecto al anterior
+            intervalo = ""
+            if prev_t is not None:
+                dt = t_ini - prev_t
+                if dt > 0:
+                    intervalo = _fmt_hora(dt)
+            prev_t = t_ini
+
+            unidad = "Múltiple" if bool(row.get('doble', False)) else ""
+            m1 = row.get('motriz_1_opt', None)
+            m2 = row.get('motriz_2_opt', None)
+
+            valores = [
+                n_viaje, servicio, _fmt_hora(t_ini), r_idx - 1,
+                intervalo, unidad,
+                int(m1) if m1 is not None else "",
+                int(m2) if m2 is not None else "",
+            ]
+            for c_idx, val in enumerate(valores, start=1):
+                cell = ws.cell(row=r_idx, column=c_idx, value=val)
+                cell.alignment = center; cell.border = border
+                cell.font = Font(name='Arial', size=10)
+
+        # Ancho de columnas
+        anchos = [10, 10, 12, 11, 11, 10, 10, 10]
+        for c_idx, w in enumerate(anchos, start=1):
+            ws.column_dimensions[ws.cell(row=1, column=c_idx).column_letter].width = w
+
+        wb.save(ruta)
+
+    return ruta_v1, ruta_v2
