@@ -787,6 +787,10 @@ def main():
                 with col_s2: sb_dest = st.selectbox("Estación Destino", est_safe, index=max(0, len(est_safe)-1), key="sb_d")
                 with col_s3: sb_flota = st.selectbox("Tipo de Tren", ["XT-100", "XT-M", "SFE"], key="sb_f")
                 with col_s4: sb_pax = st.number_input("Pasajeros a bordo", 0, 1000, 150)
+
+                sb_modo = st.radio("Modo de Circulación", ["Modo Servicio", "Modo Vacío"], horizontal=True,
+                                   help="Servicio: el tren se detiene en cada estación. Vacío: pasa por las estaciones a 30 km/h sin detenerse.")
+                sb_es_vacio = (sb_modo == "Modo Vacío")
                 
                 if st.button("⚡ Simular Tramo", use_container_width=True):
                     if sb_orig != sb_dest:
@@ -803,16 +807,20 @@ def main():
                             try:
                                 trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb, _ = simular_tramo_termodinamico(
                                     sb_flota, False, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
-                                    None, estacion_anio_plan, 480.0, es_vacio=False, prevenciones=prevenciones_list
+                                    None, estacion_anio_plan, 480.0, es_vacio=sb_es_vacio, prevenciones=prevenciones_list
                                 )
                             except TypeError:
                                 trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb, _ = simular_tramo_termodinamico(
                                     sb_flota, False, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
-                                    None, estacion_anio_plan, 480.0, es_vacio=False
+                                    None, estacion_anio_plan, 480.0, es_vacio=sb_es_vacio
                                 )
                         
                         try:
-                            distrib_sb = distribuir_energia_sers(neto_sb, th_sb, km_o, km_d, active_sers)
+                            # Laboratorio = un solo tren: no hay otro que absorba la regeneración
+                            # exportada (receptividad de red = 0). El excedente regenerado va al
+                            # reóstato. El autoconsumo de aux en frenado ya está descontado en el motor.
+                            neto_lab = trc_sb + aux_sb
+                            distrib_sb = distribuir_energia_sers(neto_lab, th_sb, km_o, km_d, active_sers)
                             try: eta_ser = getattr(config, 'ETA_SER_RECTIFICADOR', 0.96)
                             except NameError: eta_ser = 0.96
                             
