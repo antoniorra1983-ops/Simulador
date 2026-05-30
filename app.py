@@ -95,9 +95,10 @@ def get_config_hash():
         return "no_config"
 
 try:
-    from optimizador_flota import optimizar_asignacion_flota
+    from optimizador_flota import optimizar_asignacion_flota, generar_planillas_xlsx
 except ImportError:
     optimizar_asignacion_flota = None
+    generar_planillas_xlsx = None
 
 # =============================================================================
 # 1. FUNCIONES DE CARGA Y AGRUPACIÓN (BLINDADAS)
@@ -988,6 +989,40 @@ def main():
                             st.dataframe(tabla.round(1), use_container_width=True, height=400)
                         else:
                             st.info("La distribución actual ya es óptima — no se proponen cambios.")
+
+                        # Generar planillas V1 y V2 descargables
+                        st.divider()
+                        st.markdown("##### 📥 Descargar planillas optimizadas")
+                        if generar_planillas_xlsx is not None:
+                            try:
+                                import tempfile, os
+                                tmpdir = tempfile.gettempdir()
+                                ruta_v1 = os.path.join(tmpdir, "Planilla_Optimizada_V1.xlsx")
+                                ruta_v2 = os.path.join(tmpdir, "Planilla_Optimizada_V2.xlsx")
+                                generar_planillas_xlsx(df_opt, ruta_v1, ruta_v2)
+
+                                dl1, dl2 = st.columns(2)
+                                with dl1:
+                                    with open(ruta_v1, 'rb') as f:
+                                        st.download_button(
+                                            "⬇️ Planilla Vía 1 (optimizada)",
+                                            data=f.read(),
+                                            file_name="Planilla_Optimizada_V1.xlsx",
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            use_container_width=True)
+                                with dl2:
+                                    with open(ruta_v2, 'rb') as f:
+                                        st.download_button(
+                                            "⬇️ Planilla Vía 2 (optimizada)",
+                                            data=f.read(),
+                                            file_name="Planilla_Optimizada_V2.xlsx",
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            use_container_width=True)
+                                st.caption("Formato idéntico a las planillas del Planificador: "
+                                           "N° Viaje · Servicio · Hr Partida · N° Partida · Intervalo · Unidad · Motriz 1 · Motriz 2. "
+                                           "Las motrices se asignan según el tipo óptimo (1-27 XT-100, 28-35 XT-M, 410-414 SFE).")
+                            except Exception as e:
+                                st.warning(f"No se pudieron generar las planillas: {e}")
 
                     except Exception as e:
                         st.error(f"Error en la optimización: {e}")
