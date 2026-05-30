@@ -285,6 +285,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     ser_data = _get_val('SER_DATA', [(4.9, "SER PO"), (12.7, "SER ES"), (25.5, "SER EB"), (28.7, "SER VA")])
     dt = 1.0  
     eta_motor = f.get('eta_motor', 0.92)
+    eta_regen_mec = eta_motor * f.get('eta_reductor', 1.0)  # motor × reductor (rueda→catenaria)
     eta_regen_neta = _get_val('ETA_REGEN_NETA', 0.38)
     dwell_seg = _get_val('DWELL_DEF', 25.0)
     
@@ -576,7 +577,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 # Eficiencia del motor: usa eta_base en todos los regímenes.
                 # No se aplica penalización por carga parcial — no hay datos
                 # técnicos certificados del XT-100/XT-M que la respalden.
-                eta_din = f.get('eta_motor', 0.92)
+                eta_din = f.get('eta_motor', 0.92) * f.get('eta_reductor', 1.0)
                 trabajo_j_trac = f_motor_real * step_m
                 trc += (trabajo_j_trac / 3_600_000.0) / eta_din
                 aux_catenaria += aux_kwh_step
@@ -585,7 +586,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 f_freno_real = min(abs(f_real_total), f_disp_freno)
                 trabajo_j_regen = f_freno_real * step_m
                 energia_bruta_kwh = trabajo_j_regen / 3_600_000.0
-                energia_electrica_kwh = energia_bruta_kwh * eta_motor
+                energia_electrica_kwh = energia_bruta_kwh * eta_regen_mec
                 
                 if energia_electrica_kwh >= aux_kwh_step:
                     excedente_kwh = energia_electrica_kwh - aux_kwh_step
@@ -601,7 +602,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             
             # Guardar perfil segundo a segundo para precalcular_red
             km_actual_sim = (pos_m + dist_recorrida) / 1000.0 if via_op == 1 else (pos_m - dist_recorrida) / 1000.0
-            p_regen_sim = (min(abs(f_real_total), f_disp_freno) * max(0.0, v_ms) / 1000.0 * eta_motor
+            p_regen_sim = (min(abs(f_real_total), f_disp_freno) * max(0.0, v_ms) / 1000.0 * eta_regen_mec
                           if f_real_total < 0 and estado_marcha in ['BRAKE_STATION','BRAKE_OVERSPEED','COAST'] else 0.0)
             perfil_potencia.append((t_ini_mins + t_horas*60.0, km_actual_sim,
                                     v_ms*3.6, estado_marcha, p_regen_sim))
