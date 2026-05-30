@@ -962,16 +962,26 @@ def main():
                             simular_fn=calcular_termodinamica_flota_v111,
                             precalcular_fn=precalcular_red_electrica_v111,
                             params_sim=params_sim,
-                            prevenciones=prevenciones_list)
+                            prevenciones=prevenciones_list,
+                            active_sers=active_sers,
+                            distribuir_fn=distribuir_energia_sers,
+                            flujo_fn=calcular_flujo_ac_nodo)
 
                         st.success(f"Optimización completada: {resumen['n_cambios']} de {resumen['n_servicios']} servicios reasignados.")
 
-                        # Métricas de ahorro
+                        # Métricas de ahorro (SEAT total, igual que el planificador)
                         m1, m2, m3 = st.columns(3)
-                        m1.metric("Consumo Actual", f"{resumen['kwh_actual']:,.0f} kWh")
-                        m2.metric("Consumo Optimizado", f"{resumen['kwh_optimo']:,.0f} kWh",
+                        m1.metric("Consumo Actual (SEAT)", f"{resumen['kwh_actual']:,.0f} kWh")
+                        m2.metric("Consumo Optimizado (SEAT)", f"{resumen['kwh_optimo']:,.0f} kWh",
                                   delta=f"-{resumen['ahorro_kwh']:,.0f} kWh")
                         m3.metric("Ahorro", f"{resumen['ahorro_pct']:.1f} %")
+
+                        m4, m5 = st.columns(2)
+                        m4.metric("IDE Actual", f"{resumen.get('ide_actual', 0):.3f} kWh/km")
+                        m5.metric("IDE Optimizado", f"{resumen.get('ide_optimo', 0):.3f} kWh/km")
+                        if resumen.get('usa_seat_real'):
+                            st.caption("✅ Consumo calculado como SEAT total (incluye pérdidas de rectificador y AC), "
+                                       "idéntico al del Planificador, con la misma carga de pasajeros y prevenciones.")
 
                         st.divider()
 
