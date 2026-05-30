@@ -145,7 +145,7 @@ FLOTA = {
     "XT-100": {
         "largo_m"      : 48.92,          # Largo real del tren (m)
         "tara_t"       : 86.1,  
-        "m_iner_t"     : 7.20,  
+        "m_iner_t"     : 4.20,           # Estimado con factor masa rotacional XT-M (4.9% tara HMP)
         "coches"       : 2,  
         "cap_sent"     : 94,  
         "cap_max"      : 398,           # C2 (4 pax/m²) — manual TRA 001
@@ -158,13 +158,14 @@ FLOTA = {
         "jerk_ms3"     : 1.3,           # ALSTOM: Dinámica certificada
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.92,  
+        "eta_reductor" : 0.975,         # XT-100.docx: gear efficiency 97.5%
         "davis_A"      : 1678.70,        # Informe HMP Tabla A.5
         "davis_B"      : 0.00,           # Informe HMP Tabla A.5
         "davis_C"      : 0.57,           # Informe HMP Tabla A.5     
         "f_trac_max_kn": 123.2,          # Derivado: a_max × m_din_C2 = 1.0 m/s² × 123.150 kg — sensor peso TCU
         "f_freno_max_kn": 105.0,  
         "p_max_kw"     : 720.0,          # Manual: 4 × 180 kW a 60 km/h (mínimo garantizado fabricante)
-        "p_freno_max_kw": 365.0,         # Acto 1: potencia nominal de rueda XT-100
+        "p_freno_max_kw": 720.0,         # Igualada a potencia de tracción (freno eléctrico pleno)
         "aux_kw_cool"  : 45.28,         # TRA305: 11.32kW/equipo × 4 equipos (refrigeración)
         "aux_kw_heat"  : 58.08,         # TRA305: 14.52kW/equipo × 4 equipos (calefacción)
         "p_compresor_kw": 3.68,         # ALSTOM VFD Soft-Load
@@ -187,13 +188,14 @@ FLOTA = {
         "jerk_ms3"     : 1.3,           # Igualado a XT-100 (Alstom certificado)
         "v_freno_min"  : 3.81,  
         "eta_motor"    : 0.95,          # Eficiencia Certificada SEPSA/Alstom
+        "eta_reductor" : 0.975,         # Reductor helicoidal 1 etapa (ratio 4.85), estándar industria
         "davis_A"      : 1440.60,  
         "davis_B"      : 0.00,
         "davis_C"      : 0.39,           # Informe HMP Tabla A.5      
         "f_trac_max_kn": 116.5,          # Manual MC-EFER p.7-5
         "f_freno_max_kn": 110.0,  
         "p_max_kw"     : 1040.0,         # Manual MC-EFER: 260 kW × 4 motores (potencia en rueda)
-        "p_freno_max_kw": 300.0,          # Calibrado telemetría XT-31: regen=98.5 kWh real
+        "p_freno_max_kw": 1040.0,         # Igualada a potencia de tracción (freno eléctrico pleno)
         "aux_kw_cool"  : 25.0,          # Manual MC-EFER: 35kW térmico/coche × 2 / COP 2.8 = 25 kW eléctrico
         "aux_kw_heat"  : 59.2,          # Manual MC-EFER: (20+9.6)kW × 2 equipos sala
         "p_compresor_kw": 4.60,  
@@ -205,7 +207,7 @@ FLOTA = {
         "largo_m"      : 77.2,           # Largo real del tren (m)
         "v_max_kmh"    : 140,            # Velocidad máxima operación 140 km/h — especif. 2025
         "tara_t"       : 142.1,         # M1≈51.8t + R1≈38.5t + M2≈51.8t — especif. técnicas 2025
-        "m_iner_t"     : 11.2,  
+        "m_iner_t"     : 6.93,           # Estimado con factor masa rotacional XT-M (4.9% tara HMP)
         "coches"       : 3,  
         "cap_max"      : 597,            # AW2 (4 pax/m²) — especif. técnicas 2025
         "n_motores"    : 8,       
@@ -216,6 +218,7 @@ FLOTA = {
         "jerk_ms3"     : 0.75,           # Tasa de impacto ≤0.75 m/s³ — especif. técnicas 2025
         "v_freno_min"  : 0.833,          # Freno eléctrico desde 3 km/h = 0.833 m/s — especif. 2025
         "eta_motor"    : 0.93,      
+        "eta_reductor" : 0.975,         # Reductor helicoidal, estándar industria
         "davis_A"      : 2480.00,  
         "davis_B"      : 0.00,
         "davis_C"      : 0.4714,     
