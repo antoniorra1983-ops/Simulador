@@ -51,7 +51,11 @@ def calcular_seat_total(df_e, config, active_sers, distribuir_fn, flujo_fn):
         th = r.get('t_viaje_h', 0.0)
         km_o, km_d = r['km_orig'], r['km_dest']
         t_total_h += th
-        km_total += abs(km_d - km_o)
+        # km igual que el dashboard: usa 'tren_km' (incluye factor 2× para dobles)
+        if 'tren_km' in df_e.columns and pd.notna(r.get('tren_km')):
+            km_total += float(r['tren_km'])
+        else:
+            km_total += abs(km_d - km_o) * (2.0 if r.get('doble', False) else 1.0)
         for s_name, e_val in distribuir_fn(e_panto, th, km_o, km_d, active_sers).items():
             ser_accum[s_name] = ser_accum.get(s_name, 0.0) + e_val
 
