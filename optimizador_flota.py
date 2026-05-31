@@ -425,11 +425,13 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
         _agregar_intervalo(t_ini_v, t_fin_v, e_panto_total, km_o, km_d)
 
     # === Consumo PRE/POST en sus franjas temporales correctas ===
-    # 30 min antes del PRIMER viaje de cada tren físico (pre) y 10 min después del ÚLTIMO (post).
-    # El kwh_prepost está repartido entre los viajes de cada motriz; lo reconstruimos por tren.
+    # PRE/POST por BLOQUE de servicio. Si un tren tiene un gap > GAP_APAGADO_MIN entre
+    # dos viajes, se considera que se apaga: cada bloque de servicio tiene su propio
+    # pre-encendido (30 min antes de salir) y post (10 min después de llegar).
     import re as _re
     T_PRE_MIN = 30.0
     T_POST_MIN = 10.0
+    GAP_APAGADO_MIN = 120.0  # gap > 2h → el tren se apaga y se re-enciende
     tren_fisico = {}  # num → lista de idx
     for idx, row in df.iterrows():
         for n in _re.findall(r'\d+', str(row.get('motriz_num', ''))):
@@ -438,27 +440,41 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
     for motriz, idxs in tren_fisico.items():
         if not idxs:
             continue
-        sub = df.loc[idxs].sort_values('t_ini')
-        # kwh_prepost total de este tren = suma de las porciones asignadas a sus viajes
+        sub = df.loc[idxs].sort_values('t_ini').reset_index(drop=False)
         kwh_pp_tren = sub['kwh_prepost'].fillna(0.0).sum() if 'kwh_prepost' in sub.columns else 0.0
         if kwh_pp_tren <= 0:
             continue
-        # dividir entre pre y post proporcional a la duración (30 vs 10 min)
-        kwh_pre = kwh_pp_tren * (T_PRE_MIN / (T_PRE_MIN + T_POST_MIN))
-        kwh_post = kwh_pp_tren * (T_POST_MIN / (T_PRE_MIN + T_POST_MIN))
 
-        primer = sub.iloc[0]
-        ultimo = sub.iloc[-1]
-        # Pre: 30 min antes de salir el primer viaje, en el km de origen (terminal)
-        t_pre_ini = float(primer['t_ini']) - T_PRE_MIN
-        t_pre_fin = float(primer['t_ini'])
-        km_term_pre = primer['km_orig']
-        _agregar_intervalo(t_pre_ini, t_pre_fin, kwh_pre, km_term_pre, km_term_pre)
-        # Post: 10 min después de llegar el último viaje, en el km de destino (terminal)
-        t_post_ini = float(ultimo['t_fin'])
-        t_post_fin = float(ultimo['t_fin']) + T_POST_MIN
-        km_term_post = ultimo['km_dest']
-        _agregar_intervalo(t_post_ini, t_post_fin, kwh_post, km_term_post, km_term_post)
+        # Detectar bloques de servicio (separados por gaps > 2h)
+        bloques = []
+        bloque_actual = [0]
+        for i in range(len(sub) - 1):
+            t_fin_i = float(sub.iloc[i]['t_fin'])
+            t_ini_sig = float(sub.iloc[i + 1]['t_ini'])
+            if (t_ini_sig - t_fin_i) > GAP_APAGADO_MIN:
+                bloques.append(bloque_actual)
+                bloque_actual = [i + 1]
+            else:
+                bloque_actual.append(i + 1)
+        bloques.append(bloque_actual)
+
+        # El kwh_prepost del tren se reparte entre sus bloques (cada bloque = 1 ciclo pre+post)
+        n_bloques = len(bloques)
+        kwh_pp_por_bloque = kwh_pp_tren / n_bloques
+        kwh_pre = kwh_pp_por_bloque * (T_PRE_MIN / (T_PRE_MIN + T_POST_MIN))
+        kwh_post = kwh_pp_por_bloque * (T_POST_MIN / (T_PRE_MIN + T_POST_MIN))
+
+        for bloque in bloques:
+            primer = sub.iloc[bloque[0]]
+            ultimo = sub.iloc[bloque[-1]]
+            # Pre: 30 min antes de salir el primer viaje del bloque
+            t_pre_ini = float(primer['t_ini']) - T_PRE_MIN
+            t_pre_fin = float(primer['t_ini'])
+            _agregar_intervalo(t_pre_ini, t_pre_fin, kwh_pre, primer['km_orig'], primer['km_orig'])
+            # Post: 10 min después de llegar el último viaje del bloque
+            t_post_ini = float(ultimo['t_fin'])
+            t_post_fin = float(ultimo['t_fin']) + T_POST_MIN
+            _agregar_intervalo(t_post_ini, t_post_fin, kwh_post, ultimo['km_dest'], ultimo['km_dest'])
 
     # Construir filas: SEAT total y por SER (kWh y kW medio)
     filas = []
