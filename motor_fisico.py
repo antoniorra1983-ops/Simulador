@@ -1002,6 +1002,7 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
         kwh_por_viaje_pp = kwh_total_pp / max(1, len(df_e))
         for idx in df_e.index: aux_prepost_por_idx[idx] = kwh_por_viaje_pp
     
+    GAP_APAGADO_MIN_PP = 120.0  # gap > 2h → el tren se apaga y se re-enciende (ciclo pre/post extra)
     for motriz, idxs in motrices_viajes.items():
         if not idxs: continue
         tipo = df_e.loc[idxs[0], 'tipo_tren'] if idxs[0] in df_e.index else 'XT-100'
@@ -1009,7 +1010,23 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
         aux_nom = f_pp.get('aux_kw_heat', 67.0)
         aux_pre  = aux_nom * frac_base_pp + aux_nom * frac_hvac_pp * F_HVAC_PRE
         aux_post = aux_nom * frac_base_pp + aux_nom * frac_hvac_pp * F_HVAC_POST
-        kwh_motriz = aux_pre * T_PRE_H + aux_post * T_POST_H
+
+        # Detectar bloques de servicio separados por gaps > 2h: cada bloque = 1 ciclo pre+post.
+        # Un tren que opera mañana, descansa 6h (se apaga) y vuelve en la tarde cuenta 2 ciclos.
+        idxs_validos = [ix for ix in idxs if ix in df_e.index]
+        if 't_ini' in df_e.columns and 't_fin' in df_e.columns and idxs_validos:
+            orden = sorted(idxs_validos, key=lambda ix: df_e.loc[ix, 't_ini'])
+            n_bloques_pp = 1
+            for j in range(len(orden) - 1):
+                t_fin_j = df_e.loc[orden[j], 't_fin']
+                t_ini_sig = df_e.loc[orden[j + 1], 't_ini']
+                if pd.notna(t_fin_j) and pd.notna(t_ini_sig) and (t_ini_sig - t_fin_j) > GAP_APAGADO_MIN_PP:
+                    n_bloques_pp += 1
+        else:
+            n_bloques_pp = 1
+
+        # cada bloque tiene su pre (30 min) y post (10 min)
+        kwh_motriz = (aux_pre * T_PRE_H + aux_post * T_POST_H) * n_bloques_pp
         kwh_por_viaje = kwh_motriz / len(idxs)
         for idx in idxs: aux_prepost_por_idx[idx] = aux_prepost_por_idx.get(idx, 0.0) + kwh_por_viaje
 
