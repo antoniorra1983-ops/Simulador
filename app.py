@@ -408,7 +408,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         dict_regen_sint = {}
         
     try:
-        df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=_prevenciones)
+        df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=_prevenciones, aplicar_anden=True)
     except TypeError:
         df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan)
         
@@ -986,6 +986,33 @@ def main():
                             st.caption("✅ Consumo calculado como SEAT total (incluye pérdidas de rectificador y AC), "
                                        "idéntico al del Planificador, con la misma carga de pasajeros y prevenciones. "
                                        "El IDE usa el kilometraje Tren-km (formaciones dobles cuentan 2×).")
+
+                        # Capacidad de terminales (restricción operativa)
+                        st.divider()
+                        st.markdown("##### 🚉 Ocupación de Terminales")
+                        cap_term = resumen.get('cap_terminales', {})
+                        if cap_term:
+                            tcols = st.columns(len(cap_term))
+                            for i, (nombre, v) in enumerate(cap_term.items()):
+                                with tcols[i]:
+                                    excede = v['excede']
+                                    color = "#C62828" if excede else "#2E7D32"
+                                    icono = "❌" if excede else "✅"
+                                    h = int(v['pico_min']//60); m = int(v['pico_min']%60)
+                                    st.markdown(
+                                        f"<div style='background-color:#f9f9f9; border-radius:8px; padding:12px; "
+                                        f"text-align:center; border:1px solid #eee;'>"
+                                        f"<div style='font-size:14px; font-weight:bold; color:#333;'>{nombre}</div>"
+                                        f"<div style='font-size:22px; font-weight:bold; color:{color}; margin:6px 0;'>"
+                                        f"{icono} {v['max_ocup']} / {v['capacidad']}</div>"
+                                        f"<div style='font-size:11px; color:#666;'>Pico: {h:02d}:{m:02d}</div>"
+                                        f"</div>", unsafe_allow_html=True)
+                            if resumen.get('excede_terminales'):
+                                st.error("⚠️ La malla actual EXCEDE la capacidad de uno o más terminales. "
+                                         "Puerto: máx 4 · El Belloto: máx 16 · Limache: máx 16 trenes. "
+                                         "Revisa los horarios para no superar el estacionamiento disponible.")
+                            else:
+                                st.success("✅ La malla respeta la capacidad de todos los terminales.")
 
                         st.divider()
 
