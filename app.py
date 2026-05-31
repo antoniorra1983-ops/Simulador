@@ -559,7 +559,7 @@ def main():
         st.header("📂 Archivos Base")
         with st.expander("🔗 Cargar desde GitHub (Batch)", expanded=False):
             urls_txt = st.text_area("Lista de URLs", placeholder="https://github.com/...", height=100)
-            gh_via = st.radio("Tipo manual", ["Detección Automática", "THDR V1", "THDR V2", "Pasajeros V1", "Pasajeros V2", "Prevenciones"], horizontal=False, index=0)
+            gh_via = st.radio("Tipo manual", ["Detección Automática", "Planilla Maestra", "Pasajeros V1", "Pasajeros V2", "Prevenciones"], horizontal=False, index=0)
             if st.button("⬇️ Descargar Todo", use_container_width=True): 
                 urls = [u.strip() for u in urls_txt.split('\n') if u.strip()]
                 if urls:
@@ -569,21 +569,21 @@ def main():
                             nm, data_or_err = leer_github(url)
                         if nm and isinstance(data_or_err, bytes):
                             lnm = nm.lower()
-                            if gh_via == "THDR V1": k = "gh_blobs_v1"
-                            elif gh_via == "THDR V2": k = "gh_blobs_v2"
+                            if gh_via == "Planilla Maestra": k = "gh_blobs_planilla"
                             elif gh_via == "Pasajeros V1": k = "gh_blobs_px1"
                             elif gh_via == "Pasajeros V2": k = "gh_blobs_px2"
                             elif gh_via == "Prevenciones": k = "gh_blobs_prev"
                             else:
                                 if "prevencion" in lnm or "tsr" in lnm: k = "gh_blobs_prev"
+                                elif "planilla" in lnm or "maestra" in lnm: k = "gh_blobs_planilla"
                                 elif "v1" in lnm or "via1" in lnm: 
                                     if "pax" in lnm or "pasajero" in lnm or "export" in lnm: k = "gh_blobs_px1"
-                                    else: k = "gh_blobs_v1"
+                                    else: k = "gh_blobs_planilla"
                                 elif "v2" in lnm or "via2" in lnm:
                                     if "pax" in lnm or "pasajero" in lnm or "export" in lnm: k = "gh_blobs_px2"
-                                    else: k = "gh_blobs_v2"
+                                    else: k = "gh_blobs_planilla"
                                 elif "pax" in lnm or "pasajero" in lnm or "export" in lnm: k = "gh_blobs_px1"
-                                else: k = "gh_blobs_v1" 
+                                else: k = "gh_blobs_planilla" 
                             if k not in st.session_state: st.session_state[k] = []
                             st.session_state[k].append((nm, data_or_err))
                             success_count += 1
@@ -592,7 +592,7 @@ def main():
                         st.rerun()
 
             st.divider()
-            for lbl, key in [("V1","gh_blobs_v1"),("V2","gh_blobs_v2"),("Pax V1","gh_blobs_px1"),("Pax V2","gh_blobs_px2"),("Prevenciones","gh_blobs_prev")]:
+            for lbl, key in [("Planilla","gh_blobs_planilla"),("Pax V1","gh_blobs_px1"),("Pax V2","gh_blobs_px2"),("Prevenciones","gh_blobs_prev")]:
                 blobs_gh = st.session_state.get(key, [])
                 if blobs_gh:
                     st.caption(f"GitHub {lbl}: {len(blobs_gh)} archivo(s)")
@@ -605,14 +605,9 @@ def main():
         f_px2 = st.file_uploader("Pasajeros Vía 2", accept_multiple_files=True, key="px2")
         tipo_dia_plan = st.selectbox("Tipo de Día para Demanda", ["Laboral", "Sábado", "Domingo/Festivo"], key="td_plan")
         f_prev = st.file_uploader("🚧 Prevenciones de Vía (.csv, .xlsx)", accept_multiple_files=True, key="prev")
-        # THDR V1/V2 retirados del sidebar (el mapa histórico ya no se usa)
-        f_v1 = None
-        f_v2 = None
         
         st.divider()
         st.subheader("⚙️ Parámetros Físicos de Red")
-        
-        st.info("💡 **Gobernador Operativo (Mapa Histórico)**\n\nEn la pestaña del *Gemelo Digital*, el % de Tracción se bloquea automáticamente al 75% o 50% según la fecha.\n\nEn el *Planificador*, podrás usar tu perilla libremente.")
         
         use_rm      = st.checkbox("🚦 Velocidades RM (Riel Mojado)", value=True, on_change=reset_plan_state)
         use_pend    = st.toggle("⛰️ Pendientes Físicas", value=True, on_change=reset_plan_state)
@@ -650,8 +645,9 @@ def main():
     def _all_blobs_internal(f_uploader, gh_key): 
         return tuple(leer(f_uploader) + st.session_state.get(gh_key, []))
 
-    b1 = _all_blobs_internal(f_v1, "gh_blobs_v1")
-    b2 = _all_blobs_internal(f_v2, "gh_blobs_v2")
+    # THDR ya no se usa (mapa histórico retirado). Solo se procesan pasajeros y prevenciones.
+    b1 = ()
+    b2 = ()
     bx1 = _all_blobs_internal(f_px1, "gh_blobs_px1")
     bx2 = _all_blobs_internal(f_px2, "gh_blobs_px2")
     b_prev = _all_blobs_internal(f_prev, "gh_blobs_prev")
