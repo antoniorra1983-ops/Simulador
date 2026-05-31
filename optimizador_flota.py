@@ -386,9 +386,10 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
         else:
             df['t_fin'] = df['t_ini'] + 55.0
 
-    # Rango de franjas
-    t_min = float(df['t_ini'].min())
-    t_max = float(df['t_fin'].max())
+    # Rango de franjas (extendido: 30 min antes del primer viaje para el pre-encendido,
+    # 10 min después del último para el post)
+    t_min = float(df['t_ini'].min()) - 30.0
+    t_max = float(df['t_fin'].max()) + 10.0
     inicio = int((t_min // paso_min) * paso_min)
     fin = int(((t_max // paso_min) + 1) * paso_min)
     franjas = list(range(inicio, fin, int(paso_min)))
@@ -397,26 +398,67 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
     # repartiendo cada viaje según el solape temporal con la franja.
     ser_por_franja = {f: {n: 0.0 for n in ser_names} for f in franjas}
 
+    # Helper: agregar energía de pantógrafo a las franjas de un intervalo [t_a, t_b]
+    # distribuida uniformemente, usando un punto km de referencia para repartir por SER.
+    def _agregar_intervalo(t_a, t_b, e_total, km_ref_o, km_ref_d):
+        dur = max(0.001, t_b - t_a)
+        for f in franjas:
+            f_ini, f_fin = f, f + paso_min
+            solape = max(0.0, min(t_b, f_fin) - max(t_a, f_ini))
+            if solape <= 0:
+                continue
+            frac = solape / dur
+            e_frac = e_total * frac
+            th_frac = (dur / 60.0) * frac
+            for s_name, e_val in distribuir_fn(e_frac, th_frac, km_ref_o, km_ref_d, active_sers).items():
+                ser_por_franja[f][s_name] = ser_por_franja[f].get(s_name, 0.0) + max(0.0, e_val)
+
     for _, r in df.iterrows():
         t_ini_v = float(r['t_ini'])
         t_fin_v = float(r['t_fin'])
         dur_v = max(0.001, t_fin_v - t_ini_v)
-        e_panto_total = r.get('kwh_viaje_trac', 0) + r.get('kwh_viaje_aux', 0) - r.get('kwh_viaje_regen', 0)
-        th_total = r.get('t_viaje_h', dur_v / 60.0)
+        # Consumo del VIAJE sin el prepost (que se ubica en sus franjas propias aparte)
+        prepost = r.get('kwh_prepost', 0.0) or 0.0
+        aux_viaje = (r.get('kwh_viaje_aux', 0) or 0) - prepost
+        e_panto_total = r.get('kwh_viaje_trac', 0) + aux_viaje - r.get('kwh_viaje_regen', 0)
         km_o, km_d = r['km_orig'], r['km_dest']
+        _agregar_intervalo(t_ini_v, t_fin_v, e_panto_total, km_o, km_d)
 
-        # repartir el viaje entre las franjas que cubre
-        for f in franjas:
-            f_ini, f_fin = f, f + paso_min
-            solape = max(0.0, min(t_fin_v, f_fin) - max(t_ini_v, f_ini))
-            if solape <= 0:
-                continue
-            frac = solape / dur_v
-            e_frac = e_panto_total * frac
-            th_frac = th_total * frac
-            # distribuir esa fracción de energía entre las SER según el tramo recorrido
-            for s_name, e_val in distribuir_fn(e_frac, th_frac, km_o, km_d, active_sers).items():
-                ser_por_franja[f][s_name] = ser_por_franja[f].get(s_name, 0.0) + max(0.0, e_val)
+    # === Consumo PRE/POST en sus franjas temporales correctas ===
+    # 30 min antes del PRIMER viaje de cada tren físico (pre) y 10 min después del ÚLTIMO (post).
+    # El kwh_prepost está repartido entre los viajes de cada motriz; lo reconstruimos por tren.
+    import re as _re
+    T_PRE_MIN = 30.0
+    T_POST_MIN = 10.0
+    tren_fisico = {}  # num → lista de idx
+    for idx, row in df.iterrows():
+        for n in _re.findall(r'\d+', str(row.get('motriz_num', ''))):
+            tren_fisico.setdefault(n, []).append(idx)
+
+    for motriz, idxs in tren_fisico.items():
+        if not idxs:
+            continue
+        sub = df.loc[idxs].sort_values('t_ini')
+        # kwh_prepost total de este tren = suma de las porciones asignadas a sus viajes
+        kwh_pp_tren = sub['kwh_prepost'].fillna(0.0).sum() if 'kwh_prepost' in sub.columns else 0.0
+        if kwh_pp_tren <= 0:
+            continue
+        # dividir entre pre y post proporcional a la duración (30 vs 10 min)
+        kwh_pre = kwh_pp_tren * (T_PRE_MIN / (T_PRE_MIN + T_POST_MIN))
+        kwh_post = kwh_pp_tren * (T_POST_MIN / (T_PRE_MIN + T_POST_MIN))
+
+        primer = sub.iloc[0]
+        ultimo = sub.iloc[-1]
+        # Pre: 30 min antes de salir el primer viaje, en el km de origen (terminal)
+        t_pre_ini = float(primer['t_ini']) - T_PRE_MIN
+        t_pre_fin = float(primer['t_ini'])
+        km_term_pre = primer['km_orig']
+        _agregar_intervalo(t_pre_ini, t_pre_fin, kwh_pre, km_term_pre, km_term_pre)
+        # Post: 10 min después de llegar el último viaje, en el km de destino (terminal)
+        t_post_ini = float(ultimo['t_fin'])
+        t_post_fin = float(ultimo['t_fin']) + T_POST_MIN
+        km_term_post = ultimo['km_dest']
+        _agregar_intervalo(t_post_ini, t_post_fin, kwh_post, km_term_post, km_term_post)
 
     # Construir filas: SEAT total y por SER (kWh y kW medio)
     filas = []
