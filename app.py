@@ -95,10 +95,11 @@ def get_config_hash():
         return "no_config"
 
 try:
-    from optimizador_flota import optimizar_asignacion_flota, generar_planillas_xlsx
+    from optimizador_flota import optimizar_asignacion_flota, generar_planillas_xlsx, generar_tabla_seat_15min
 except ImportError:
     optimizar_asignacion_flota = None
     generar_planillas_xlsx = None
+    generar_tabla_seat_15min = None
 
 # =============================================================================
 # 1. FUNCIONES DE CARGA Y AGRUPACIÓN (BLINDADAS)
@@ -913,6 +914,27 @@ def main():
                     render_gemelo_digital(df_sint_final, df_sint_e, active_sers, f"Simulación: {nombre_perfil}", pct_trac_plan, use_rm, use_pend, estacion_anio_plan, "plan", gap_vias, pax_dia_total=int(df_sint_final['pax_abordo'].sum()))
                     render_dashboard_energia_v112(df_sint_e, active_sers, "Planificador", st.session_state.get('sl_ui_plan', 480.0))
                     render_tablas_thdr_planificador(df_sint_final, pct_trac_plan, estacion_anio_plan, use_rm, prevenciones_list)
+
+                    # Descarga de tabla SEAT cada 15 min
+                    if generar_tabla_seat_15min is not None:
+                        st.divider()
+                        st.markdown("##### 📊 Consumo SEAT cada 15 minutos")
+                        try:
+                            import tempfile, os
+                            ruta_15 = os.path.join(tempfile.gettempdir(), "SEAT_15min_Planificador.xlsx")
+                            _, df_tabla_15 = generar_tabla_seat_15min(df_sint_e, config, active_sers, distribuir_energia_sers, calcular_flujo_ac_nodo, ruta_15)
+                            st.dataframe(df_tabla_15, use_container_width=True, height=300)
+                            with open(ruta_15, 'rb') as f:
+                                st.download_button(
+                                    "⬇️ Descargar tabla SEAT 15 min (xlsx)",
+                                    data=f.read(),
+                                    file_name="SEAT_15min_Planificador.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    use_container_width=True)
+                            st.caption("Consumo SEAT por franja de 15 min: total y por subestación, en kWh y kW medio. "
+                                       "Incluye pérdidas de rectificador y AC.")
+                        except Exception as e:
+                            st.warning(f"No se pudo generar la tabla de 15 min: {e}")
                 except Exception as e:
                     st.error(f"Fallo al graficar UI del Planificador: {e}")
 
@@ -1080,6 +1102,26 @@ def main():
                                            "Las motrices se asignan según el tipo óptimo (1-27 XT-100, 28-35 XT-M, 410-414 SFE).")
                             except Exception as e:
                                 st.warning(f"No se pudieron generar las planillas: {e}")
+
+                        # Tabla SEAT cada 15 min (de la malla base)
+                        if generar_tabla_seat_15min is not None and df_base_consumo is not None:
+                            st.divider()
+                            st.markdown("##### 📊 Consumo SEAT cada 15 minutos")
+                            try:
+                                import tempfile, os
+                                ruta_15o = os.path.join(tempfile.gettempdir(), "SEAT_15min_Optimizador.xlsx")
+                                _, df_t15o = generar_tabla_seat_15min(df_base_consumo, config, active_sers, distribuir_energia_sers, calcular_flujo_ac_nodo, ruta_15o)
+                                st.dataframe(df_t15o, use_container_width=True, height=300)
+                                with open(ruta_15o, 'rb') as f:
+                                    st.download_button(
+                                        "⬇️ Descargar tabla SEAT 15 min (xlsx)",
+                                        data=f.read(),
+                                        file_name="SEAT_15min_Optimizador.xlsx",
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        use_container_width=True)
+                                st.caption("Consumo SEAT por franja de 15 min: total y por subestación, en kWh y kW medio.")
+                            except Exception as e:
+                                st.warning(f"No se pudo generar la tabla de 15 min: {e}")
 
                     except Exception as e:
                         st.error(f"Error en la optimización: {e}")
