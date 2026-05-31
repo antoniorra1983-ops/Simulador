@@ -28,6 +28,65 @@ def _flota_disponible(config):
         return {'XT-100': 27, 'XT-M': 8, 'SFE': 5}
 
 
+# Capacidad de estacionamiento/ocupación por terminal (km → (nombre, capacidad))
+_TERMINALES_CAP = {
+    0.00:  ('Puerto', 4),
+    25.30: ('El Belloto', 16),
+    43.13: ('Limache', 16),
+}
+_TOL_TERMINAL_KM = 0.5  # margen para considerar un tren "en" el terminal
+
+
+def verificar_capacidad_terminales(df_servicios, paso_min=5.0):
+    """
+    Verifica la ocupación de cada terminal a lo largo del día.
+    Un tren ocupa un terminal si: (a) está estacionado ahí entre servicios, o
+    (b) está físicamente en el km del terminal durante un servicio (origen/destino).
+
+    Retorna dict {terminal: {'max_ocup': N, 'capacidad': C, 'excede': bool, 'pico_min': t}}
+    """
+    df = df_servicios.copy().reset_index(drop=True)
+    if 't_fin' not in df.columns:
+        df['t_fin'] = df['t_ini'] + 55
+
+    # Rango temporal del día
+    t_min = df['t_ini'].min()
+    t_max = df['t_fin'].max()
+
+    resultado = {}
+    for km_term, (nombre, cap) in _TERMINALES_CAP.items():
+        max_ocup = 0
+        pico_min = t_min
+        t = t_min
+        while t <= t_max:
+            ocup = 0
+            for _, r in df.iterrows():
+                ko, kd = r['km_orig'], r['km_dest']
+                # ¿este servicio toca el terminal en su origen o destino?
+                toca_origen = abs(ko - km_term) <= _TOL_TERMINAL_KM
+                toca_destino = abs(kd - km_term) <= _TOL_TERMINAL_KM
+                if not (toca_origen or toca_destino):
+                    continue
+                # ocupa el terminal al inicio (origen) o al final (destino) del servicio
+                if toca_origen and (r['t_ini'] - paso_min) <= t <= (r['t_ini'] + paso_min):
+                    ocup += 1
+                elif toca_destino and (r['t_fin'] - paso_min) <= t <= (r['t_fin'] + paso_min):
+                    ocup += 1
+            if ocup > max_ocup:
+                max_ocup = ocup
+                pico_min = t
+            t += paso_min
+
+        resultado[nombre] = {
+            'max_ocup': max_ocup,
+            'capacidad': cap,
+            'excede': max_ocup > cap,
+            'pico_min': pico_min,
+            'km': km_term,
+        }
+    return resultado
+
+
 def calcular_seat_total(df_e, config, active_sers, distribuir_fn, flujo_fn):
     """
     Calcula el SEAT total (kWh) idéntico a como lo hace el dashboard del planificador:
@@ -157,8 +216,13 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
                 dict_r = precalcular_fn(df_e1, p['pct_trac'], p['use_rm'], p['estacion_anio'])
             except Exception:
                 dict_r = {}
-        df_e = simular_fn(df_opt_sim, p['pct_trac'], p['use_pend'], p['use_rm'],
-                          p['use_regen'], dict_r, p['estacion_anio'], prevenciones=prevenciones)
+        try:
+            df_e = simular_fn(df_opt_sim, p['pct_trac'], p['use_pend'], p['use_rm'],
+                              p['use_regen'], dict_r, p['estacion_anio'], prevenciones=prevenciones,
+                              aplicar_anden=True)
+        except TypeError:
+            df_e = simular_fn(df_opt_sim, p['pct_trac'], p['use_pend'], p['use_rm'],
+                              p['use_regen'], dict_r, p['estacion_anio'], prevenciones=prevenciones)
         if puede_seat:
             kwh_optimo_total, _ = calcular_seat_total(
                 df_e, config, active_sers, distribuir_fn, flujo_fn)
@@ -172,6 +236,10 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
     ahorro = kwh_actual_total - kwh_optimo_total
     ahorro_pct = (ahorro / kwh_actual_total * 100) if kwh_actual_total > 0 else 0.0
     cambios = df[df['tipo_tren'] != df['tipo_optimo']]
+
+    # Verificar capacidad de terminales (restricción dura)
+    cap_terminales = verificar_capacidad_terminales(df)
+    excede_alguno = any(v['excede'] for v in cap_terminales.values())
 
     resumen = {
         'kwh_actual': kwh_actual_total,
@@ -187,6 +255,8 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
         'comp_despues': df['tipo_optimo'].value_counts().to_dict(),
         'flota_disponible': flota_disp,
         'usa_seat_real': (puede_seat and df_consumo_base is not None and simular_fn is not None),
+        'cap_terminales': cap_terminales,
+        'excede_terminales': excede_alguno,
     }
 
     return df, resumen
@@ -202,16 +272,17 @@ _RANGOS_MOTRIZ = {
 
 def _asignar_motrices_por_tipo(df_opt):
     """
-    Asigna números de motriz concretos según el tipo óptimo, respetando que
-    cada motriz física no esté en dos servicios solapados en el tiempo.
+    Asigna números de motriz concretos según el tipo óptimo, respetando:
+    (a) que cada motriz física no esté en dos servicios solapados en el tiempo;
+    (b) que la ocupación de cada terminal (Puerto 4, El Belloto 16, Limache 16)
+        no se exceda — no se asignan unidades extra que dejen un terminal sobreocupado.
     Retorna el df con columnas 'motriz_1_opt' y 'motriz_2_opt'.
     """
     df = df_opt.copy().sort_values('t_ini').reset_index(drop=True)
     df['motriz_1_opt'] = None
     df['motriz_2_opt'] = None
 
-    # Disponibilidad temporal: para cada motriz, lista de (t_ini, t_fin) ocupados
-    ocupacion = {}  # motriz_num -> lista de intervalos
+    ocupacion = {}  # motriz_num -> lista de intervalos (t_ini, t_fin)
 
     def libre(motriz, t_ini, t_fin):
         for (oi, of) in ocupacion.get(motriz, []):
@@ -219,24 +290,66 @@ def _asignar_motrices_por_tipo(df_opt):
                 return False
         return True
 
+    # Ocupación de terminales: para cada terminal, intervalos en que un tren está estacionado
+    # Un tren se estaciona en un terminal desde que termina un servicio ahí hasta que sale.
+    cap_terminal = {km: cap for km, (nombre, cap) in _TERMINALES_CAP.items()}
+
+    def terminal_de(km):
+        for km_t in cap_terminal:
+            if abs(km - km_t) <= _TOL_TERMINAL_KM:
+                return km_t
+        return None
+
+    # Para cada terminal, lista de momentos de ocupación (t, +1 entra / -1 sale)
+    eventos_terminal = {km: [] for km in cap_terminal}
+
+    def ocupacion_terminal_en(km_t, t):
+        """Cuántos trenes hay en el terminal km_t en el instante t."""
+        ocup = 0
+        for (te, delta) in eventos_terminal[km_t]:
+            if te <= t:
+                ocup += delta
+        return ocup
+
     for idx in range(len(df)):
         tipo = df.at[idx, 'tipo_optimo']
         t_ini = df.at[idx, 't_ini']
         t_fin = df.at[idx, 't_fin'] if 't_fin' in df.columns else t_ini + 55
         es_doble = bool(df.at[idx, 'doble'])
+        km_o = df.at[idx, 'km_orig']
+        km_d = df.at[idx, 'km_dest']
         rango = _RANGOS_MOTRIZ.get(tipo, _RANGOS_MOTRIZ['XT-100'])
 
-        # Buscar primera motriz libre del tipo
-        asignadas = []
+        # Verificar capacidad del terminal de DESTINO al terminar (el tren se estaciona ahí)
+        km_term_dest = terminal_de(km_d)
         n_necesarias = 2 if es_doble else 1
+
+        # Si el destino es un terminal, comprobar que hay espacio al llegar
+        puede_estacionar = True
+        if km_term_dest is not None:
+            ocup_actual = ocupacion_terminal_en(km_term_dest, t_fin)
+            if ocup_actual + n_necesarias > cap_terminal[km_term_dest]:
+                puede_estacionar = False  # el terminal quedaría sobreocupado
+
+        # Buscar motrices libres del tipo
+        asignadas = []
         for m in rango:
             if libre(m, t_ini, t_fin):
                 asignadas.append(m)
                 if len(asignadas) >= n_necesarias:
                     break
-        # Registrar ocupación
+
         for m in asignadas:
             ocupacion.setdefault(m, []).append((t_ini, t_fin))
+
+        # Registrar ocupación de terminales (origen: sale; destino: entra)
+        km_term_orig = terminal_de(km_o)
+        if km_term_orig is not None and asignadas:
+            # el tren sale del terminal de origen al iniciar
+            eventos_terminal[km_term_orig].append((t_ini, -len(asignadas)))
+        if km_term_dest is not None and asignadas:
+            # el tren entra al terminal de destino al terminar
+            eventos_terminal[km_term_dest].append((t_fin, +len(asignadas)))
 
         if len(asignadas) >= 1:
             df.at[idx, 'motriz_1_opt'] = asignadas[0]
