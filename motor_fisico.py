@@ -427,7 +427,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             f_pend = 0.0
             if use_pend:
                 pend_permil = _PEND_ARRAY_V1[idx_km] if via_op == 1 else _PEND_ARRAY_V2[idx_km]
-                f_pend = masa_dinamica_kg * 9.81 * (pend_permil / 1000.0)
+                f_pend = masa_estatica_kg * 9.81 * (pend_permil / 1000.0)
                 
             f_curva = _CURVA_ARRAY[idx_km] * (masa_estatica_kg / 1000.0) * 9.81
             f_res_total = f_davis + f_pend + f_curva
