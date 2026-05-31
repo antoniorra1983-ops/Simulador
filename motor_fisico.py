@@ -801,7 +801,97 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
 
     return regen_util_per_trip
 
-def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use_regen, dict_regen, estacion_anio="primavera", prevenciones=None):
+# Configuracion de andenes por terminal: km -> (nombre, n_vias_bloqueo)
+# Puerto (km 0): 2 vias de anden. Un tren entrante espera si las 2 estan ocupadas.
+# Limache (km 43.13): V1 y V2 son anden comercial; V3 tiene espacio extra y V4 es cochera,
+#   asi que el bloqueo efectivo ocurre cuando V1 y V2 estan ocupadas (2 vias).
+# Regla: si las vias de bloqueo estan ocupadas, el tren entrante reduce a 20 km/h en
+# los ultimos 250 m y espera hasta que se libere una via (otro tren sale).
+_ANDENES_TERMINAL = {
+    0.00:  ('Puerto', 2),
+    43.13: ('Limache', 2),
+}
+_APROX_TERMINAL_KM = 0.250
+_V_APROX_TERMINAL_KMH = 20.0
+
+
+def resolver_conflictos_anden(df_e, tol_km=0.5):
+    """
+    Ajusta tiempos de llegada cuando el anden terminal esta ocupado.
+    Puerto 2 vias, Limache 3 vias. Un tren ocupa una via desde que llega hasta que sale.
+    Si al llegar todas las vias estan ocupadas, espera + aproximacion lenta (250m a 20km/h).
+    Devuelve df_e con 't_fin_ajustado' y 'espera_anden_min'.
+    """
+    df = df_e.copy()
+    if df.empty:
+        return df
+
+    if 't_fin' not in df.columns:
+        if 't_viaje_h' in df.columns:
+            df['t_fin'] = df['t_ini'] + df['t_viaje_h'] * 60.0
+        else:
+            df['t_fin'] = df['t_ini'] + 55.0
+
+    df = df.sort_values('t_fin').reset_index(drop=False)
+    df['espera_anden_min'] = 0.0
+    df['t_fin_ajustado'] = df['t_fin']
+
+    t_aprox_lento = (_APROX_TERMINAL_KM / _V_APROX_TERMINAL_KMH) * 60.0
+
+    def terminal_de(km):
+        for km_t, (nombre, n_vias) in _ANDENES_TERMINAL.items():
+            if abs(km - km_t) <= tol_km:
+                return km_t, n_vias
+        return None, 0
+
+    salidas_por_terminal = {km_t: [] for km_t in _ANDENES_TERMINAL}
+    for _, r in df.iterrows():
+        km_t, _n = terminal_de(r['km_orig'])
+        if km_t is not None:
+            salidas_por_terminal[km_t].append(r['t_ini'])
+    for km_t in salidas_por_terminal:
+        salidas_por_terminal[km_t].sort()
+
+    # Arranque: las vias empiezan OCUPADAS por los trenes que pernoctan en el terminal.
+    # Cada via queda libre cuando sale el tren que la ocupaba (primeras salidas del dia).
+    vias_libres_en = {}
+    for km_t, (nm, n) in _ANDENES_TERMINAL.items():
+        primeras_salidas = salidas_por_terminal.get(km_t, [])[:n]
+        # rellenar con 0.0 si hay menos salidas que vias
+        ocup_inicial = sorted(primeras_salidas) + [0.0] * (n - len(primeras_salidas))
+        vias_libres_en[km_t] = ocup_inicial[:n]
+
+    for i in range(len(df)):
+        km_dest = df.at[i, 'km_dest']
+        km_t, n_vias = terminal_de(km_dest)
+        if km_t is None:
+            continue
+
+        t_llegada = df.at[i, 't_fin']
+        salidas = salidas_por_terminal.get(km_t, [])
+        t_salida = next((s for s in salidas if s >= t_llegada - 1.0), t_llegada + 30.0)
+
+        vias = vias_libres_en[km_t]
+        t_via_libre = min(vias)
+        idx_via = vias.index(t_via_libre)
+
+        if t_via_libre <= t_llegada:
+            espera = 0.0
+            t_llegada_real = t_llegada
+        else:
+            espera = (t_via_libre - t_llegada) + t_aprox_lento
+            t_llegada_real = t_llegada + espera
+
+        df.at[i, 'espera_anden_min'] = espera
+        df.at[i, 't_fin_ajustado'] = t_llegada_real
+        vias[idx_via] = max(t_salida, t_llegada_real)
+
+    df = df.set_index('index').sort_index()
+    df.index.name = None
+    return df
+
+
+def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use_regen, dict_regen, estacion_anio="primavera", prevenciones=None, aplicar_anden=False):
     df_e = df_dia.copy()
     if df_e.empty: return df_e
     
@@ -851,6 +941,20 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     # precalcular_red_electrica_v111 los usará si están disponibles
     df_e['datos_sim'] = df_e.index.map(lambda idx: _tiempos_sim.get(idx))
     df_e['t_fin'] = df_e['t_ini'] + df_e['t_viaje_h'] * 60.0
+
+    # Restricción de andén ocupado en terminales (Puerto, Limache).
+    # Si al llegar las vías de andén están ocupadas, el tren espera (250m a 20 km/h
+    # + espera hasta que se libere una vía). La espera se suma al tiempo de viaje.
+    if aplicar_anden:
+        try:
+            df_anden = resolver_conflictos_anden(df_e)
+            df_e['espera_anden_min'] = df_anden['espera_anden_min']
+            df_e['t_fin'] = df_anden['t_fin_ajustado']
+            # sumar la espera al tiempo de viaje (horas) para que el SCADA y el IDE lo reflejen
+            df_e['t_viaje_h'] = df_e['t_viaje_h'] + df_e['espera_anden_min'] / 60.0
+        except Exception:
+            df_e['espera_anden_min'] = 0.0
+
     df_e['tren_km']    = df_e.apply(_calc_tren_km_real_motor, axis=1)
     # dist_via_km: distancia de vía recorrida (sin factor doble) — para IDE
     df_e['dist_via_km'] = df_e.apply(
