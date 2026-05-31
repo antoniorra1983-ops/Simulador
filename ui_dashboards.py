@@ -809,6 +809,61 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             ide_svc_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333; text-align:center; margin-bottom:10px;'>Flota {f_type}</div>{filas_svc}</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
+        # === Consumo por SER (subestación) por tipo de tren ===
+        try:
+            eta_ser_cfg = ETA_SER_RECTIFICADOR
+        except NameError:
+            eta_ser_cfg = 0.96
+        ser_names = [s[1] for s in active_sers]
+
+        st.markdown("##### 🔌 Consumo por Subestación (SER) y Tipo de Tren")
+        ser_tren_cols = st.columns(3)
+        for i, f_type in enumerate(['XT-100', 'XT-M', 'SFE']):
+            subset = df_acum[df_acum['tipo_tren'] == f_type] if not df_acum.empty else pd.DataFrame()
+            filas = ""
+            if not subset.empty:
+                ser_acc_tipo = {n: 0.0 for n in ser_names}
+                for _, r in subset.iterrows():
+                    e_p = r['kwh_viaje_trac'] + r['kwh_viaje_aux'] - r['kwh_viaje_regen']
+                    for s_name, e_val in distribuir_energia_sers(e_p, r['t_viaje_h'], r['km_orig'], r['km_dest'], active_sers).items():
+                        ser_acc_tipo[s_name] = ser_acc_tipo.get(s_name, 0.0) + max(0.0, e_val)
+                total_tipo = sum(ser_acc_tipo.values()) / eta_ser_cfg
+                for s_name in ser_names:
+                    e_ser_44 = ser_acc_tipo[s_name] / eta_ser_cfg
+                    filas += f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:13px; color:#555;'>{s_name}</span><span style='font-size:13px; font-weight:bold; color:#1565C0;'>{e_ser_44:,.0f} kWh</span></div>"
+                filas += f"<div style='display:flex; justify-content:space-between; padding:5px 0; margin-top:4px; border-top:2px solid #1565C0;'><span style='font-size:13px; font-weight:bold; color:#333;'>Total</span><span style='font-size:13px; font-weight:bold; color:#1565C0;'>{total_tipo:,.0f} kWh</span></div>"
+            if not filas:
+                filas = "<div style='font-size:12px; color:#999; padding:8px 0;'>Sin viajes</div>"
+            ser_tren_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333; text-align:center; margin-bottom:10px;'>Flota {f_type}</div>{filas}</div>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # === Consumo SEAT por tipo de tren y servicio ===
+        st.markdown("##### ⚡ Consumo SEAT por Tipo de Tren y Servicio")
+        seat_svc_cols = st.columns(3)
+        for i, f_type in enumerate(['XT-100', 'XT-M', 'SFE']):
+            subset = df_acum[df_acum['tipo_tren'] == f_type] if not df_acum.empty else pd.DataFrame()
+            filas = ""
+            if not subset.empty:
+                for svc in sorted(subset['svc_type'].unique()):
+                    sub_svc = subset[subset['svc_type'] == svc]
+                    # SEAT del subconjunto: distribuir por SER, sumar pérdidas AC
+                    ser_acc_svc = {n: 0.0 for n in ser_names}
+                    t_total_svc = sub_svc['t_viaje_h'].sum()
+                    for _, r in sub_svc.iterrows():
+                        e_p = r['kwh_viaje_trac'] + r['kwh_viaje_aux'] - r['kwh_viaje_regen']
+                        for s_name, e_val in distribuir_energia_sers(e_p, r['t_viaje_h'], r['km_orig'], r['km_dest'], active_sers).items():
+                            ser_acc_svc[s_name] = ser_acc_svc.get(s_name, 0.0) + max(0.0, e_val)
+                    total_ser_svc = sum(ser_acc_svc.values()) / eta_ser_cfg
+                    t_el = max(0.001, t_total_svc)
+                    flujo_svc = calcular_flujo_ac_nodo({k: v / eta_ser_cfg / t_el for k, v in ser_acc_svc.items()})
+                    loss_svc = flujo_svc.get('P_loss_kw', 0.0) * (1.15 ** 2) * t_el
+                    seat_svc = (total_ser_svc + loss_svc) / 0.99
+                    filas += f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:13px; color:#555;'>{svc}</span><span style='font-size:13px; font-weight:bold; color:#2E7D32;'>{seat_svc:,.0f} kWh</span></div>"
+            if not filas:
+                filas = "<div style='font-size:12px; color:#999; padding:8px 0;'>Sin viajes</div>"
+            seat_svc_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333; text-align:center; margin-bottom:10px;'>Flota {f_type}</div>{filas}</div>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+
         km_total_red = df_inic['tren_km'].sum() + vacio_km_total
         st.markdown("##### ⚡ Consumo Acumulado por Subestación Rectificadora (SER a 44kV)")
         if active_sers:
