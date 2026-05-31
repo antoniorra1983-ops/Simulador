@@ -600,11 +600,14 @@ def main():
                         st.session_state[key] = []; st.rerun()
 
         st.subheader("Carga de Planillas Locales")
-        f_v1 = st.file_uploader("THDR Vía 1 (Puerto→Limache)", accept_multiple_files=True, key="t1")
-        f_v2 = st.file_uploader("THDR Vía 2 (Limache→Puerto)", accept_multiple_files=True, key="t2")
+        archivo_planilla = st.file_uploader("📂 Planilla Maestra (.csv, .xlsx, .xls)", type=['csv', 'xlsx', 'xls'], key="planilla_maestra_sidebar")
         f_px1 = st.file_uploader("Pasajeros Vía 1", accept_multiple_files=True, key="px1")
         f_px2 = st.file_uploader("Pasajeros Vía 2", accept_multiple_files=True, key="px2")
+        tipo_dia_plan = st.selectbox("Tipo de Día para Demanda", ["Laboral", "Sábado", "Domingo/Festivo"], key="td_plan")
         f_prev = st.file_uploader("🚧 Prevenciones de Vía (.csv, .xlsx)", accept_multiple_files=True, key="prev")
+        # THDR V1/V2 retirados del sidebar (el mapa histórico ya no se usa)
+        f_v1 = None
+        f_v2 = None
         
         st.divider()
         st.subheader("⚙️ Parámetros Físicos de Red")
@@ -696,7 +699,7 @@ def main():
             st.divider()
             st.subheader("🌡️ Variables Externas")
             estacion_anio_plan = st.selectbox("Estación del Año (HVAC)", ["verano", "otoño", "invierno", "primavera"], index=3, key="est_plan")
-            tipo_dia_plan = st.selectbox("Tipo de Día para Demanda", ["Laboral", "Sábado", "Domingo/Festivo"], key="td_plan")
+            # tipo_dia_plan se selecciona arriba, debajo de la carga de pasajeros
 
             st.subheader("🎛️ Rendimiento del Tren")
             pct_trac_plan = st.slider("% Tracción Máxima (Aceleración)", 30, 100, 90, 5, help="Limita la fuerza de tracción disponible. Valores bajos reducen consumo pero aumentan el tiempo de viaje. En pendientes pronunciadas el tren puede no alcanzar la velocidad consigna.")
@@ -739,7 +742,9 @@ def main():
                 df_plan_edit = st.data_editor(st.session_state['df_plan'], num_rows="dynamic", use_container_width=True)
             
             elif modo_plan == "Planilla Maestra (Subir CSV/Excel)":
-                archivo_planilla = st.file_uploader("📂 Sube tu Planilla Maestra (.csv, .xlsx, .xls)", type=['csv', 'xlsx', 'xls'])
+                # El uploader de Planilla Maestra ahora está en el sidebar (archivo_planilla)
+                if not archivo_planilla:
+                    st.info("👈 Sube tu Planilla Maestra en el panel lateral (sección 'Carga de Planillas Locales').")
                 if archivo_planilla:
                     try:
                         df_temp, msg = parsear_planilla_maestra(archivo_planilla.getvalue(), archivo_planilla.name)
