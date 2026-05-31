@@ -359,6 +359,136 @@ def _asignar_motrices_por_tipo(df_opt):
     return df
 
 
+def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn, ruta_xlsx, paso_min=15.0):
+    """
+    Genera una tabla xlsx con el consumo SEAT en franjas de `paso_min` minutos.
+    Columnas: Franja horaria | kWh total | kW medio total | (por cada SER: kWh y kW)
+
+    El consumo de cada viaje se reparte entre las franjas de tiempo que cubre,
+    proporcional al tiempo que el tren pasa en cada franja. El SEAT incluye pérdidas
+    de rectificador (eta_ser) y AC, idéntico al dashboard.
+    """
+    import pandas as pd
+    import numpy as np
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    try:
+        eta_ser = getattr(config, 'ETA_SER_RECTIFICADOR', 0.96)
+    except Exception:
+        eta_ser = 0.96
+    ser_names = [s[1] for s in active_sers]
+
+    df = df_e.copy()
+    if 't_fin' not in df.columns:
+        if 't_viaje_h' in df.columns:
+            df['t_fin'] = df['t_ini'] + df['t_viaje_h'] * 60.0
+        else:
+            df['t_fin'] = df['t_ini'] + 55.0
+
+    # Rango de franjas
+    t_min = float(df['t_ini'].min())
+    t_max = float(df['t_fin'].max())
+    inicio = int((t_min // paso_min) * paso_min)
+    fin = int(((t_max // paso_min) + 1) * paso_min)
+    franjas = list(range(inicio, fin, int(paso_min)))
+
+    # Para cada franja, acumular energía por SER (a nivel de subestación 44kV)
+    # repartiendo cada viaje según el solape temporal con la franja.
+    ser_por_franja = {f: {n: 0.0 for n in ser_names} for f in franjas}
+
+    for _, r in df.iterrows():
+        t_ini_v = float(r['t_ini'])
+        t_fin_v = float(r['t_fin'])
+        dur_v = max(0.001, t_fin_v - t_ini_v)
+        e_panto_total = r.get('kwh_viaje_trac', 0) + r.get('kwh_viaje_aux', 0) - r.get('kwh_viaje_regen', 0)
+        th_total = r.get('t_viaje_h', dur_v / 60.0)
+        km_o, km_d = r['km_orig'], r['km_dest']
+
+        # repartir el viaje entre las franjas que cubre
+        for f in franjas:
+            f_ini, f_fin = f, f + paso_min
+            solape = max(0.0, min(t_fin_v, f_fin) - max(t_ini_v, f_ini))
+            if solape <= 0:
+                continue
+            frac = solape / dur_v
+            e_frac = e_panto_total * frac
+            th_frac = th_total * frac
+            # distribuir esa fracción de energía entre las SER según el tramo recorrido
+            for s_name, e_val in distribuir_fn(e_frac, th_frac, km_o, km_d, active_sers).items():
+                ser_por_franja[f][s_name] = ser_por_franja[f].get(s_name, 0.0) + max(0.0, e_val)
+
+    # Construir filas: SEAT total y por SER (kWh y kW medio)
+    filas = []
+    horas_frac = paso_min / 60.0
+    for f in franjas:
+        ser_acc = ser_por_franja[f]
+        # SEAT por SER (44kV con rectificador)
+        ser_seat = {n: ser_acc[n] / eta_ser for n in ser_names}
+        total_ser_44 = sum(ser_seat.values())
+        # pérdidas AC sobre el total de la franja
+        flujo = flujo_fn({n: ser_seat[n] / max(0.001, horas_frac) for n in ser_names})
+        loss_ac = flujo.get('P_loss_kw', 0.0) * (1.15 ** 2) * horas_frac
+        seat_total = (total_ser_44 + loss_ac) / 0.99
+
+        h = int(f // 60); m = int(f % 60)
+        hf = int((f + paso_min) // 60); mf = int((f + paso_min) % 60)
+        fila = {
+            'Franja': f"{h:02d}:{m:02d}-{hf:02d}:{mf:02d}",
+            'SEAT kWh': round(seat_total, 1),
+            'SEAT kW medio': round(seat_total / horas_frac, 1),
+        }
+        for n in ser_names:
+            fila[f'{n} kWh'] = round(ser_seat[n], 1)
+            fila[f'{n} kW'] = round(ser_seat[n] / horas_frac, 1)
+        filas.append(fila)
+
+    df_tabla = pd.DataFrame(filas)
+
+    # Escribir xlsx con formato
+    wb = Workbook(); ws = wb.active; ws.title = "SEAT 15min"
+    head_font = Font(name='Arial', bold=True, color='FFFFFF', size=10)
+    head_fill = PatternFill('solid', start_color='1565C0')
+    center = Alignment(horizontal='center', vertical='center')
+    thin = Side(style='thin', color='CCCCCC')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    cols = list(df_tabla.columns)
+    for c_idx, col in enumerate(cols, start=1):
+        cell = ws.cell(row=1, column=c_idx, value=col)
+        cell.font = head_font; cell.fill = head_fill
+        cell.alignment = center; cell.border = border
+
+    for r_idx, (_, row) in enumerate(df_tabla.iterrows(), start=2):
+        for c_idx, col in enumerate(cols, start=1):
+            cell = ws.cell(row=r_idx, column=c_idx, value=row[col])
+            cell.alignment = center; cell.border = border
+            cell.font = Font(name='Arial', size=9)
+            if c_idx > 1:
+                cell.number_format = '#,##0.0'
+
+    # Fila de totales
+    tot_row = len(df_tabla) + 2
+    ws.cell(row=tot_row, column=1, value="TOTAL DÍA").font = Font(name='Arial', bold=True, size=10)
+    for c_idx, col in enumerate(cols, start=1):
+        if c_idx == 1:
+            continue
+        if 'kWh' in col:  # sumar kWh; el kW medio no se suma
+            total = df_tabla[col].sum()
+            cell = ws.cell(row=tot_row, column=c_idx, value=round(total, 1))
+            cell.font = Font(name='Arial', bold=True, size=9)
+            cell.number_format = '#,##0.0'
+
+    # Anchos
+    ws.column_dimensions['A'].width = 16
+    for c_idx in range(2, len(cols) + 1):
+        ws.column_dimensions[ws.cell(row=1, column=c_idx).column_letter].width = 13
+
+    ws.freeze_panes = 'B2'
+    wb.save(ruta_xlsx)
+    return ruta_xlsx, df_tabla
+
+
 def generar_planillas_xlsx(df_opt, ruta_v1, ruta_v2):
     """
     Genera dos archivos xlsx (V1 y V2) con el formato de las planillas originales:
