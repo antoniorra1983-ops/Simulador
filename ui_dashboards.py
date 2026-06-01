@@ -876,6 +876,62 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             seat_svc_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333; text-align:center; margin-bottom:10px;'>Flota {f_type}</div>{filas}</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
+        # === Desglose por formación SIMPLE / DOBLE (pantógrafo, SER y SEAT) ===
+        st.markdown("##### 🚆 Consumo por Tipo de Tren y Formación (Simple / Doble)")
+        st.caption("Pantógrafo (neto), energía a nivel de subestación (SER) y SEAT total, "
+                   "separando formaciones simples y dobles. El IDE usa Tren-km (las dobles cuentan 2×).")
+
+        # construir lista de grupos (tipo, formación) que tienen viajes
+        grupos_fd = []
+        for f_type in ['XT-100', 'XT-M', 'SFE']:
+            for es_doble, etiqueta in [(False, 'Simple'), (True, 'Doble')]:
+                if df_acum.empty:
+                    continue
+                sub_g = df_acum[(df_acum['tipo_tren'] == f_type) & (df_acum['doble'].astype(bool) == es_doble)]
+                if not sub_g.empty:
+                    grupos_fd.append((f"{f_type} {etiqueta}", sub_g))
+
+        # mostrar en filas de 3 tarjetas
+        for fila_ini in range(0, len(grupos_fd), 3):
+            grupo_fila = grupos_fd[fila_ini:fila_ini + 3]
+            cols_fd = st.columns(3)
+            for j, (nombre_g, sub_g) in enumerate(grupo_fila):
+                # Pantógrafo neto y tracción
+                e_panto = (sub_g['kwh_viaje_trac'] + sub_g['kwh_viaje_aux'] - sub_g['kwh_viaje_regen']).sum()
+                km_g = sub_g['tren_km'].sum()
+                n_viajes = len(sub_g)
+                ide_panto = e_panto / km_g if km_g > 0 else 0.0
+                # SER (44kV con rectificador)
+                ser_acc_g = {n: 0.0 for n in ser_names}
+                for _, r in sub_g.iterrows():
+                    e_p = r['kwh_viaje_trac'] + r['kwh_viaje_aux'] - r['kwh_viaje_regen']
+                    for s_name, e_val in distribuir_energia_sers(e_p, r['t_viaje_h'], r['km_orig'], r['km_dest'], active_sers).items():
+                        ser_acc_g[s_name] = ser_acc_g.get(s_name, 0.0) + max(0.0, e_val)
+                total_ser_g = sum(ser_acc_g.values()) / eta_ser_cfg
+                ide_ser_g = total_ser_g / km_g if km_g > 0 else 0.0
+                # SEAT (con pérdidas AC)
+                t_el_g = max(0.001, sub_g['t_viaje_h'].sum())
+                flujo_g = calcular_flujo_ac_nodo({k: v / eta_ser_cfg / t_el_g for k, v in ser_acc_g.items()})
+                loss_g = flujo_g.get('P_loss_kw', 0.0) * (1.15 ** 2) * t_el_g
+                seat_g = (total_ser_g + loss_g) / 0.99
+                ide_seat_g = seat_g / km_g if km_g > 0 else 0.0
+
+                color_borde = '#1565C0' if 'Simple' in nombre_g else '#6A1B9A'
+                cuerpo = (
+                    f"<div style='font-size:11px; color:#666; margin-bottom:6px;'>{n_viajes} viajes · {km_g:,.0f} tren-km</div>"
+                    f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:12px; color:#555;'>Pantógrafo</span><span style='font-size:13px; font-weight:bold; color:#2E7D32;'>{e_panto:,.0f} kWh</span></div>"
+                    f"<div style='display:flex; justify-content:flex-end;'><span style='font-size:10px; color:#E65100;'>IDE {ide_panto:.3f} kWh/km</span></div>"
+                    f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:12px; color:#555;'>SER (44kV)</span><span style='font-size:13px; font-weight:bold; color:#1565C0;'>{total_ser_g:,.0f} kWh</span></div>"
+                    f"<div style='display:flex; justify-content:flex-end;'><span style='font-size:10px; color:#E65100;'>IDE {ide_ser_g:.3f} kWh/km</span></div>"
+                    f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:12px; color:#555;'>SEAT</span><span style='font-size:13px; font-weight:bold; color:#C62828;'>{seat_g:,.0f} kWh</span></div>"
+                    f"<div style='display:flex; justify-content:flex-end;'><span style='font-size:10px; color:#E65100;'>IDE {ide_seat_g:.3f} kWh/km</span></div>"
+                )
+                cols_fd[j].markdown(
+                    f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; border:1px solid #eee; border-top:4px solid {color_borde};'>"
+                    f"<div style='font-size:14px; font-weight:bold; color:#333; text-align:center; margin-bottom:8px;'>{nombre_g}</div>{cuerpo}</div>",
+                    unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+
         km_total_red = df_inic['tren_km'].sum() + vacio_km_total
         st.markdown("##### ⚡ Consumo Acumulado por Subestación Rectificadora (SER a 44kV)")
         if active_sers:
