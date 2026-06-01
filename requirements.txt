@@ -4,3 +4,4 @@ numpy
 plotly
 openpyxl
 xlrd
+holidays>=0.40
