@@ -918,23 +918,29 @@ def main():
                     # Descarga de tabla SEAT cada 15 min
                     if generar_tabla_seat_15min is not None:
                         st.divider()
-                        st.markdown("##### 📊 Consumo SEAT cada 15 minutos")
+                        st.markdown("##### 📊 Consumo SEAT por Franja Horaria")
                         try:
                             import tempfile, os
-                            ruta_15 = os.path.join(tempfile.gettempdir(), "SEAT_15min_Planificador.xlsx")
-                            _, df_tabla_15 = generar_tabla_seat_15min(df_sint_e, config, active_sers, distribuir_energia_sers, calcular_flujo_ac_nodo, ruta_15)
+                            granularidad_p = st.radio(
+                                "Intervalo de la tabla",
+                                ["Cada 15 minutos", "Cada hora"],
+                                horizontal=True, key="gran_seat_plan")
+                            paso_p = 15.0 if granularidad_p == "Cada 15 minutos" else 60.0
+                            sufijo_p = "15min" if paso_p == 15 else "60min"
+                            ruta_15 = os.path.join(tempfile.gettempdir(), f"SEAT_{sufijo_p}_Planificador.xlsx")
+                            _, df_tabla_15 = generar_tabla_seat_15min(df_sint_e, config, active_sers, distribuir_energia_sers, calcular_flujo_ac_nodo, ruta_15, paso_min=paso_p)
                             st.dataframe(df_tabla_15, use_container_width=True, height=300)
                             with open(ruta_15, 'rb') as f:
                                 st.download_button(
-                                    "⬇️ Descargar tabla SEAT 15 min (xlsx)",
+                                    f"⬇️ Descargar tabla SEAT ({granularidad_p.lower()}) (xlsx)",
                                     data=f.read(),
-                                    file_name="SEAT_15min_Planificador.xlsx",
+                                    file_name=f"SEAT_{sufijo_p}_Planificador.xlsx",
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                     use_container_width=True)
-                            st.caption("Consumo SEAT por franja de 15 min: total y por subestación, en kWh y kW medio. "
+                            st.caption(f"Consumo SEAT por franja: total y por subestación, en kWh y kW medio. "
                                        "Incluye pérdidas de rectificador y AC.")
                         except Exception as e:
-                            st.warning(f"No se pudo generar la tabla de 15 min: {e}")
+                            st.warning(f"No se pudo generar la tabla: {e}")
                 except Exception as e:
                     st.error(f"Fallo al graficar UI del Planificador: {e}")
 
@@ -1103,23 +1109,29 @@ def main():
                             except Exception as e:
                                 st.warning(f"No se pudieron generar las planillas: {e}")
 
-                        # Tabla SEAT cada 15 min (de la malla base)
+                        # Tabla SEAT por franja (de la malla base)
                         if generar_tabla_seat_15min is not None and df_base_consumo is not None:
                             st.divider()
-                            st.markdown("##### 📊 Consumo SEAT cada 15 minutos")
+                            st.markdown("##### 📊 Consumo SEAT por Franja Horaria")
                             try:
                                 import tempfile, os
-                                ruta_15o = os.path.join(tempfile.gettempdir(), "SEAT_15min_Optimizador.xlsx")
-                                _, df_t15o = generar_tabla_seat_15min(df_base_consumo, config, active_sers, distribuir_energia_sers, calcular_flujo_ac_nodo, ruta_15o)
+                                granularidad_o = st.radio(
+                                    "Intervalo de la tabla",
+                                    ["Cada 15 minutos", "Cada hora"],
+                                    horizontal=True, key="gran_seat_opt")
+                                paso_o = 15.0 if granularidad_o == "Cada 15 minutos" else 60.0
+                                sufijo_o = "15min" if paso_o == 15 else "60min"
+                                ruta_15o = os.path.join(tempfile.gettempdir(), f"SEAT_{sufijo_o}_Optimizador.xlsx")
+                                _, df_t15o = generar_tabla_seat_15min(df_base_consumo, config, active_sers, distribuir_energia_sers, calcular_flujo_ac_nodo, ruta_15o, paso_min=paso_o)
                                 st.dataframe(df_t15o, use_container_width=True, height=300)
                                 with open(ruta_15o, 'rb') as f:
                                     st.download_button(
-                                        "⬇️ Descargar tabla SEAT 15 min (xlsx)",
+                                        f"⬇️ Descargar tabla SEAT ({granularidad_o.lower()}) (xlsx)",
                                         data=f.read(),
-                                        file_name="SEAT_15min_Optimizador.xlsx",
+                                        file_name=f"SEAT_{sufijo_o}_Optimizador.xlsx",
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                         use_container_width=True)
-                                st.caption("Consumo SEAT por franja de 15 min: total y por subestación, en kWh y kW medio.")
+                                st.caption("Consumo SEAT por franja: total y por subestación, en kWh y kW medio.")
                             except Exception as e:
                                 st.warning(f"No se pudo generar la tabla de 15 min: {e}")
 
