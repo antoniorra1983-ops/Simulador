@@ -14,7 +14,36 @@ PAX_COLS_SAFE = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SL
 KM_ACUM_SAFE = [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13]
 KM_TOTAL_SAFE = 43.13
 N_EST_SAFE = 21
-FERIADOS_SAFE = ['2026-01-01', '2026-04-03', '2026-04-04', '2026-05-01', '2026-05-21', '2026-06-21', '2026-07-16', '2026-08-15', '2026-09-18', '2026-09-19', '2026-10-12', '2026-10-31', '2026-12-08', '2026-12-25']
+FERIADOS_SAFE = ['2026-01-01', '2026-04-03', '2026-04-04', '2026-05-01', '2026-05-21', '2026-06-21', '2026-06-29', '2026-07-16', '2026-08-15', '2026-09-18', '2026-09-19', '2026-10-12', '2026-10-31', '2026-11-01', '2026-12-08', '2026-12-25']
+
+# Feriados de Chile dinámicos por año usando la librería 'holidays'.
+# Incluye fijos, móviles religiosos (Viernes/Sábado Santo, según la Pascua) y
+# trasladables por ley. Si la librería no está disponible, cae a FERIADOS_SAFE.
+try:
+    import holidays as _holidays_lib
+    _HOLIDAYS_OK = True
+except Exception:
+    _HOLIDAYS_OK = False
+
+_feriados_cache = {}  # año → set de fechas 'YYYY-MM-DD'
+
+def feriados_chile(anio):
+    """Devuelve un set de fechas 'YYYY-MM-DD' con los feriados nacionales de Chile
+    para el año dado. Usa la librería 'holidays'; si no está, usa la lista fija 2026."""
+    if anio in _feriados_cache:
+        return _feriados_cache[anio]
+    fechas = set()
+    if _HOLIDAYS_OK:
+        try:
+            cl = _holidays_lib.Chile(years=anio)
+            fechas = set(d.strftime('%Y-%m-%d') for d in cl.keys())
+        except Exception:
+            fechas = set()
+    if not fechas:
+        # respaldo: lista fija (solo válida para 2026)
+        fechas = set(FERIADOS_SAFE)
+    _feriados_cache[anio] = fechas
+    return fechas
 
 # =============================================================================
 # 1. UTILIDADES Y PARSEOS BASICOS
@@ -230,10 +259,11 @@ def clean_primary_key(x):
 def clasificar_dia(d_str):
     try:
         d = datetime.strptime(d_str, '%Y-%m-%d')
-        if d_str in FERIADOS_SAFE or d.weekday() == 6:
+        feriados_anio = feriados_chile(d.year)
+        if d_str in feriados_anio or d.weekday() == 6:
             return 'Domingo/Festivo'
         if d.weekday() == 5:
-            return 'Sabado'
+            return 'Sábado'
         return 'Laboral'
     except:
         return 'Laboral'
