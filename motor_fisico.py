@@ -404,17 +404,19 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             # velocidad; a <500 m se detiene. Esto evita el cruce de trenes y suma
             # el consumo real de las frenadas/re-aceleraciones.
             if tray_adelante is not None and len(tray_adelante) > 1:
-                t_abs_actual = t_ini_mins + t_horas * 60.0
-                km_adelante = _pos_en_tray(tray_adelante, t_abs_actual)
-                if km_adelante is not None:
-                    # separación a lo largo de la vía (sentido según vía)
-                    sep_km = (km_adelante - km_actual) if via_op == 1 else (km_actual - km_adelante)
-                    if sep_km <= 0.5 and sep_km > -1.0:
-                        # demasiado cerca: detenerse
-                        v_cons_kmh = 0.0
-                    elif sep_km <= 1.0:
-                        # a menos de 1 km: bajar un nivel del escalón de velocidad
-                        v_cons_kmh = _bajar_nivel_velocidad(v_cons_kmh)
+                # El muro móvil NO se aplica en la zona de aproximación a terminales
+                # (primeros/últimos ~2 km), donde manda la restricción de andén. Ahí los
+                # trenes se acercan naturalmente al andén y el anti-alcance los superpondría.
+                en_zona_terminal = (km_actual < 2.0) or (km_actual > 41.0)
+                if not en_zona_terminal:
+                    t_abs_actual = t_ini_mins + t_horas * 60.0
+                    km_adelante = _pos_en_tray(tray_adelante, t_abs_actual)
+                    if km_adelante is not None:
+                        sep_km = (km_adelante - km_actual) if via_op == 1 else (km_actual - km_adelante)
+                        if sep_km <= 0.5 and sep_km > -1.0:
+                            v_cons_kmh = 0.0
+                        elif sep_km <= 1.0:
+                            v_cons_kmh = _bajar_nivel_velocidad(v_cons_kmh)
             
             # =============================================================
             # APLICACIÓN DE PREVENCIONES — aviso dinámico por distancia de frenado
@@ -1007,17 +1009,47 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
     # Si está activo, re-simula cada tren usando la trayectoria del tren inmediatamente
     # anterior en su vía como límite (no traspasar). Afecta consumo y tiempos reales.
     if aplicar_anti_alcance:
-        trayectorias_por_via = {1: [], 2: []}  # lista de (t_ini, idx, tray)
+        trayectorias_por_via = {1: [], 2: []}  # lista de (t_ini, t_fin, km_orig, km_dest, idx, tray)
         # ordenar por vía y hora de salida
         orden_idx = df_e.sort_values(['Via', 't_ini']).index
         nuevos = {}
+
+        def _seleccionar_tray_adelante(via, t_salida, km_salida):
+            """Identifica la trayectoria del tren que va físicamente JUSTO ADELANTE
+            en la misma vía cuando el tren actual sale. En V1 (sentido Puerto→Limache,
+            km creciente) el de adelante tiene km mayor; en V2 (km decreciente) el de
+            adelante tiene km menor. Se elige el más cercano que aún esté en ruta y
+            adelante de la posición de salida."""
+            mejor_tray = None
+            mejor_dist = 1e9
+            for (t_ini_o, t_fin_o, ko, kd, idx_o, tray_o) in trayectorias_por_via[via]:
+                if not tray_o:
+                    continue
+                # ¿dónde está ese tren en el instante en que sale el actual?
+                km_o_en_tsalida = _pos_en_tray(tray_o, t_salida)
+                if km_o_en_tsalida is None:
+                    # ya llegó (fuera de rango) o aún no salió → no es el de adelante ahora
+                    continue
+                # ¿está adelante del tren actual?
+                if via == 1:
+                    delante = km_o_en_tsalida >= km_salida - 0.05
+                    dist = km_o_en_tsalida - km_salida
+                else:
+                    delante = km_o_en_tsalida <= km_salida + 0.05
+                    dist = km_salida - km_o_en_tsalida
+                if delante and 0 <= dist < mejor_dist:
+                    mejor_dist = dist
+                    mejor_tray = tray_o
+            # si ninguno está "adelante" ahora (ej. el actual sale de terminal antes que
+            # todos), usar el último procesado como respaldo
+            if mejor_tray is None and trayectorias_por_via[via]:
+                mejor_tray = trayectorias_por_via[via][-1][5]
+            return mejor_tray
+
         for idx in orden_idx:
             r = df_e.loc[idx]
             via = r['Via']
-            # trayectoria del tren inmediatamente anterior en la misma vía
-            tray_ad = None
-            if trayectorias_por_via[via]:
-                tray_ad = trayectorias_por_via[via][-1][2]
+            tray_ad = _seleccionar_tray_adelante(via, r.get('t_ini', 0.0), r['km_orig'])
             pct_real = obtener_pct_traccion_operativo(r, pct_trac_ui)
             try:
                 (trc, aux_c, reg_b, t_est, neto_i, t_h, prev_a) = simular_tramo_termodinamico(
@@ -1033,7 +1065,7 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
                 for p in t_est.get('perfil', []):
                     tray_self.append((p[0], p[1]))
                 _tiempos_sim[idx] = t_est
-            trayectorias_por_via[via].append((r['t_ini'], idx, tray_self))
+            trayectorias_por_via[via].append((r['t_ini'], r.get('t_fin', r['t_ini']+60), r['km_orig'], r['km_dest'], idx, tray_self))
             # recalcular regen con la receptividad correspondiente
             ETA_REGEN = _get_val('ETA_REGEN_NETA', 0.38)
             if not use_regen: receptividad = 0.0
