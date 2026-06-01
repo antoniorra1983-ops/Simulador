@@ -440,7 +440,7 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
     for motriz, idxs in tren_fisico.items():
         if not idxs:
             continue
-        sub = df.loc[idxs].sort_values('t_ini').reset_index(drop=False)
+        sub = df.loc[idxs].sort_values('t_ini').reset_index(drop=True)
         kwh_pp_tren = sub['kwh_prepost'].fillna(0.0).sum() if 'kwh_prepost' in sub.columns else 0.0
         if kwh_pp_tren <= 0:
             continue
