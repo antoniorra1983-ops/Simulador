@@ -476,27 +476,22 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     if 'maniobra' not in df_dia_e.columns: df_dia_e['maniobra'] = None
 
     # Inyectar el perfil REAL de la simulación (datos_sim) como nodos de cada viaje.
-    # Esto hace que el SCADA y km_at_t dibujen la trayectoria exacta calculada por el
-    # motor, incluyendo el anti-alcance (frenadas por alcanzar al tren de adelante).
-    # Sin esto, el SCADA recalcula posiciones con un perfil teórico y los trenes se cruzan.
+    # IMPORTANTE: el SCADA construye df_act desde df_dia_e, así que los nodos deben ir
+    # en df_dia_e (no en df_dia). Esto hace que km_at_t dibuje la trayectoria exacta
+    # calculada por el motor, incluyendo el anti-alcance (sin cruces de trenes).
     try:
-        df_dia = df_dia.copy()
-        if 'nodos' not in df_dia.columns:
-            df_dia['nodos'] = None
-        for _idx in df_dia.index:
-            if _idx not in df_dia_e.index:
-                continue
+        df_dia_e = df_dia_e.copy()
+        if 'nodos' not in df_dia_e.columns:
+            df_dia_e['nodos'] = None
+        for _idx in df_dia_e.index:
             _ds = df_dia_e.loc[_idx, 'datos_sim'] if 'datos_sim' in df_dia_e.columns else None
             if isinstance(_ds, dict):
                 _perfil = _ds.get('perfil', [])
                 if _perfil and len(_perfil) >= 2:
-                    # nodos = lista de (t_abs_min, km) desde el perfil real (submuestreo ligero
-                    # para no saturar el navegador: 1 de cada 3 puntos ≈ cada 30s)
                     _nodos_perfil = [(p[0], p[1]) for p in _perfil[::3]]
-                    # asegurar que incluye el último punto exacto (llegada)
                     if _nodos_perfil[-1][0] != _perfil[-1][0]:
                         _nodos_perfil.append((_perfil[-1][0], _perfil[-1][1]))
-                    df_dia.at[_idx, 'nodos'] = _nodos_perfil
+                    df_dia_e.at[_idx, 'nodos'] = _nodos_perfil
     except Exception:
         pass
     
