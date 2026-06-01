@@ -409,7 +409,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         dict_regen_sint = {}
         
     try:
-        df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=_prevenciones, aplicar_anden=True)
+        df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=_prevenciones, aplicar_anden=True, aplicar_anti_alcance=True)
     except TypeError:
         df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan)
         
