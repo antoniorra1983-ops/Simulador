@@ -219,7 +219,7 @@ def optimizar_asignacion_flota(df_servicios, config, priorizar='energia',
         try:
             df_e = simular_fn(df_opt_sim, p['pct_trac'], p['use_pend'], p['use_rm'],
                               p['use_regen'], dict_r, p['estacion_anio'], prevenciones=prevenciones,
-                              aplicar_anden=True)
+                              aplicar_anden=True, aplicar_anti_alcance=True)
         except TypeError:
             df_e = simular_fn(df_opt_sim, p['pct_trac'], p['use_pend'], p['use_rm'],
                               p['use_regen'], dict_r, p['estacion_anio'], prevenciones=prevenciones)
