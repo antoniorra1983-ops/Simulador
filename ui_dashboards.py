@@ -10,6 +10,15 @@ from etl_parser import mins_to_time_str, get_pax_at_km, get_vacios_dia
 from red_electrica import calcular_flujo_ac_nodo, distribuir_potencia_sers_kw, distribuir_energia_sers
 from motor_fisico import km_at_t, vel_at_km, get_train_state_and_speed, calcular_aux_dinamico, simular_tramo_termodinamico
 
+
+def _eta_trafo_red():
+    """Eficiencia de los transformadores de la red (elevador SEAT + reductores SER).
+    Representa las pérdidas de transformación (~1%) en la cadena SEAT→44kV→SER."""
+    try:
+        return ETA_TRAFO_RED
+    except NameError:
+        return 0.99
+
 # =============================================================================
 # MOTOR VISUAL 1: RENDERIZADO ESTÁTICO PYTHON (DOM SVG INYECTADO)
 # =============================================================================
@@ -708,8 +717,8 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     total_ser_kwh_44kv = sum(max(0.0, val) for val in ser_accum_visual.values()) / ETA_SER_RECTIFICADOR
     t_elap = max(0.001, hora_m1 / 60.0)
     flujo_avg = calcular_flujo_ac_nodo({k: max(0.0, v) / ETA_SER_RECTIFICADOR / t_elap for k, v in ser_accum_visual.items()})
-    total_ac_loss_kwh = flujo_avg['P_loss_kw'] * (1.15**2) * t_elap
-    seat_accum_1 = (total_ser_kwh_44kv + total_ac_loss_kwh) / 0.99
+    total_ac_loss_kwh = flujo_avg['P_loss_kw'] * t_elap
+    seat_accum_1 = (total_ser_kwh_44kv / _eta_trafo_red()) + total_ac_loss_kwh
 
     if "SCADA" in modo:
         html_scada, H_scada = draw_scada_js(df_dia_e, {k: max(0.0, v) for k, v in ser_accum_visual.items()}, seat_accum_1, hora_m1, "", active_sers, gap_vias, use_rm)
@@ -880,8 +889,8 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                     total_ser_svc = sum(ser_acc_svc.values()) / eta_ser_cfg
                     t_el = max(0.001, t_total_svc)
                     flujo_svc = calcular_flujo_ac_nodo({k: v / eta_ser_cfg / t_el for k, v in ser_acc_svc.items()})
-                    loss_svc = flujo_svc.get('P_loss_kw', 0.0) * (1.15 ** 2) * t_el
-                    seat_svc = (total_ser_svc + loss_svc) / 0.99
+                    loss_svc = flujo_svc.get('P_loss_kw', 0.0) * t_el
+                    seat_svc = (total_ser_svc / _eta_trafo_red()) + loss_svc
                     seat_total_tipo += seat_svc
                     km_svc = sub_svc['tren_km'].sum()
                     ide_seat_svc = seat_svc / km_svc if km_svc > 0 else 0.0
@@ -928,8 +937,8 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                     ser_s = sum(sa.values()) / eta_ser_cfg
                     t_el = max(0.001, sg['t_viaje_h'].sum())
                     fl = calcular_flujo_ac_nodo({k: v / eta_ser_cfg / t_el for k, v in sa.items()})
-                    loss = fl.get('P_loss_kw', 0.0) * (1.15 ** 2) * t_el
-                    seat_s = (ser_s + loss) / 0.99
+                    loss = fl.get('P_loss_kw', 0.0) * t_el
+                    seat_s = (ser_s / _eta_trafo_red()) + loss
                     return {
                         'panto': e_pan, 'ser': ser_s, 'seat': seat_s, 'km': km_s,
                         'ide_panto': e_pan / km_s if km_s > 0 else 0.0,
