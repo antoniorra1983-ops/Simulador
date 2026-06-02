@@ -90,7 +90,7 @@ def verificar_capacidad_terminales(df_servicios, paso_min=5.0):
 def calcular_seat_total(df_e, config, active_sers, distribuir_fn, flujo_fn):
     """
     Calcula el SEAT total (kWh) idéntico a como lo hace el dashboard del planificador:
-    SEAT = (Σ energía_por_SER / ETA_RECTIFICADOR + pérdidas_AC) / 0.99
+    SEAT = Σ energía_por_SER / ETA_RECTIFICADOR / ETA_TRAFO_RED + pérdidas_línea_AC
 
     df_e: DataFrame con kwh_viaje_trac, kwh_viaje_aux, kwh_viaje_regen, t_viaje_h,
           km_orig, km_dest por servicio (salida del motor).
@@ -121,8 +121,9 @@ def calcular_seat_total(df_e, config, active_sers, distribuir_fn, flujo_fn):
     total_ser_44kv = sum(max(0.0, v) for v in ser_accum.values()) / eta_ser
     t_elap = max(0.001, t_total_h)
     flujo = flujo_fn({k: max(0.0, v) / eta_ser / t_elap for k, v in ser_accum.items()})
-    loss_ac = flujo.get('P_loss_kw', 0.0) * (1.15 ** 2) * t_elap
-    seat = (total_ser_44kv + loss_ac) / 0.99
+    eta_trafo = getattr(config, 'ETA_TRAFO_RED', 0.99)
+    loss_ac = flujo.get('P_loss_kw', 0.0) * t_elap
+    seat = (total_ser_44kv / eta_trafo) + loss_ac
     return seat, km_total
 
 
@@ -377,6 +378,7 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
         eta_ser = getattr(config, 'ETA_SER_RECTIFICADOR', 0.96)
     except Exception:
         eta_ser = 0.96
+    eta_trafo_t = getattr(config, 'ETA_TRAFO_RED', 0.99)
     ser_names = [s[1] for s in active_sers]
 
     df = df_e.copy()
@@ -486,8 +488,8 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
         total_ser_44 = sum(ser_seat.values())
         # pérdidas AC sobre el total de la franja
         flujo = flujo_fn({n: ser_seat[n] / max(0.001, horas_frac) for n in ser_names})
-        loss_ac = flujo.get('P_loss_kw', 0.0) * (1.15 ** 2) * horas_frac
-        seat_total = (total_ser_44 + loss_ac) / 0.99
+        loss_ac = flujo.get('P_loss_kw', 0.0) * horas_frac
+        seat_total = (total_ser_44 / eta_trafo_t) + loss_ac
 
         h = int(f // 60); m = int(f % 60)
         hf = int((f + paso_min) // 60); mf = int((f + paso_min) % 60)
