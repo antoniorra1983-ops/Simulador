@@ -837,8 +837,10 @@ def main():
                             
                             tot_ser_sb = sum(max(0.0, v) for v in distrib_sb.values()) / eta_ser
                             avg_dem_sb = {k: max(0.0, v) / eta_ser / max(0.001, th_sb) for k, v in distrib_sb.items()}
-                            loss_sb = calcular_flujo_ac_nodo(avg_dem_sb)['P_loss_kw'] * (1.15**2) * max(0.001, th_sb)
-                            seat_sb = (tot_ser_sb + loss_sb) / 0.99
+                            try: _eta_trafo_sb = ETA_TRAFO_RED
+                            except NameError: _eta_trafo_sb = 0.99
+                            loss_sb = calcular_flujo_ac_nodo(avg_dem_sb)['P_loss_kw'] * max(0.001, th_sb)
+                            seat_sb = (tot_ser_sb / _eta_trafo_sb) + loss_sb
                             ide_sb = seat_sb / max(0.001, abs(km_d - km_o))
                             
                             st.success(f"Simulación exitosa: {sb_orig} ➔ {sb_dest} | Distancia: {abs(km_d - km_o):.2f} km")
