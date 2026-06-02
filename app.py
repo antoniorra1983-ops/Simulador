@@ -546,7 +546,60 @@ def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, use_
                 )
 
 
+def verificar_acceso():
+    """Control de acceso por login OIDC (Google/Microsoft).
+    Solo los correos en la lista CORREOS_AUTORIZADOS pueden entrar.
+    Si no hay autenticación configurada en secrets.toml, deja pasar (modo desarrollo)."""
+
+    # === Lista de usuarios autorizados (correos de Google/Microsoft) ===
+    CORREOS_AUTORIZADOS = [
+        "antonio@efe.cl",            # ← reemplaza por los correos reales
+        "usuario2@efe.cl",
+        "usuario3@efe.cl",
+    ]
+
+    # Si la autenticación no está configurada (ej. corriendo local sin secrets),
+    # no bloquear — permite desarrollo. En producción (Streamlit Cloud con secrets),
+    # st.user.is_logged_in funciona normalmente.
+    try:
+        logged_in = st.user.is_logged_in
+    except Exception:
+        # autenticación no configurada: modo abierto (desarrollo)
+        return True
+
+    if not logged_in:
+        st.title("🔐 Simulador MERVAL — Acceso restringido")
+        st.write("Inicia sesión con tu cuenta autorizada para continuar.")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Iniciar sesión con Google", use_container_width=True):
+                st.login("google")
+        with col2:
+            if st.button("Iniciar sesión con Microsoft", use_container_width=True):
+                st.login("microsoft")
+        st.stop()
+
+    # ya autenticado: verificar que el correo esté autorizado
+    correo = (st.user.get("email") or "").lower()
+    if correo not in [c.lower() for c in CORREOS_AUTORIZADOS]:
+        st.error(f"⛔ La cuenta {correo} no está autorizada para usar este simulador.")
+        st.write("Si crees que es un error, contacta al administrador.")
+        if st.button("Cerrar sesión"):
+            st.logout()
+        st.stop()
+
+    # autorizado: mostrar quién está conectado y opción de salir en el sidebar
+    with st.sidebar:
+        st.success(f"✓ {st.user.get('name', correo)}")
+        if st.button("Cerrar sesión", use_container_width=True):
+            st.logout()
+
+    return True
+
+
 def main():
+    verificar_acceso()
+
     def reset_plan_state():
         keys_to_clear = [
             'plan_ready', 'plan_sint_final', 'plan_sint_e',
