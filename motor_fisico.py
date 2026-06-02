@@ -54,7 +54,7 @@ _PEND_ARRAY_V1 = np.zeros(45000, dtype=float)
 _PEND_ARRAY_V2 = np.zeros(45000, dtype=float)
 # Perfiles de elevación independientes por vía — Google Earth
 _e_km   = _get_val('_ELEV_KM',   [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13])
-_e_m_v1 = _get_val('_ELEV_M_V1', _get_val('_ELEV_M', [12,10,10,10,18,15,12,15,35,50,55,88,122,132,142,148,155,162,175,198,216]))
+_e_m_v1 = _get_val('_ELEV_M_V1', _get_val('_ELEV_M', [14.5,10.3,14.4,14.1,13.7,20.3,32.4,23.2,20.6,24.0,28.0,103.7,113.5,114.3,120.4,131.7,142.6,148.8,148.1,161.6,95.8]))
 _e_m_v2 = _get_val('_ELEV_M_V2', _e_m_v1)  # fallback a V1 si no existe V2
 
 # Construir pendientes V1 y V2 independientes desde sus perfiles de elevación
