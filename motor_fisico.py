@@ -215,8 +215,14 @@ def _calc_tren_km_real_motor(row):
         return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
     km_man = None
     man_upper = str(man).upper()
-    if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper: km_man = 25.3
-    elif 'CORTE_SA' in man_upper or 'ACOPLE_SA' in man_upper: km_man = 29.1
+    if '@' in man_upper:
+        try:
+            km_man = float(man_upper.split('@', 1)[1].strip())
+        except (ValueError, IndexError):
+            km_man = None
+    if km_man is None:
+        if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper: km_man = 25.3
+        elif 'CORTE_SA' in man_upper or 'ACOPLE_SA' in man_upper: km_man = 29.1
     if km_man is None: return abs(k_d - k_o) * (2.0 if is_doble else 1.0)
     if min(k_o, k_d) <= km_man <= max(k_o, k_d):
         dist_antes = abs(km_man - k_o); dist_despues = abs(k_d - km_man)
@@ -265,8 +271,16 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     
     km_man = None
     man_upper = str(maniobra).upper() if maniobra and not pd.isna(maniobra) else ''
-    if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper: km_man = 25.3
-    elif 'CORTE_SA' in man_upper or 'ACOPLE_SA' in man_upper: km_man = 29.1
+    # Formato flexible: 'CORTE@21.4' o 'ACOPLE@13.5' → km explícito tras '@'
+    if '@' in man_upper:
+        try:
+            km_man = float(man_upper.split('@', 1)[1].strip())
+        except (ValueError, IndexError):
+            km_man = None
+    # Formatos antiguos con punto de maniobra fijo (compatibilidad)
+    if km_man is None:
+        if 'CORTE_BTO' in man_upper or 'ACOPLE_BTO' in man_upper or 'CORTE_PU_SA_BTO' in man_upper: km_man = 25.3
+        elif 'CORTE_SA' in man_upper or 'ACOPLE_SA' in man_upper: km_man = 29.1
     dist_to_maniobra = abs(km_man - km_ini) * 1000.0 if km_man is not None else -1
     
     a_freno_op = f.get('a_freno_ms2', 1.2) * 0.9 
