@@ -907,11 +907,16 @@ def main():
             # === EDITOR DE MANIOBRAS DE ACOPLE / DESACOPLE ===
             if st.session_state.get('raw_plan_df') is not None:
                 with st.expander("🔗 Acoplar / Desacoplar trenes (cambio de formación a mitad de servicio)"):
-                    st.caption("Define en qué servicio y estación un tren cambia de formación. "
+                    st.caption("Define en qué N° de viaje y estación un tren cambia de formación. "
                                "Desacoplar (CORTE): sale doble y sigue simple desde ese punto. "
                                "Acoplar (ACOPLE): sale simple y sigue doble. En Vía 1 se asume desacople por defecto.")
                     _df_man = st.session_state['raw_plan_df']
-                    _servicios_disp = sorted([str(s) for s in _df_man['num_servicio'].unique()])
+                    _col_viaje = 'nro_viaje' if 'nro_viaje' in _df_man.columns else 'num_servicio'
+                    # ordenar numéricamente los números de viaje
+                    def _ord_viaje(x):
+                        try: return int(x)
+                        except: return 999999
+                    _viajes_disp = sorted([str(s) for s in _df_man[_col_viaje].unique()], key=_ord_viaje)
                     _est_km = dict(zip(ESTACIONES, KM_ACUM)) if 'ESTACIONES' in dir() and 'KM_ACUM' in dir() else {}
                     if not _est_km:
                         try:
@@ -921,18 +926,24 @@ def main():
 
                     cm1, cm2, cm3 = st.columns([2, 2, 1.5])
                     with cm1:
-                        _svc_sel = st.selectbox("N° de Servicio", _servicios_disp, key="man_svc_sel")
+                        _viaje_sel = st.selectbox("N° de Viaje", _viajes_disp, key="man_viaje_sel")
                     with cm2:
                         _est_sel = st.selectbox("Estación de la maniobra", list(_est_km.keys()), key="man_est_sel")
                     with cm3:
-                        # detectar la vía del servicio seleccionado para sugerir el tipo
+                        # detectar la vía del viaje seleccionado para sugerir el tipo
                         _via_svc = None
+                        _svc_del_viaje = None
                         try:
-                            _via_svc = int(_df_man[_df_man['num_servicio'].astype(str) == _svc_sel]['Via'].iloc[0])
+                            _fila_viaje = _df_man[_df_man[_col_viaje].astype(str) == _viaje_sel].iloc[0]
+                            _via_svc = int(_fila_viaje['Via'])
+                            _svc_del_viaje = str(_fila_viaje['num_servicio'])
                         except Exception:
                             pass
                         _tipo_def = 0 if _via_svc == 1 else 1  # V1 → desacople por defecto
                         _tipo_sel = st.selectbox("Tipo", ["Desacoplar (CORTE)", "Acoplar (ACOPLE)"], index=_tipo_def, key="man_tipo_sel")
+
+                    if _svc_del_viaje is not None:
+                        st.caption(f"Viaje {_viaje_sel} → Tren {_svc_del_viaje}, Vía {_via_svc}")
 
                     if 'maniobras_def' not in st.session_state:
                         st.session_state['maniobras_def'] = {}
@@ -942,9 +953,9 @@ def main():
                         if st.button("➕ Agregar maniobra", use_container_width=True, key="man_add"):
                             _km_man = _est_km.get(_est_sel, 0.0)
                             _accion = "CORTE" if "CORTE" in _tipo_sel else "ACOPLE"
-                            st.session_state['maniobras_def'][_svc_sel] = f"{_accion}@{_km_man}"
+                            st.session_state['maniobras_def'][_viaje_sel] = f"{_accion}@{_km_man}"
                             if _via_svc == 1 and _accion == "ACOPLE":
-                                st.warning("Marcaste ACOPLE en un servicio de Vía 1. Normalmente en V1 se desacopla; revisa si es correcto.")
+                                st.warning("Marcaste ACOPLE en un viaje de Vía 1. Normalmente en V1 se desacopla; revisa si es correcto.")
                             st.rerun()
                     with cb2:
                         if st.button("🗑️ Limpiar todas", use_container_width=True, key="man_clear"):
@@ -955,11 +966,11 @@ def main():
                     if st.session_state['maniobras_def']:
                         st.markdown("**Maniobras definidas:**")
                         _km_to_est = {v: k for k, v in _est_km.items()}
-                        for _svc, _man in st.session_state['maniobras_def'].items():
+                        for _viaje, _man in st.session_state['maniobras_def'].items():
                             _acc, _km = _man.split('@')
                             _nom_est = _km_to_est.get(float(_km), f"km {_km}")
                             _verbo = "desacopla (doble→simple)" if _acc == "CORTE" else "acopla (simple→doble)"
-                            st.write(f"• Servicio **{_svc}**: {_verbo} en **{_nom_est}**")
+                            st.write(f"• Viaje **{_viaje}**: {_verbo} en **{_nom_est}**")
                     else:
                         st.info("No hay maniobras definidas. El plan usa las formaciones de la planilla.")
 
@@ -1005,12 +1016,13 @@ def main():
                     st.session_state['simulacion_plan_lista'] = True
 
             if st.session_state.get('simulacion_plan_lista', False) and 'raw_plan_df' in st.session_state:
-                # Aplicar las maniobras de acople/desacople definidas por el usuario
+                # Aplicar las maniobras de acople/desacople definidas por el usuario (por N° de viaje)
                 _df_plan_con_man = st.session_state['raw_plan_df'].copy()
                 _maniobras = st.session_state.get('maniobras_def', {})
                 if _maniobras:
+                    _col_v = 'nro_viaje' if 'nro_viaje' in _df_plan_con_man.columns else 'num_servicio'
                     _df_plan_con_man['maniobra'] = _df_plan_con_man.apply(
-                        lambda r: _maniobras.get(str(r['num_servicio']), r.get('maniobra')), axis=1)
+                        lambda r: _maniobras.get(str(r[_col_v]), r.get('maniobra')), axis=1)
                 _man_sig = str(sorted(_maniobras.items())) if _maniobras else ""
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature + str(sorted([(p.get('km_min',0),p.get('km_max',0),p.get('v_kmh',0),p.get('via',0)) for p in (prevenciones_list or [])], key=lambda x: x[0])) + str(use_pend) + str(use_rm) + str(use_regen) + str(tipo_regen) + str(estacion_anio_plan) + str(pct_trac_plan) + _man_sig
                 _prog_bar = st.progress(0.0, text="Simulando física de la flota (anti-alcance)...")
