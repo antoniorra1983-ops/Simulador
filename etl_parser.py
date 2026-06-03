@@ -1189,6 +1189,7 @@ def parsear_planilla_maestra(data, fname):
                 unidad_col = None
                 motriz1_col = None
                 motriz2_col = None
+                tiposvc_col = None
                 
                 for c, val in enumerate(headers):
                     val_norm = str(val).strip().upper()
@@ -1203,7 +1204,18 @@ def parsear_planilla_maestra(data, fname):
                     if 'HR PARTIDA' in val_sin_tilde or 'HORA' in val_sin_tilde or 'PARTIDA' in val_sin_tilde or 'SALIDA' in val_sin_tilde:
                         if hora_col is None:
                             hora_col = c
-                    if any(p in val_sin_tilde for p in ['UNIDAD', 'UNID', 'CONF', 'TIPO', 'FORMA', 'OBS']):
+                    # Columna "Tipo Servicio" (origen-destino, ej. PU-LI, VM-PE) — detectar
+                    # ANTES que Unidad para que "TIPO SERVICIO" no se confunda con config
+                    if ('TIPO SERV' in val_sin_tilde or 'TIPO DE SERV' in val_sin_tilde
+                            or 'RUTA' in val_sin_tilde or 'TRAYECTO' in val_sin_tilde
+                            or 'ORIGEN-DESTINO' in val_sin_tilde or 'O-D' in val_sin_tilde):
+                        if tiposvc_col is None:
+                            tiposvc_col = c
+                    if any(p in val_sin_tilde for p in ['UNIDAD', 'UNID', 'CONF', 'FORMA', 'OBS']):
+                        if unidad_col is None:
+                            unidad_col = c
+                    elif 'TIPO' in val_sin_tilde and 'SERV' not in val_sin_tilde:
+                        # "TIPO" suelto (no "Tipo Servicio") → columna de configuración
                         if unidad_col is None:
                             unidad_col = c
                     if 'MOTRIZ' in val_sin_tilde and '1' in val_sin_tilde:
@@ -1335,23 +1347,45 @@ def parsear_planilla_maestra(data, fname):
                     km_sargento = KM_ACUM_SAFE[18]
                     km_belloto = KM_ACUM_SAFE[14]
                     km_puerto = KM_ACUM_SAFE[0]
-                    
-                    if via == 1:
-                        km_orig = km_puerto
-                        if servicio_num >= 600:
-                            km_dest = km_limache
-                        elif 400 <= servicio_num <= 599:
-                            km_dest = km_sargento
+
+                    # 1) Si existe la columna "Tipo Servicio" (ej. "PU-LI", "VM-PE"),
+                    #    leer origen y destino directamente de ahí (soporta salidas desde
+                    #    estaciones intermedias como Viña del Mar o Peñablanca).
+                    km_orig = None
+                    km_dest = None
+                    ruta_explicita = None
+                    if tiposvc_col is not None and pd.notna(row.get(tiposvc_col)):
+                        _ts = str(row[tiposvc_col]).strip().upper()
+                        _ts = ''.join(ch for ch in unicodedata.normalize('NFD', _ts) if unicodedata.category(ch) != 'Mn')
+                        # separar por guion (admite '-', '–', '_', '/')
+                        _partes = re.split(r'[-–_/]', _ts)
+                        if len(_partes) == 2:
+                            _co, _cd = _partes[0].strip(), _partes[1].strip()
+                            if _co in EC_SAFE and _cd in EC_SAFE:
+                                km_orig = KM_ACUM_SAFE[EC_SAFE.index(_co)]
+                                km_dest = KM_ACUM_SAFE[EC_SAFE.index(_cd)]
+                                ruta_explicita = f"{_co}-{_cd}"
+                                # la vía se deduce del sentido: orig<dest → V1, orig>dest → V2
+                                via = 1 if km_orig < km_dest else 2
+
+                    # 2) Si no hay columna válida, inferir del número de servicio (lógica antigua)
+                    if km_orig is None or km_dest is None:
+                        if via == 1:
+                            km_orig = km_puerto
+                            if servicio_num >= 600:
+                                km_dest = km_limache
+                            elif 400 <= servicio_num <= 599:
+                                km_dest = km_sargento
+                            else:
+                                km_dest = km_belloto
                         else:
-                            km_dest = km_belloto
-                    else:
-                        km_dest = km_puerto
-                        if servicio_num >= 600:
-                            km_orig = km_limache
-                        elif 400 <= servicio_num <= 599:
-                            km_orig = km_sargento
-                        else:
-                            km_orig = km_belloto
+                            km_dest = km_puerto
+                            if servicio_num >= 600:
+                                km_orig = km_limache
+                            elif 400 <= servicio_num <= 599:
+                                km_orig = km_sargento
+                            else:
+                                km_orig = km_belloto
                     
                     try:
                         idx_orig = KM_ACUM_SAFE.index(km_orig)
