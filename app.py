@@ -273,8 +273,8 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
 
     return trayectoria
 
-@st.cache_data(show_spinner="Integrando física y demanda en Planificador...")
-def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig, config_sig="", _progress_cb=None):
+@st.cache_data(show_spinner="⚙️ Simulando física de la flota (motor + anti-alcance). En día laboral puede tardar ~2 min…")
+def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig, config_sig=""):
     viajes_completos = []
     perfiles_por_servicio = {}
     perfiles_por_via = {}
@@ -409,7 +409,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         dict_regen_sint = {}
         
     try:
-        df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=_prevenciones, aplicar_anden=True, aplicar_anti_alcance=True, progress_cb=_progress_cb)
+        df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=_prevenciones, aplicar_anden=True, aplicar_anti_alcance=True)
     except TypeError:
         df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan)
         
@@ -1025,12 +1025,7 @@ def main():
                         lambda r: _maniobras.get(str(r[_col_v]), r.get('maniobra')), axis=1)
                 _man_sig = str(sorted(_maniobras.items())) if _maniobras else ""
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature + str(sorted([(p.get('km_min',0),p.get('km_max',0),p.get('v_kmh',0),p.get('via',0)) for p in (prevenciones_list or [])], key=lambda x: x[0])) + str(use_pend) + str(use_rm) + str(use_regen) + str(tipo_regen) + str(estacion_anio_plan) + str(pct_trac_plan) + _man_sig
-                _prog_bar = st.progress(0.0, text="Simulando física de la flota (anti-alcance)...")
-                def _cb_progreso(frac):
-                    pct = int(frac * 100)
-                    _prog_bar.progress(min(1.0, frac), text=f"Simulando física de la flota… {pct}%")
-                df_sint_final, df_sint_e = procesar_planificador_reactivo(_df_plan_con_man, df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig, config_sig=get_config_hash(), _progress_cb=_cb_progreso)
-                _prog_bar.empty()
+                df_sint_final, df_sint_e = procesar_planificador_reactivo(_df_plan_con_man, df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig, config_sig=get_config_hash())
                 # Guardar resultados para el Optimizador de Flota
                 st.session_state['opt_df_sint_e'] = df_sint_e
                 st.session_state['opt_params'] = {
