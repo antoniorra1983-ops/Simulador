@@ -274,7 +274,7 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
     return trayectoria
 
 @st.cache_data(show_spinner="⚙️ Simulando física de la flota (motor + anti-alcance). En día laboral puede tardar ~2 min…")
-def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig, config_sig="", man_sig=""):
+def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig, config_sig="", man_sig="", con_anti_alcance=True):
     viajes_completos = []
     perfiles_por_servicio = {}
     perfiles_por_via = {}
@@ -409,7 +409,7 @@ def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan
         dict_regen_sint = {}
         
     try:
-        df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=_prevenciones, aplicar_anden=True, aplicar_anti_alcance=True)
+        df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan, prevenciones=_prevenciones, aplicar_anden=True, aplicar_anti_alcance=con_anti_alcance)
     except TypeError:
         df_sint_e = calcular_termodinamica_flota_v111(df_sint_final, pct_trac_plan, use_pend, use_rm, use_regen, dict_regen_sint, estacion_anio_plan)
         
@@ -985,7 +985,26 @@ def main():
                     else:
                         st.info("No hay maniobras definidas. El plan usa las formaciones de la planilla.")
 
-            if modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"] and st.button("🚀 Ejecutar Gemelo Digital del Planificador", use_container_width=True, type="primary"):
+            _modo_ok = modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"]
+            if _modo_ok:
+                st.markdown("**Ejecutar simulación:**")
+                _bc1, _bc2 = st.columns(2)
+                with _bc1:
+                    _btn_circ = st.button("🚆 Circulación de Trenes", use_container_width=True, type="primary",
+                                          help="Rápido (~30s). Muestra el SCADA, horarios y mapa de movimiento de los trenes.")
+                with _bc2:
+                    _btn_cons = st.button("⚡ Consumo de Energía", use_container_width=True,
+                                          help="Pesado (~2 min). Calcula energía, SEAT, IDE con anti-alcance.")
+                st.caption("La circulación es rápida y muestra el movimiento de trenes. "
+                           "El consumo es más lento (incluye el anti-alcance) y calcula la energía. "
+                           "Puedes ver la circulación primero y pedir el consumo solo cuando lo necesites.")
+            else:
+                _btn_circ = False
+                _btn_cons = False
+
+            if _btn_circ or _btn_cons:
+                # Determinar qué modo de ejecución
+                st.session_state['modo_ejecucion'] = 'consumo' if _btn_cons else 'circulacion'
                 st.session_state['simulacion_plan_lista'] = False
                 st.session_state['maniobras_cambiadas'] = False
                 with st.spinner("Decodificando Malla e inyectando al Motor Cinemático Termodinámico..."):
@@ -1037,7 +1056,8 @@ def main():
                         lambda r: _maniobras.get(str(r[_col_v]), r.get('maniobra')), axis=1)
                 _man_sig = str(sorted(_maniobras.items())) if _maniobras else ""
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature + str(sorted([(p.get('km_min',0),p.get('km_max',0),p.get('v_kmh',0),p.get('via',0)) for p in (prevenciones_list or [])], key=lambda x: x[0])) + str(use_pend) + str(use_rm) + str(use_regen) + str(tipo_regen) + str(estacion_anio_plan) + str(pct_trac_plan) + _man_sig
-                df_sint_final, df_sint_e = procesar_planificador_reactivo(_df_plan_con_man, df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig, config_sig=get_config_hash(), man_sig=_man_sig)
+                _con_aa = st.session_state.get('modo_ejecucion', 'circulacion') == 'consumo'
+                df_sint_final, df_sint_e = procesar_planificador_reactivo(_df_plan_con_man, df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig, config_sig=get_config_hash(), man_sig=_man_sig, con_anti_alcance=_con_aa)
                 # Guardar resultados para el Optimizador de Flota
                 st.session_state['opt_df_sint_e'] = df_sint_e
                 st.session_state['opt_params'] = {
@@ -1055,13 +1075,21 @@ def main():
                         df_sint_final[col] = pd.to_numeric(df_sint_final[col], errors='coerce')
                 
                 st.divider()
+                _modo_exec = st.session_state.get('modo_ejecucion', 'circulacion')
                 try:
+                    # SCADA + horarios + mapa: siempre (circulación y consumo)
                     render_gemelo_digital(df_sint_final, df_sint_e, active_sers, f"Simulación: {nombre_perfil}", pct_trac_plan, use_rm, use_pend, estacion_anio_plan, "plan", gap_vias, pax_dia_total=int(df_sint_final['pax_abordo'].sum()))
-                    render_dashboard_energia_v112(df_sint_e, active_sers, "Planificador", st.session_state.get('sl_ui_plan', 480.0))
-                    render_tablas_thdr_planificador(df_sint_final, pct_trac_plan, estacion_anio_plan, use_rm, prevenciones_list)
 
-                    # Descarga de tabla SEAT cada 15 min
-                    if generar_tabla_seat_15min is not None:
+                    if _modo_exec == 'consumo':
+                        # Dashboards de energía + tablas SEAT: solo en modo consumo
+                        render_dashboard_energia_v112(df_sint_e, active_sers, "Planificador", st.session_state.get('sl_ui_plan', 480.0))
+                        render_tablas_thdr_planificador(df_sint_final, pct_trac_plan, estacion_anio_plan, use_rm, prevenciones_list)
+                    else:
+                        st.info("🚆 Mostrando solo la **circulación** de trenes. "
+                                "Para ver el consumo de energía (SEAT, IDE, dashboards), pulsa **⚡ Consumo de Energía**.")
+
+                    # Descarga de tabla SEAT cada 15 min (solo en modo consumo)
+                    if generar_tabla_seat_15min is not None and _modo_exec == 'consumo':
                         st.divider()
                         st.markdown("##### 📊 Consumo SEAT por Franja Horaria")
                         try:
