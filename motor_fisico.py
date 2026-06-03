@@ -973,7 +973,7 @@ def resolver_conflictos_anden(df_e, tol_km=0.5):
     return df
 
 
-def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use_regen, dict_regen, estacion_anio="primavera", prevenciones=None, aplicar_anden=False, aplicar_anti_alcance=False):
+def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use_regen, dict_regen, estacion_anio="primavera", prevenciones=None, aplicar_anden=False, aplicar_anti_alcance=False, progress_cb=None):
     df_e = df_dia.copy()
     if df_e.empty: return df_e
     
@@ -1060,7 +1060,13 @@ def calcular_termodinamica_flota_v111(df_dia, pct_trac_ui, use_pend, use_rm, use
                 mejor_tray = trayectorias_por_via[via][-1][5]
             return mejor_tray
 
-        for idx in orden_idx:
+        _n_total_aa = len(orden_idx)
+        for _i_aa, idx in enumerate(orden_idx):
+            if progress_cb is not None and (_i_aa % 5 == 0 or _i_aa == _n_total_aa - 1):
+                try:
+                    progress_cb((_i_aa + 1) / _n_total_aa)
+                except Exception:
+                    pass
             r = df_e.loc[idx]
             via = r['Via']
             tray_ad = _seleccionar_tray_adelante(via, r.get('t_ini', 0.0), r['km_orig'])
