@@ -274,7 +274,7 @@ def generar_trayectoria_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, e
     return trayectoria
 
 @st.cache_data(show_spinner="⚙️ Simulando física de la flota (motor + anti-alcance). En día laboral puede tardar ~2 min…")
-def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig, config_sig=""):
+def procesar_planificador_reactivo(_df_sint, _df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, _prevenciones, plan_sig, config_sig="", man_sig=""):
     viajes_completos = []
     perfiles_por_servicio = {}
     perfiles_por_via = {}
@@ -954,13 +954,24 @@ def main():
                             _km_man = _est_km.get(_est_sel, 0.0)
                             _accion = "CORTE" if "CORTE" in _tipo_sel else "ACOPLE"
                             st.session_state['maniobras_def'][_viaje_sel] = f"{_accion}@{_km_man}"
-                            if _via_svc == 1 and _accion == "ACOPLE":
-                                st.warning("Marcaste ACOPLE en un viaje de Vía 1. Normalmente en V1 se desacopla; revisa si es correcto.")
+                            st.session_state['maniobras_cambiadas'] = True
                             st.rerun()
                     with cb2:
                         if st.button("🗑️ Limpiar todas", use_container_width=True, key="man_clear"):
                             st.session_state['maniobras_def'] = {}
+                            st.session_state['maniobras_cambiadas'] = True
                             st.rerun()
+
+                    # botón para eliminar una maniobra puntual
+                    if st.session_state['maniobras_def']:
+                        _viaje_borrar = st.selectbox("Eliminar maniobra del viaje:", ["—"] + list(st.session_state['maniobras_def'].keys()), key="man_del_sel")
+                        if _viaje_borrar != "—" and st.button("Eliminar esa maniobra", key="man_del_btn"):
+                            st.session_state['maniobras_def'].pop(_viaje_borrar, None)
+                            st.session_state['maniobras_cambiadas'] = True
+                            st.rerun()
+
+                    if st.session_state.get('maniobras_cambiadas', False):
+                        st.warning("⚠️ Cambiaste las maniobras. Pulsa **🚀 Ejecutar Gemelo Digital** para recalcular el consumo con los nuevos acoples/desacoples.")
 
                     # Mostrar maniobras definidas
                     if st.session_state['maniobras_def']:
@@ -976,6 +987,7 @@ def main():
 
             if modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"] and st.button("🚀 Ejecutar Gemelo Digital del Planificador", use_container_width=True, type="primary"):
                 st.session_state['simulacion_plan_lista'] = False
+                st.session_state['maniobras_cambiadas'] = False
                 with st.spinner("Decodificando Malla e inyectando al Motor Cinemático Termodinámico..."):
                     if modo_plan == "Matriz Sintética":
                         df_sintetico_list = []
@@ -1025,7 +1037,7 @@ def main():
                         lambda r: _maniobras.get(str(r[_col_v]), r.get('maniobra')), axis=1)
                 _man_sig = str(sorted(_maniobras.items())) if _maniobras else ""
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature + str(sorted([(p.get('km_min',0),p.get('km_max',0),p.get('v_kmh',0),p.get('via',0)) for p in (prevenciones_list or [])], key=lambda x: x[0])) + str(use_pend) + str(use_rm) + str(use_regen) + str(tipo_regen) + str(estacion_anio_plan) + str(pct_trac_plan) + _man_sig
-                df_sint_final, df_sint_e = procesar_planificador_reactivo(_df_plan_con_man, df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig, config_sig=get_config_hash())
+                df_sint_final, df_sint_e = procesar_planificador_reactivo(_df_plan_con_man, df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig, config_sig=get_config_hash(), man_sig=_man_sig)
                 # Guardar resultados para el Optimizador de Flota
                 st.session_state['opt_df_sint_e'] = df_sint_e
                 st.session_state['opt_params'] = {
