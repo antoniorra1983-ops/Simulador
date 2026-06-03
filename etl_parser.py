@@ -1309,8 +1309,17 @@ def parsear_planilla_maestra(data, fname):
                         if any(kw in unidad_norm for kw in ['MULTIPLE', 'MULT', 'DOBLE', 'DOB', 'ACOPL', '2 UNID', '2UNID', '2UND', '2 UNIDADES', 'DOBLE UNIDAD', 'DUPLA']):
                             es_doble = True
                     
+                    # Capturar el N° de Viaje real (columna "Viaje": 2,4,6,8...)
+                    nro_viaje_val = ''
+                    if viaje_col is not None and pd.notna(row.get(viaje_col)):
+                        _m_nv = re.search(r'(\d+)', str(row[viaje_col]).strip())
+                        if _m_nv:
+                            nro_viaje_val = _m_nv.group(1)
+
                     if via_from_sheet is not None:
                         via = via_from_sheet
+                        if nro_viaje_val:
+                            via = 1 if int(nro_viaje_val) % 2 == 0 else 2
                     elif viaje_col is not None and pd.notna(row.get(viaje_col)):
                         viaje_str = str(row[viaje_col]).strip()
                         m_viaje = re.search(r'(\d+)', viaje_str)
@@ -1371,6 +1380,7 @@ def parsear_planilla_maestra(data, fname):
                         'doble': es_doble,
                         'motriz_num': motriz_num_planilla,
                         'num_servicio': str(servicio_num),
+                        'nro_viaje': nro_viaje_val if nro_viaje_val else str(servicio_num),
                         'svc_type': ruta,
                         'maniobra': None,
                         'pax_abordo': 0,
@@ -1471,6 +1481,7 @@ def parsear_planilla_maestra(data, fname):
                                 'doble': es_doble,
                                 'motriz_num': '',
                                 'num_servicio': str(servicio_num),
+                                'nro_viaje': str(servicio_num),
                                 'svc_type': ruta,
                                 'maniobra': None
                             })
