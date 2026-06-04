@@ -52,21 +52,39 @@ for ki, kf, _, vn, vr in _profile:
 
 _PEND_ARRAY_V1 = np.zeros(45000, dtype=float)
 _PEND_ARRAY_V2 = np.zeros(45000, dtype=float)
-# Perfiles de elevación independientes por vía — Google Earth
-_e_km   = _get_val('_ELEV_KM',   [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13])
-_e_m_v1 = _get_val('_ELEV_M_V1', _get_val('_ELEV_M', [14.5,10.3,14.4,14.1,13.7,20.3,32.4,23.2,20.6,24.0,28.0,103.7,113.5,114.3,120.4,131.7,142.6,148.8,148.1,161.6,95.8]))
-_e_m_v2 = _get_val('_ELEV_M_V2', _e_m_v1)  # fallback a V1 si no existe V2
 
-# Construir pendientes V1 y V2 independientes desde sus perfiles de elevación
-if len(_e_km) == len(_e_m_v1) and len(_e_km) > 1:
-    for j in range(1, len(_e_km)):
-        s_m = int(_e_km[j-1] * 1000)
-        e_m = min(int(_e_km[j] * 1000), 44999)
+def _fill_pend_from_breakpoints(arr, bps, signo=1.0):
+    # bps: lista (pk_metros, pendiente_promil) en convención GEOGRÁFICA (+ sube hacia Limache).
+    # Escalón: cada pendiente rige hasta el siguiente breakpoint.
+    n = len(bps)
+    for k in range(n):
+        s_m = int(bps[k][0])
+        e_m = int(bps[k+1][0]) if k + 1 < n else 45000
+        e_m = min(max(e_m, s_m), 45000)
         if e_m > s_m:
-            pend_v1 = ((_e_m_v1[j] - _e_m_v1[j-1]) / max(0.001, (_e_km[j] - _e_km[j-1])*1000)) * 1000.0
-            pend_v2 = ((_e_m_v2[j] - _e_m_v2[j-1]) / max(0.001, (_e_km[j] - _e_km[j-1])*1000)) * 1000.0
-            _PEND_ARRAY_V1[s_m:e_m] =  pend_v1   # V1: positivo = sube PU→LI
-            _PEND_ARRAY_V2[s_m:e_m] = -pend_v2   # V2: invertido LI→PU
+            arr[s_m:e_m] = signo * bps[k][1]
+
+_rasante_v1 = _get_val('RASANTE_PEND_V1', [])
+_rasante_v2 = _get_val('RASANTE_PEND_V2', [])
+
+if _rasante_v1 and _rasante_v2:
+    # FUENTE PREFERIDA: rasante de ingeniería (perfil longitudinal de proyecto)
+    _fill_pend_from_breakpoints(_PEND_ARRAY_V1, _rasante_v1, signo=+1.0)  # V1: + sube PU→LI
+    _fill_pend_from_breakpoints(_PEND_ARRAY_V2, _rasante_v2, signo=-1.0)  # V2: invertido LI→PU
+else:
+    # FALLBACK: perfil de elevación Google Earth (_ELEV_*) si no hay rasante en config
+    _e_km   = _get_val('_ELEV_KM',   [0.0, 0.7, 1.4, 2.2, 3.9, 6.0, 7.4, 8.3, 9.2, 10.2, 11.7, 19.1, 21.4, 23.3, 25.3, 26.4, 27.6, 28.5, 29.1, 30.4, 43.13])
+    _e_m_v1 = _get_val('_ELEV_M_V1', _get_val('_ELEV_M', [14.5,10.3,14.4,14.1,13.7,20.3,32.4,23.2,20.6,24.0,28.0,103.7,113.5,114.3,120.4,131.7,142.6,148.8,148.1,161.6,95.8]))
+    _e_m_v2 = _get_val('_ELEV_M_V2', _e_m_v1)  # fallback a V1 si no existe V2
+    if len(_e_km) == len(_e_m_v1) and len(_e_km) > 1:
+        for j in range(1, len(_e_km)):
+            s_m = int(_e_km[j-1] * 1000)
+            e_m = min(int(_e_km[j] * 1000), 44999)
+            if e_m > s_m:
+                pend_v1 = ((_e_m_v1[j] - _e_m_v1[j-1]) / max(0.001, (_e_km[j] - _e_km[j-1])*1000)) * 1000.0
+                pend_v2 = ((_e_m_v2[j] - _e_m_v2[j-1]) / max(0.001, (_e_km[j] - _e_km[j-1])*1000)) * 1000.0
+                _PEND_ARRAY_V1[s_m:e_m] =  pend_v1   # V1: positivo = sube PU→LI
+                _PEND_ARRAY_V2[s_m:e_m] = -pend_v2   # V2: invertido LI→PU
 
 _CURVA_ARRAY = np.zeros(45000, dtype=float)
 _curvas = _get_val('CURVAS_KM', [])
