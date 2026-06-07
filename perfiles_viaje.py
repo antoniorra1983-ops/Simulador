@@ -145,9 +145,14 @@ def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
     fig.update_yaxes(showgrid=True, gridcolor='rgba(0,0,0,0.06)')
     fig.update_xaxes(title_text="PK (km)  ·  Puerto = 0 → Limache = 43.1", row=3, col=1)
     fig.update_yaxes(range=[0, 130], row=1, col=1)
-    fig.update_yaxes(title_text="Esfuerzo (kN)", row=3, col=1, secondary_y=False)
+    # Ejes del panel de tracción: escalados a los datos de ESTE tren (no fijos),
+    # si no, trenes potentes (XT-M, SFE) se recortan y parecen iguales.
+    f_axis = max(50.0, float(df['f_real_kN'].abs().max()) * 1.12)
+    p_axis = max(100.0, float(df['P_trac_kW'].max()) * 1.10)
+    fig.update_yaxes(title_text="Esfuerzo (kN)", row=3, col=1, secondary_y=False,
+                     range=[-f_axis, f_axis])
     fig.update_yaxes(title_text="Potencia (kW)", row=3, col=1, secondary_y=True,
-                     range=[0, 800], showgrid=False)
+                     range=[0, p_axis], showgrid=False)
     return fig
 
 
