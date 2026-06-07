@@ -43,6 +43,9 @@ def obtener_pct_traccion_operativo(row, pct_trac_ui):
 # =============================================================================
 _VEL_ARRAY_NORM = np.zeros(45000, dtype=float)
 _VEL_ARRAY_RM = np.zeros(45000, dtype=float)
+# --- Instrumentación opcional para laboratorio de perfiles (v, altura, tracción) ---
+_TRACE_ON = False
+_TRACE = []  # cada paso: dict con km, v, estado, fuerzas, potencia, masa
 _profile = _get_val('SPEED_PROFILE', [])
 for ki, kf, _, vn, vr in _profile:
     start_idx = int(ki)
@@ -688,8 +691,22 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             km_actual_sim = (pos_m + dist_recorrida) / 1000.0 if via_op == 1 else (pos_m - dist_recorrida) / 1000.0
             p_regen_sim = (min(abs(f_real_total), f_disp_freno) * max(0.0, v_ms) / 1000.0 * eta_regen_mec
                           if f_real_total < 0 and estado_marcha in ['BRAKE_STATION','BRAKE_OVERSPEED','COAST'] else 0.0)
+            _pot_trac_kw_p = (f_real_total * v_ms / 1000.0) if f_real_total > 0 else 0.0
             perfil_potencia.append((t_ini_mins + t_horas*60.0, km_actual_sim,
-                                    v_ms*3.6, estado_marcha, p_regen_sim))
+                                    v_ms*3.6, estado_marcha, p_regen_sim,
+                                    f_real_total/1000.0, _pot_trac_kw_p))
+            if _TRACE_ON:
+                _pot_trac_kw = (f_real_total * v_ms / 1000.0) if f_real_total > 0 else 0.0
+                _pot_freno_kw = (f_real_total * v_ms / 1000.0) if f_real_total < 0 else 0.0
+                _TRACE.append({
+                    't_min': t_ini_mins + t_horas*60.0, 'km': km_actual_sim,
+                    'v_kmh': v_ms*3.6, 'estado': estado_marcha,
+                    'f_real_kN': f_real_total/1000.0, 'f_res_kN': f_res_total/1000.0,
+                    'f_davis_kN': f_davis/1000.0, 'f_pend_kN': f_pend/1000.0,
+                    'f_curva_kN': f_curva/1000.0, 'a_ms2': a_net,
+                    'P_trac_kW': _pot_trac_kw, 'P_freno_kW': _pot_freno_kw,
+                    'masa_t': masa_estatica_kg/1000.0, 'pax': pax_mid,
+                })
             t_horas += dt_actual / 3600.0
             dist_recorrida += step_m
             v_ms = v_new
@@ -790,7 +807,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
             f = _get_val('FLOTA', {}).get(r.get('tipo_tren', 'XT-100'), {})
             n_uni = 2 if r.get('doble', False) else 1
 
-            for t_mins, km, v_kmh, estado, p_regen_kw in perfil:
+            for t_mins, km, v_kmh, estado, p_regen_kw, *_ in perfil:
                 t_bin = round(t_mins / DT_BIN) * DT_BIN
 
                 if p_regen_kw > 0:
