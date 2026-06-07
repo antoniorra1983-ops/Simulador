@@ -80,6 +80,10 @@ from red_electrica import (
     calcular_flujo_ac_nodo, distribuir_energia_sers, distribuir_potencia_sers_kw
 )
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
+try:
+    from perfiles_viaje import render_perfiles_viaje
+except Exception:
+    render_perfiles_viaje = None  # módulo opcional de perfiles (velocidad/altura/tracción)
 
 def get_config_hash():
     """Hash de los parámetros físicos del config — si cambia, invalida la caché."""
@@ -1079,6 +1083,10 @@ def main():
                 try:
                     # SCADA + horarios + mapa: siempre (circulación y consumo)
                     render_gemelo_digital(df_sint_final, df_sint_e, active_sers, f"Simulación: {nombre_perfil}", pct_trac_plan, use_rm, use_pend, estacion_anio_plan, "plan", gap_vias, pax_dia_total=int(df_sint_final['pax_abordo'].sum()))
+
+                    # Perfiles del viaje (velocidad · altura · tracción) por servicio
+                    if render_perfiles_viaje is not None:
+                        render_perfiles_viaje(df_sint_e, "plan")
 
                     if _modo_exec == 'consumo':
                         # Dashboards de energía + tablas SEAT: solo en modo consumo
