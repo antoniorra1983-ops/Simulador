@@ -81,10 +81,11 @@ from red_electrica import (
 )
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 try:
-    from perfiles_viaje import render_perfiles_viaje
+    from perfiles_viaje import render_perfiles_viaje, figura_perfiles
     _PERFILES_IMPORT_ERROR = None
 except Exception as _e_perf:
     render_perfiles_viaje = None
+    figura_perfiles = None
     _PERFILES_IMPORT_ERROR = repr(_e_perf)  # se mostrará en la UI si falta el módulo
 
 def get_config_hash():
@@ -873,14 +874,15 @@ def main():
                         via_sb = 1 if idx_o < idx_d else 2
                         nodos_sb = [(0.0, km_acum_safe[i]) for i in (range(idx_o, idx_d + 1) if via_sb == 1 else range(idx_o, idx_d - 1, -1))]
                         
+                        datos_sim_sb = None
                         with st.spinner("Calculando termodinámica..."):
                             try:
-                                trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb, _ = simular_tramo_termodinamico(
+                                trc_sb, aux_sb, reg_sb, datos_sim_sb, neto_sb, th_sb, _ = simular_tramo_termodinamico(
                                     sb_flota, False, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
                                     None, estacion_anio_plan, 480.0, es_vacio=sb_es_vacio, prevenciones=prevenciones_list
                                 )
                             except TypeError:
-                                trc_sb, aux_sb, reg_sb, _, neto_sb, th_sb, _ = simular_tramo_termodinamico(
+                                trc_sb, aux_sb, reg_sb, datos_sim_sb, neto_sb, th_sb, _ = simular_tramo_termodinamico(
                                     sb_flota, False, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
                                     None, estacion_anio_plan, 480.0, es_vacio=sb_es_vacio
                                 )
@@ -909,6 +911,17 @@ def main():
                             c_sb3.metric("💡 IDE del Tramo (SEAT)", f"{ide_sb:.3f} kWh/km")
                         except Exception as e:
                             st.error(f"Simulación Física Completada: Tracción {trc_sb:.1f} kWh. (Red Eléctrica no conectada en GUI. Error: {e})")
+
+                        # Perfiles del tramo: velocidad · altura · tracción
+                        if figura_perfiles is not None and isinstance(datos_sim_sb, dict):
+                            _fig_lab = figura_perfiles(
+                                datos_sim_sb,
+                                titulo=f"{sb_orig} → {sb_dest} · {sb_flota} · V{via_sb}")
+                            if _fig_lab is not None:
+                                st.plotly_chart(_fig_lab, use_container_width=True,
+                                                key="lab_perfiles_fig")
+                        elif figura_perfiles is None:
+                            st.caption(f"📈 Perfiles no disponibles: {_PERFILES_IMPORT_ERROR}")
 
             # === EDITOR DE MANIOBRAS DE ACOPLE / DESACOPLE ===
             if st.session_state.get('raw_plan_df') is not None:
