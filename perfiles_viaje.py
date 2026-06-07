@@ -81,7 +81,8 @@ def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
     x_lo, x_hi = max(0.0, km_min - pad), min(43.2, km_max + pad)
 
     fig = make_subplots(
-        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.055,
+        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.07,
+        specs=[[{}], [{}], [{"secondary_y": True}]],
         subplot_titles=("Velocidad (km/h)",
                         "Altura — rasante (m)",
                         "Tracción — esfuerzo en rueda (kN) y potencia (kW)"))
@@ -112,22 +113,27 @@ def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
                              hovertemplate='PK %{x:.2f} km<br>%{y:.0f} kN<extra></extra>'),
                   row=3, col=1)
     fig.add_trace(go.Scatter(x=df['km'], y=df['P_trac_kW'], mode='lines',
-                             name='Potencia (kW)', yaxis='y4',
-                             line=dict(color='#264653', width=0.8, dash='dot'),
-                             opacity=0.6,
+                             name='Potencia (kW)',
+                             line=dict(color='#264653', width=1.0, dash='dot'),
+                             opacity=0.65,
                              hovertemplate='PK %{x:.2f} km<br>%{y:.0f} kW<extra></extra>'),
-                  row=3, col=1)
-    # eje secundario para la potencia, superpuesto al 3er panel
-    fig.update_layout(yaxis4=dict(overlaying='y3', side='right', anchor='x',
-                                  title='Potencia (kW)', showgrid=False,
-                                  rangemode='tozero'))
+                  row=3, col=1, secondary_y=True)
 
-    # Estaciones como líneas verticales en los 3 paneles
+    # Estaciones como líneas verticales en los 3 paneles (robusto ante eje secundario)
     for k in _KM:
         if x_lo <= k <= x_hi:
             for r in (1, 2, 3):
-                fig.add_vline(x=k, line_width=0.4, line_color='rgba(120,120,120,0.35)',
-                              row=r, col=1)
+                try:
+                    if r == 3:
+                        fig.add_vline(x=k, line_width=0.4,
+                                      line_color='rgba(120,120,120,0.35)',
+                                      row=r, col=1, secondary_y=False)
+                    else:
+                        fig.add_vline(x=k, line_width=0.4,
+                                      line_color='rgba(120,120,120,0.35)',
+                                      row=r, col=1)
+                except Exception:
+                    pass
 
     fig.update_layout(
         title=dict(text=titulo, font=dict(size=15)),
@@ -139,7 +145,9 @@ def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
     fig.update_yaxes(showgrid=True, gridcolor='rgba(0,0,0,0.06)')
     fig.update_xaxes(title_text="PK (km)  ·  Puerto = 0 → Limache = 43.1", row=3, col=1)
     fig.update_yaxes(range=[0, 130], row=1, col=1)
-    fig.update_yaxes(title_text="Esfuerzo (kN)", row=3, col=1)
+    fig.update_yaxes(title_text="Esfuerzo (kN)", row=3, col=1, secondary_y=False)
+    fig.update_yaxes(title_text="Potencia (kW)", row=3, col=1, secondary_y=True,
+                     range=[0, 800], showgrid=False)
     return fig
 
 
