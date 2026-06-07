@@ -82,8 +82,10 @@ from red_electrica import (
 from ui_dashboards import render_gemelo_digital, render_dashboard_energia_v112
 try:
     from perfiles_viaje import render_perfiles_viaje
-except Exception:
-    render_perfiles_viaje = None  # módulo opcional de perfiles (velocidad/altura/tracción)
+    _PERFILES_IMPORT_ERROR = None
+except Exception as _e_perf:
+    render_perfiles_viaje = None
+    _PERFILES_IMPORT_ERROR = repr(_e_perf)  # se mostrará en la UI si falta el módulo
 
 def get_config_hash():
     """Hash de los parámetros físicos del config — si cambia, invalida la caché."""
@@ -1087,6 +1089,9 @@ def main():
                     # Perfiles del viaje (velocidad · altura · tracción) por servicio
                     if render_perfiles_viaje is not None:
                         render_perfiles_viaje(df_sint_e, "plan")
+                    else:
+                        st.warning(f"📈 Módulo de perfiles no cargado. Verifica que **perfiles_viaje.py** "
+                                   f"esté junto a app.py. Detalle: {_PERFILES_IMPORT_ERROR}")
 
                     if _modo_exec == 'consumo':
                         # Dashboards de energía + tablas SEAT: solo en modo consumo
