@@ -56,15 +56,20 @@ def _hhmm(t_min):
 
 
 def construir_perfiles(datos_sim):
-    """datos_sim → DataFrame (t_min, km, v_kmh, estado, f_real_kN, P_trac_kW)."""
+    """datos_sim → DataFrame (t_min, km, v_kmh, estado, f_real_kN, P_trac_kW,
+    p_regen_kW, P_neta_kW). P_neta = tracción (+) − regeneración (−)."""
     perfil = datos_sim.get('perfil', []) if isinstance(datos_sim, dict) else []
     rows = []
     for p in perfil:
+        p_regen = p[4] if len(p) > 4 else 0.0
         f_real = p[5] if len(p) > 5 else 0.0
         P_trac = p[6] if len(p) > 6 else 0.0
-        rows.append((p[0], p[1], p[2], p[3], f_real, P_trac))
-    return pd.DataFrame(rows, columns=['t_min', 'km', 'v_kmh', 'estado',
-                                       'f_real_kN', 'P_trac_kW'])
+        rows.append((p[0], p[1], p[2], p[3], f_real, P_trac, p_regen))
+    df = pd.DataFrame(rows, columns=['t_min', 'km', 'v_kmh', 'estado',
+                                     'f_real_kN', 'P_trac_kW', 'p_regen_kW'])
+    # Potencia eléctrica neta: + cuando consume (tracción), − cuando regenera (frena)
+    df['P_neta_kW'] = df['P_trac_kW'] - df['p_regen_kW']
+    return df
 
 
 def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
@@ -112,10 +117,10 @@ def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
                              fill='tozeroy', fillcolor='rgba(231,111,81,0.55)',
                              hovertemplate='PK %{x:.2f} km<br>%{y:.0f} kN<extra></extra>'),
                   row=3, col=1)
-    fig.add_trace(go.Scatter(x=df['km'], y=df['P_trac_kW'], mode='lines',
-                             name='Potencia (kW)',
+    fig.add_trace(go.Scatter(x=df['km'], y=df['P_neta_kW'], mode='lines',
+                             name='Potencia (+consumo / −regen)',
                              line=dict(color='#264653', width=1.0, dash='dot'),
-                             opacity=0.65,
+                             opacity=0.7,
                              hovertemplate='PK %{x:.2f} km<br>%{y:.0f} kW<extra></extra>'),
                   row=3, col=1, secondary_y=True)
 
@@ -148,11 +153,15 @@ def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
     # Ejes del panel de tracción: escalados a los datos de ESTE tren (no fijos),
     # si no, trenes potentes (XT-M, SFE) se recortan y parecen iguales.
     f_axis = max(50.0, float(df['f_real_kN'].abs().max()) * 1.12)
-    p_axis = max(100.0, float(df['P_trac_kW'].max()) * 1.10)
+    p_hi = max(100.0, float(df['P_neta_kW'].max()) * 1.10)
+    p_lo = min(0.0, float(df['P_neta_kW'].min()) * 1.10)
     fig.update_yaxes(title_text="Esfuerzo (kN)", row=3, col=1, secondary_y=False,
                      range=[-f_axis, f_axis])
-    fig.update_yaxes(title_text="Potencia (kW)", row=3, col=1, secondary_y=True,
-                     range=[0, p_axis], showgrid=False)
+    fig.update_yaxes(title_text="Potencia (kW): +consumo / −regen", row=3, col=1,
+                     secondary_y=True, range=[p_lo, p_hi], showgrid=False)
+    # línea de cero en el panel de tracción para separar tracción/freno y consumo/regen
+    fig.add_hline(y=0, line_width=0.6, line_color='rgba(0,0,0,0.45)', row=3, col=1,
+                  secondary_y=False)
     return fig
 
 
