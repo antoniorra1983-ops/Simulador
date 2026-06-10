@@ -331,6 +331,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     prevencion_aplicada = 0
     tiempos_estaciones = []  # (t_mins_absoluto, km) para cada estación simulada
     perfil_potencia    = []  # (t_mins, km, v_kmh, estado, p_regen_kw) cada dt=1s
+    v_bus_dc = _get_val('V_NOMINAL_DC', 3000.0)  # tensión de barra SER (vacío)
     
     paradas_km = [n[1] for n in nodos] if nodos else [k_s, k_e]
     k_min, k_max = min(k_s, k_e), max(k_s, k_e)
@@ -521,10 +522,15 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             
             dist_ser = min([abs(km_actual - s[0]) for s in ser_data]) if ser_data else 5.0
             r_linea = _get_resistencia_catenaria_km(km_actual) * dist_ser
-            # Caída de voltaje: estimar corriente desde potencia disponible
-            _p_est_w = p_max_w_nominal * (pct_trac / 100.0) * min(1.0, v_kmh / max(1.0, v_cons_kmh))
-            i_req = _p_est_w / max(100.0, 3000.0 * v_ms if v_ms > 0.1 else 3000.0)
-            v_pantografo = 3000.0 - (i_req * r_linea)
+            # Caída de tensión con corriente real I = P/V (física correcta):
+            #   en aceleración la demanda ≈ p_max; en crucero solo vence la resistencia.
+            _eta_t = _get_val('ETA_TRAC_SISTEMA', 0.85)
+            if v_kmh < v_cons_kmh - 2.0:
+                _p_elec_w = p_max_w_nominal * (pct_trac / 100.0)
+            else:
+                _p_elec_w = max(0.0, f_res_total * v_ms) / max(0.5, _eta_t)
+            i_req = _p_elec_w / v_bus_dc
+            v_pantografo = v_bus_dc - (i_req * r_linea)
             
             factor_squeeze = 1.0
             if v_pantografo < 2800.0: factor_squeeze = max(0.0, (v_pantografo - 2000.0) / 800.0)
@@ -706,6 +712,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                     'f_curva_kN': f_curva/1000.0, 'a_ms2': a_net,
                     'P_trac_kW': _pot_trac_kw, 'P_freno_kW': _pot_freno_kw,
                     'masa_t': masa_estatica_kg/1000.0, 'pax': pax_mid,
+                    'v_pant': v_pantografo, 'f_squeeze': factor_squeeze,
+                    'dist_ser_km': dist_ser, 'r_linea': r_linea,
                 })
             t_horas += dt_actual / 3600.0
             dist_recorrida += step_m
@@ -901,6 +909,85 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
             regen_util_per_trip[idx] = 0.0
 
     return regen_util_per_trip
+
+
+def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
+    """REPORTE de tensión por tramo inter-SER con la corriente SIMULTÁNEA de
+    todos los trenes (modo reporte: NO re-simula viajes).
+
+    Modelo radial desde la SER más cercana con superposición de corrientes:
+    la corriente de cada tren circula por los segmentos de catenaria entre él
+    y su SER. Es conservador (alimentación por un solo extremo); con dos
+    extremos las caídas serían ~la mitad.
+
+    Devuelve dict: v_bus, v_min_global, peak_demand_kw, n_subtension, por_via.
+    """
+    from collections import defaultdict
+    v_bus = _get_val('V_NOMINAL_DC', 3295.0)
+    sers = sorted([s[0] for s in _get_val('SER_DATA', [])]) or [4.9, 12.7, 25.5, 28.7]
+    DT_BIN = dt_bin_s / 60.0
+
+    def nearest_ser(km):
+        return min(sers, key=lambda s: abs(s - km))
+
+    eventos = defaultdict(list)   # (via, t_bin) -> [(km, I_amp)] UNA entrada por tren
+    for via_ in (1, 2):
+        sub = df_dia[df_dia['Via'] == via_] if 'Via' in df_dia.columns else df_dia.iloc[0:0]
+        for _, r in sub.iterrows():
+            datos = r.get('datos_sim')
+            if not isinstance(datos, dict):
+                continue
+            n_uni = 2 if r.get('doble', False) else 1
+            # Agrupar los pasos de ESTE tren por bin y promediar (1 valor por tren/bin)
+            por_bin = defaultdict(list)
+            for p in datos.get('perfil', []):
+                P_trac_kw = (p[6] if len(p) > 6 else 0.0) * n_uni
+                t_bin = round(p[0] / DT_BIN) * DT_BIN
+                por_bin[t_bin].append((p[1], P_trac_kw))
+            for t_bin, steps in por_bin.items():
+                P_avg = sum(s[1] for s in steps) / len(steps)
+                if P_avg <= 0:
+                    continue
+                km_avg = sum(s[0] for s in steps) / len(steps)
+                eventos[(via_, t_bin)].append((km_avg, P_avg * 1000.0 / v_bus))
+
+    v_min_global = v_bus
+    peak_demand_kw = 0.0
+    n_subtension = 0
+    por_via = {1: {'v_min': v_bus, 'peak_kw': 0.0}, 2: {'v_min': v_bus, 'peak_kw': 0.0}}
+
+    for (via_, _t_bin), loads in eventos.items():
+        P_bin = sum(I for _, I in loads) * v_bus / 1000.0
+        peak_demand_kw = max(peak_demand_kw, P_bin)
+        por_via[via_]['peak_kw'] = max(por_via[via_]['peak_kw'], P_bin)
+        grupos = defaultdict(list)
+        for km, I in loads:
+            sk = nearest_ser(km)
+            grupos[sk].append((abs(km - sk), km, I))
+        for _sk, gl in grupos.items():
+            gl.sort()
+            dists = [d for d, _, _ in gl]
+            kms = [k for _, k, _ in gl]
+            corrs = [I for _, _, I in gl]
+            for k in range(len(gl)):
+                vdrop = 0.0
+                prev = 0.0
+                for s in range(k + 1):
+                    seg = dists[s] - prev
+                    prev = dists[s]
+                    i_down = sum(corrs[s:])
+                    vdrop += _get_resistencia_catenaria_km(kms[s]) * seg * i_down
+                v_k = v_bus - vdrop
+                v_min_global = min(v_min_global, v_k)
+                por_via[via_]['v_min'] = min(por_via[via_]['v_min'], v_k)
+                if v_k < squeeze_v:
+                    n_subtension += 1
+
+    return {
+        'v_bus': v_bus, 'v_min_global': v_min_global,
+        'peak_demand_kw': peak_demand_kw, 'n_subtension': n_subtension,
+        'por_via': por_via, 'sers': sers,
+    }
 
 # Configuracion de andenes por terminal: km -> (nombre, n_vias_bloqueo)
 # Puerto (km 0): 2 vias de anden. Un tren entrante espera si las 2 estan ocupadas.
