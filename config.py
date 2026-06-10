@@ -72,7 +72,7 @@ LAMBDA_REGEN_KM  = 5.0
 ETA_SER_RECTIFICADOR = 0.96 
 ETA_TRAFO_RED = 0.99  # Pérdidas de transformadores de la red (elevador SEAT + reductores SER), ~1%. Reemplaza el antiguo factor de ajuste 1.15² sobre pérdidas de línea.
 ETA_MAX   = 0.70
-V_NOMINAL_DC = 3000.0
+V_NOMINAL_DC = 3295.0   # barra SER en vacío: 2 rectificadores en serie × 1.648 kV cc
 V_SQUEEZE_WARN = 2850.0
 
 # =============================================================================
