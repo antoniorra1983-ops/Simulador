@@ -1118,8 +1118,8 @@ def main():
                             _r1[2].metric("V mín en catenaria", f"{_rep['v_min_global']:.0f} V")
                             _r1[3].metric("Pasos en subtensión", f"{_rep['n_subtension']}")
                             _r2 = st.columns(3)
-                            _r2[0].metric("Corriente máx SER", f"{_rep['i_ser_max']:.0f} A")
-                            _r2[1].metric("Corriente máx SEAT (pantógrafo)", f"{_rep['i_seat_max']:.0f} A")
+                            _r2[0].metric("Corriente máx SER (rectificadora)", f"{_rep['i_ser_max']:.0f} A")
+                            _r2[1].metric("Corriente máx SEAT (principal)", f"{_rep['i_seat_max']:.0f} A")
                             _r2[2].metric("Demanda pico", f"{_rep['peak_demand_kw']:.0f} kW")
                     except Exception as _e_red:
                         st.caption(f"(Reporte de tensión no disponible: {_e_red})")
