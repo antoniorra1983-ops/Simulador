@@ -1060,19 +1060,27 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
         for sk, i_ser in por_ser.items():
             i_ser_pico[sk] = max(i_ser_pico.get(sk, 0.0), i_ser)
 
-    # --- Tensión de barra de cada SER (regulación del rectificador bajo su pico) ---
-    #   V_ser = V_vacío × (1 − reg × I/I_nom).
+    # --- Tensión de barra de cada SER (2 trafos en serie; regulación bajo su pico) ---
+    #   Capacidad es POR TRANSFORMADOR; en serie ambos llevan la misma corriente,
+    #   así que I_nom del SER = N_trafos × cap_trafo / V_bus. V_ser = V_vacío × (1 − reg × I/I_nom).
+    n_trafos = max(1, int(_get_val('N_TRAFOS_SER', 2)))
+    v_trafo = v_bus / n_trafos
     i_ser_max = max(i_ser_pico.values()) if i_ser_pico else 0.0
     detalle_ser = {}
     v_ser_min = v_bus
     for sk, i_pico in i_ser_pico.items():
         nom = ser_nombre.get(sk, f'SER@{sk}')
-        i_nom = (cap_ser.get(nom, 3000.0) * 1000.0) / v_bus
+        cap_trafo = cap_ser.get(nom, 3000.0)
+        cap_total = n_trafos * cap_trafo
+        i_nom = (cap_total * 1000.0) / v_bus          # = corriente nominal por trafo (serie)
         v_barra = v_bus * (1.0 - reg_ser * (i_pico / max(1.0, i_nom)))
         v_ser_min = min(v_ser_min, v_barra)
         detalle_ser[nom] = {'km': sk, 'i_pico_A': i_pico, 'i_nom_A': i_nom,
                             'carga_pct': 100.0 * i_pico / max(1.0, i_nom),
-                            'v_barra': v_barra}
+                            'v_barra': v_barra,
+                            'n_trafos': n_trafos, 'v_trafo': v_trafo,
+                            'i_trafo_A': i_pico,           # en serie, cada trafo lleva la corriente del SER
+                            'cap_trafo_kw': cap_trafo, 'cap_total_kw': cap_total}
 
     return {
         'v_bus': v_bus, 'v_min_global': v_min_global,
