@@ -1111,12 +1111,16 @@ def main():
                         import motor_fisico as _mf
                         if hasattr(_mf, 'analizar_tension_secciones'):
                             _rep = _mf.analizar_tension_secciones(df_sint_e)
-                            st.caption("⚡ Tensión de red DC (corriente simultánea de todos los trenes — modelo radial conservador)")
-                            _cc = st.columns(4)
-                            _cc[0].metric("Barra SER", f"{_rep['v_bus']:.0f} V")
-                            _cc[1].metric("V mínima en sección", f"{_rep['v_min_global']:.0f} V")
-                            _cc[2].metric("Demanda pico", f"{_rep['peak_demand_kw']:.0f} kW")
-                            _cc[3].metric("Pasos en subtensión", f"{_rep['n_subtension']}")
+                            st.caption("⚡ Red DC — corriente simultánea de todos los trenes (modelo radial conservador)")
+                            _r1 = st.columns(4)
+                            _r1[0].metric("Tensión barra SER máx", f"{_rep['v_ser_max']:.0f} V")
+                            _r1[1].metric("Tensión barra SER mín", f"{_rep['v_ser_min']:.0f} V")
+                            _r1[2].metric("V mín en catenaria", f"{_rep['v_min_global']:.0f} V")
+                            _r1[3].metric("Pasos en subtensión", f"{_rep['n_subtension']}")
+                            _r2 = st.columns(3)
+                            _r2[0].metric("Corriente máx SER", f"{_rep['i_ser_max']:.0f} A")
+                            _r2[1].metric("Corriente máx SEAT (pantógrafo)", f"{_rep['i_seat_max']:.0f} A")
+                            _r2[2].metric("Demanda pico", f"{_rep['peak_demand_kw']:.0f} kW")
                     except Exception as _e_red:
                         st.caption(f"(Reporte de tensión no disponible: {_e_red})")
 
