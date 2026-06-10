@@ -1121,6 +1121,22 @@ def main():
                             _r2[0].metric("Corriente máx SER (rectificadora)", f"{_rep['i_ser_max']:.0f} A")
                             _r2[1].metric("Corriente máx SEAT (principal)", f"{_rep['i_seat_max']:.0f} A")
                             _r2[2].metric("Demanda pico", f"{_rep['peak_demand_kw']:.0f} kW")
+
+                            # Corriente máxima por cada una de las 4 SER
+                            _det = _rep.get('detalle_ser', {})
+                            if _det:
+                                _filas = []
+                                for _nom, _d in sorted(_det.items(), key=lambda x: x[1]['km']):
+                                    _filas.append({
+                                        "SER": _nom,
+                                        "PK (km)": round(_d['km'], 1),
+                                        "I máx (A)": round(_d['i_pico_A']),
+                                        "I nominal (A)": round(_d['i_nom_A']),
+                                        "Carga (%)": round(_d['carga_pct']),
+                                        "Barra (V)": round(_d['v_barra']),
+                                    })
+                                st.caption("Corriente máxima por SER")
+                                st.dataframe(pd.DataFrame(_filas), use_container_width=True, hide_index=True)
                     except Exception as _e_red:
                         st.caption(f"(Reporte de tensión no disponible: {_e_red})")
 
