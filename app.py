@@ -1122,7 +1122,7 @@ def main():
                             _r2[1].metric("Corriente máx SEAT (principal)", f"{_rep['i_seat_max']:.0f} A")
                             _r2[2].metric("Demanda pico", f"{_rep['peak_demand_kw']:.0f} kW")
 
-                            # Corriente máxima por cada una de las 4 SER
+                            # Corriente máxima por cada una de las 4 SER (2 trafos en serie c/u)
                             _det = _rep.get('detalle_ser', {})
                             if _det:
                                 _filas = []
@@ -1134,8 +1134,10 @@ def main():
                                         "I nominal (A)": round(_d['i_nom_A']),
                                         "Carga (%)": round(_d['carga_pct']),
                                         "Barra (V)": round(_d['v_barra']),
+                                        "Trafos": _d.get('n_trafos', 2),
+                                        "Cap. total (kW)": round(_d.get('cap_total_kw', 0)),
                                     })
-                                st.caption("Corriente máxima por SER")
+                                st.caption("Corriente máxima por SER (cada SER = 2 trafos en serie; en serie ambos llevan la misma corriente)")
                                 st.dataframe(pd.DataFrame(_filas), use_container_width=True, hide_index=True)
                     except Exception as _e_red:
                         st.caption(f"(Reporte de tensión no disponible: {_e_red})")
