@@ -1121,6 +1121,9 @@ def main():
                             _r2[0].metric("Corriente máx SER (rectificadora)", f"{_rep['i_ser_max']:.0f} A")
                             _r2[1].metric("Corriente máx SEAT (principal)", f"{_rep['i_seat_max']:.0f} A")
                             _r2[2].metric("Demanda pico", f"{_rep['peak_demand_kw']:.0f} kW")
+                            st.caption(f"🕑 Pico del sistema (SEAT) a las **{_rep.get('t_seat_max_hhmm','—')}** · "
+                                       f"pico de la SER más cargada ({_rep.get('ser_max_nombre','—')}) a las "
+                                       f"**{_rep.get('t_ser_max_hhmm','—')}**")
 
                             # Corriente máxima por cada una de las 4 SER (2 trafos en serie c/u)
                             _det = _rep.get('detalle_ser', {})
@@ -1131,6 +1134,7 @@ def main():
                                         "SER": _nom,
                                         "PK (km)": round(_d['km'], 1),
                                         "I máx (A)": round(_d['i_pico_A']),
+                                        "Hora pico": _d.get('t_pico_hhmm', '—'),
                                         "I nominal (A)": round(_d['i_nom_A']),
                                         "Carga (%)": round(_d['carga_pct']),
                                         "Barra (V)": round(_d['v_barra']),
