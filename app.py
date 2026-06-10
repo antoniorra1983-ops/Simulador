@@ -1106,6 +1106,20 @@ def main():
                         st.warning(f"📈 Módulo de perfiles no cargado. Verifica que **perfiles_viaje.py** "
                                    f"esté junto a app.py. Detalle: {_PERFILES_IMPORT_ERROR}")
 
+                    # Reporte de tensión de red con la corriente SIMULTÁNEA de los trenes
+                    try:
+                        import motor_fisico as _mf
+                        if hasattr(_mf, 'analizar_tension_secciones'):
+                            _rep = _mf.analizar_tension_secciones(df_sint_e)
+                            st.caption("⚡ Tensión de red DC (corriente simultánea de todos los trenes — modelo radial conservador)")
+                            _cc = st.columns(4)
+                            _cc[0].metric("Barra SER", f"{_rep['v_bus']:.0f} V")
+                            _cc[1].metric("V mínima en sección", f"{_rep['v_min_global']:.0f} V")
+                            _cc[2].metric("Demanda pico", f"{_rep['peak_demand_kw']:.0f} kW")
+                            _cc[3].metric("Pasos en subtensión", f"{_rep['n_subtension']}")
+                    except Exception as _e_red:
+                        st.caption(f"(Reporte de tensión no disponible: {_e_red})")
+
                     if _modo_exec == 'consumo':
                         # Dashboards de energía + tablas SEAT: solo en modo consumo
                         render_dashboard_energia_v112(df_sint_e, active_sers, "Planificador", st.session_state.get('sl_ui_plan', 480.0))
