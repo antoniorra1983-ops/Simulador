@@ -1041,11 +1041,15 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
 
     # --- Corriente por SER (4 rectif., reparto a dos extremos) y SEAT (sistema completo) ---
     i_seat_max = 0.0           # corriente total simultánea = subestación principal SEAT
+    t_seat_max = None          # bin (min desde medianoche) del pico de SEAT
     peak_demand_kw = 0.0
     i_ser_pico = {}            # km SER -> corriente agregada pico (A)
+    t_ser_pico = {}            # km SER -> bin (min) del pico de esa SER
     for _t_bin, loads in eventos_bin.items():
         i_total = sum(I for _, I in loads)        # todos los trenes de ambas vías
-        i_seat_max = max(i_seat_max, i_total)
+        if i_total > i_seat_max:
+            i_seat_max = i_total
+            t_seat_max = _t_bin
         peak_demand_kw = max(peak_demand_kw, i_total * v_bus / 1000.0)
         por_ser = defaultdict(float)
         for km, I in loads:
@@ -1058,14 +1062,25 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
             else:                                 # punta: toda a la SER de la punta
                 por_ser[key[1]] += I
         for sk, i_ser in por_ser.items():
-            i_ser_pico[sk] = max(i_ser_pico.get(sk, 0.0), i_ser)
+            if i_ser > i_ser_pico.get(sk, 0.0):
+                i_ser_pico[sk] = i_ser
+                t_ser_pico[sk] = _t_bin
 
     # --- Tensión de barra de cada SER (2 trafos en serie; regulación bajo su pico) ---
     #   Capacidad es POR TRANSFORMADOR; en serie ambos llevan la misma corriente,
     #   así que I_nom del SER = N_trafos × cap_trafo / V_bus. V_ser = V_vacío × (1 − reg × I/I_nom).
     n_trafos = max(1, int(_get_val('N_TRAFOS_SER', 2)))
     v_trafo = v_bus / n_trafos
+
+    def _hhmm(m):
+        if m is None:
+            return "—"
+        m = int(round(m)) % 1440
+        return f"{m // 60:02d}:{m % 60:02d}"
+
     i_ser_max = max(i_ser_pico.values()) if i_ser_pico else 0.0
+    sk_max = max(i_ser_pico, key=i_ser_pico.get) if i_ser_pico else None
+    t_ser_max = t_ser_pico.get(sk_max) if sk_max is not None else None
     detalle_ser = {}
     v_ser_min = v_bus
     for sk, i_pico in i_ser_pico.items():
@@ -1080,7 +1095,9 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
                             'v_barra': v_barra,
                             'n_trafos': n_trafos, 'v_trafo': v_trafo,
                             'i_trafo_A': i_pico,           # en serie, cada trafo lleva la corriente del SER
-                            'cap_trafo_kw': cap_trafo, 'cap_total_kw': cap_total}
+                            'cap_trafo_kw': cap_trafo, 'cap_total_kw': cap_total,
+                            't_pico_min': t_ser_pico.get(sk),
+                            't_pico_hhmm': _hhmm(t_ser_pico.get(sk))}
 
     return {
         'v_bus': v_bus, 'v_min_global': v_min_global,
@@ -1091,6 +1108,11 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
         'v_ser_max': v_bus,            # tensión de barra SER en vacío (máxima)
         'v_ser_min': v_ser_min,        # tensión de barra SER bajo carga pico (mínima)
         'detalle_ser': detalle_ser,
+        't_seat_max_min': t_seat_max,  # hora (min desde medianoche) del pico de SEAT
+        't_seat_max_hhmm': _hhmm(t_seat_max),
+        't_ser_max_min': t_ser_max,    # hora del pico de la SER más cargada
+        't_ser_max_hhmm': _hhmm(t_ser_max),
+        'ser_max_nombre': ser_nombre.get(sk_max, '—') if sk_max is not None else '—',
     }
 
 # Configuracion de andenes por terminal: km -> (nombre, n_vias_bloqueo)
