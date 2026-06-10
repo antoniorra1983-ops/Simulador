@@ -915,12 +915,14 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
     """REPORTE de tensión por tramo inter-SER con la corriente SIMULTÁNEA de
     todos los trenes (modo reporte: NO re-simula viajes).
 
-    Modelo radial desde la SER más cercana con superposición de corrientes:
-    la corriente de cada tren circula por los segmentos de catenaria entre él
-    y su SER. Es conservador (alimentación por un solo extremo); con dos
-    extremos las caídas serían ~la mitad.
+    Alimentación por DOS extremos entre subestaciones: cada tren reparte su
+    corriente hacia las dos SER vecinas (proporcional a la distancia) y la
+    caída usa la resistencia mutua de una línea alimentada por ambos lados.
+    Las dos puntas (antes de la 1ª SER y después de la última, hacia Limache)
+    son radiales porque solo tienen una SER.
 
-    Devuelve dict: v_bus, v_min_global, peak_demand_kw, n_subtension, por_via.
+    Devuelve dict: v_bus, v_min_global, peak_demand_kw, n_subtension, por_via,
+    i_ser_max, i_seat_max, v_ser_max, v_ser_min, detalle_ser.
     """
     from collections import defaultdict
     v_bus = _get_val('V_NOMINAL_DC', 3295.0)
@@ -929,6 +931,58 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
 
     def nearest_ser(km):
         return min(sers, key=lambda s: abs(s - km))
+
+    # --- Alimentación por DOS extremos entre SER (radial solo en las puntas) ---
+    # Resistencia acumulada de catenaria a lo largo de la línea (integra r(km) variable).
+    _KM_FIN = max(43.13, sers[-1] + 0.1)
+    _PASO_R = 0.05
+    _N_R = int(_KM_FIN / _PASO_R) + 2
+    _cumR = [0.0]
+    for _i in range(1, _N_R):
+        _cumR.append(_cumR[-1] + _get_resistencia_catenaria_km((_i - 0.5) * _PASO_R) * _PASO_R)
+
+    def _cR(x):
+        x = max(0.0, min(_KM_FIN, x))
+        t = x / _PASO_R
+        i0 = int(t)
+        if i0 + 1 < len(_cumR):
+            return _cumR[i0] + (_cumR[i0 + 1] - _cumR[i0]) * (t - i0)
+        return _cumR[-1]
+
+    def R_bet(a, b):
+        return abs(_cR(b) - _cR(a))
+
+    def clasif(km):
+        # ('edge', ser)  -> radial (puntas) | ('inter', sa, sb) -> dos extremos
+        if km <= sers[0]:
+            return ('edge', sers[0])
+        if km >= sers[-1]:
+            return ('edge', sers[-1])
+        for _i in range(len(sers) - 1):
+            if sers[_i] <= km <= sers[_i + 1]:
+                return ('inter', sers[_i], sers[_i + 1])
+        return ('edge', sers[-1])
+
+    def R_mutua(xk, xj, sa, sb):
+        lo, hi = (xk, xj) if xk <= xj else (xj, xk)
+        return R_bet(sa, lo) * R_bet(hi, sb) / max(1e-9, R_bet(sa, sb))
+
+    def _caida_radial(members):
+        # zona de punta: alimentación por un solo extremo (la SER de la punta)
+        gl = sorted((abs(km - clasif(km)[1]), km, I) for km, I in members)
+        dists = [d for d, _, _ in gl]
+        kms = [k for _, k, _ in gl]
+        corrs = [I for _, _, I in gl]
+        out = []
+        for k in range(len(gl)):
+            vdrop = 0.0
+            prev = 0.0
+            for s in range(k + 1):
+                seg = dists[s] - prev
+                prev = dists[s]
+                vdrop += _get_resistencia_catenaria_km(kms[s]) * seg * sum(corrs[s:])
+            out.append((kms[k], v_bus - vdrop))
+        return out
 
     eventos = defaultdict(list)       # (via, t_bin) -> [(km, I)]  caída de catenaria por vía
     eventos_bin = defaultdict(list)   # t_bin -> [(km, I)]  todos los trenes (SER y SEAT)
@@ -958,36 +1012,34 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
     cap_ser = _get_val('SER_CAPACITY_KW', {})
     reg_ser = _get_val('REG_SER', 0.06)  # regulación rectificador (vacío→plena carga)
 
-    # --- Caída de tensión en CATENARIA (independiente por vía, modelo radial) ---
+    # --- Caída en CATENARIA (por vía): dos extremos entre SER, radial en las puntas ---
     v_min_global = v_bus
     n_subtension = 0
     por_via = {1: {'v_min': v_bus, 'peak_kw': 0.0}, 2: {'v_min': v_bus, 'peak_kw': 0.0}}
     for (via_, _t_bin), loads in eventos.items():
         por_via[via_]['peak_kw'] = max(por_via[via_]['peak_kw'],
                                        sum(I for _, I in loads) * v_bus / 1000.0)
-        grupos = defaultdict(list)
+        secciones = defaultdict(list)
         for km, I in loads:
-            sk = nearest_ser(km)
-            grupos[sk].append((abs(km - sk), km, I))
-        for _sk, gl in grupos.items():
-            gl.sort()
-            dists = [d for d, _, _ in gl]
-            kms = [k for _, k, _ in gl]
-            corrs = [I for _, _, I in gl]
-            for k in range(len(gl)):
-                vdrop = 0.0
-                prev = 0.0
-                for s in range(k + 1):
-                    seg = dists[s] - prev
-                    prev = dists[s]
-                    vdrop += _get_resistencia_catenaria_km(kms[s]) * seg * sum(corrs[s:])
-                v_k = v_bus - vdrop
-                v_min_global = min(v_min_global, v_k)
-                por_via[via_]['v_min'] = min(por_via[via_]['v_min'], v_k)
-                if v_k < squeeze_v:
-                    n_subtension += 1
+            secciones[clasif(km)].append((km, I))
+        for key, members in secciones.items():
+            if key[0] == 'inter':       # alimentado por las dos SER vecinas
+                _, sa, sb = key
+                for xk, _Ik in members:
+                    vdrop = sum(Ij * R_mutua(xk, xj, sa, sb) for xj, Ij in members)
+                    v_k = v_bus - vdrop
+                    v_min_global = min(v_min_global, v_k)
+                    por_via[via_]['v_min'] = min(por_via[via_]['v_min'], v_k)
+                    if v_k < squeeze_v:
+                        n_subtension += 1
+            else:                        # punta: una sola SER (radial)
+                for _xk, v_k in _caida_radial(members):
+                    v_min_global = min(v_min_global, v_k)
+                    por_via[via_]['v_min'] = min(por_via[via_]['v_min'], v_k)
+                    if v_k < squeeze_v:
+                        n_subtension += 1
 
-    # --- Corriente por SER (4 rectificadoras, ambas vías) y SEAT (sistema completo) ---
+    # --- Corriente por SER (4 rectif., reparto a dos extremos) y SEAT (sistema completo) ---
     i_seat_max = 0.0           # corriente total simultánea = subestación principal SEAT
     peak_demand_kw = 0.0
     i_ser_pico = {}            # km SER -> corriente agregada pico (A)
@@ -997,7 +1049,14 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
         peak_demand_kw = max(peak_demand_kw, i_total * v_bus / 1000.0)
         por_ser = defaultdict(float)
         for km, I in loads:
-            por_ser[nearest_ser(km)] += I
+            key = clasif(km)
+            if key[0] == 'inter':                 # repartir entre las dos SER vecinas
+                _, sa, sb = key
+                rt = max(1e-9, R_bet(sa, sb))
+                por_ser[sa] += I * R_bet(km, sb) / rt   # más corriente desde la SER más cercana
+                por_ser[sb] += I * R_bet(sa, km) / rt
+            else:                                 # punta: toda a la SER de la punta
+                por_ser[key[1]] += I
         for sk, i_ser in por_ser.items():
             i_ser_pico[sk] = max(i_ser_pico.get(sk, 0.0), i_ser)
 
