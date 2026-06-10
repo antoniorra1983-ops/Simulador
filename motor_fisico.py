@@ -955,6 +955,11 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
     peak_demand_kw = 0.0
     n_subtension = 0
     por_via = {1: {'v_min': v_bus, 'peak_kw': 0.0}, 2: {'v_min': v_bus, 'peak_kw': 0.0}}
+    i_seat_max = 0.0   # corriente máx de un tren (pantógrafo / SEAT)
+    i_ser_pico = {}    # nombre SER -> corriente agregada pico (A)
+    ser_nombre = {s[0]: s[1] for s in _get_val('SER_DATA', [])}
+    cap_ser = _get_val('SER_CAPACITY_KW', {})
+    reg_ser = _get_val('REG_SER', 0.06)  # regulación rectificador (vacío→plena carga)
 
     for (via_, _t_bin), loads in eventos.items():
         P_bin = sum(I for _, I in loads) * v_bus / 1000.0
@@ -962,9 +967,12 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
         por_via[via_]['peak_kw'] = max(por_via[via_]['peak_kw'], P_bin)
         grupos = defaultdict(list)
         for km, I in loads:
+            i_seat_max = max(i_seat_max, I)          # corriente de un solo tren
             sk = nearest_ser(km)
             grupos[sk].append((abs(km - sk), km, I))
-        for _sk, gl in grupos.items():
+        for sk, gl in grupos.items():
+            i_ser_bin = sum(I for _, _, I in gl)     # corriente que entrega esta SER en el bin
+            i_ser_pico[sk] = max(i_ser_pico.get(sk, 0.0), i_ser_bin)
             gl.sort()
             dists = [d for d, _, _ in gl]
             kms = [k for _, k, _ in gl]
@@ -983,10 +991,29 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
                 if v_k < squeeze_v:
                     n_subtension += 1
 
+    # Corriente pico por SER y tensión de barra de cada SER (caída por regulación
+    # del rectificador bajo su corriente pico): V_ser = V_vacío × (1 − reg × I/I_nom).
+    i_ser_max = max(i_ser_pico.values()) if i_ser_pico else 0.0
+    detalle_ser = {}
+    v_ser_min = v_bus
+    for sk, i_pico in i_ser_pico.items():
+        nom = ser_nombre.get(sk, f'SER@{sk}')
+        i_nom = (cap_ser.get(nom, 3000.0) * 1000.0) / v_bus
+        v_barra = v_bus * (1.0 - reg_ser * (i_pico / max(1.0, i_nom)))
+        v_ser_min = min(v_ser_min, v_barra)
+        detalle_ser[nom] = {'km': sk, 'i_pico_A': i_pico, 'i_nom_A': i_nom,
+                            'carga_pct': 100.0 * i_pico / max(1.0, i_nom),
+                            'v_barra': v_barra}
+
     return {
         'v_bus': v_bus, 'v_min_global': v_min_global,
         'peak_demand_kw': peak_demand_kw, 'n_subtension': n_subtension,
         'por_via': por_via, 'sers': sers,
+        'i_ser_max': i_ser_max,        # corriente agregada pico en una SER (A)
+        'i_seat_max': i_seat_max,      # corriente pico en un pantógrafo/SEAT (A)
+        'v_ser_max': v_bus,            # tensión de barra SER en vacío (máxima)
+        'v_ser_min': v_ser_min,        # tensión de barra SER bajo carga pico (mínima)
+        'detalle_ser': detalle_ser,
     }
 
 # Configuracion de andenes por terminal: km -> (nombre, n_vias_bloqueo)
