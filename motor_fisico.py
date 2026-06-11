@@ -354,6 +354,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     eta_motor = f.get('eta_motor', 0.92)
     eta_regen_mec = eta_motor * f.get('eta_reductor', 1.0)  # motor × reductor (rueda→catenaria)
     eta_regen_neta = _get_val('ETA_REGEN_NETA', 0.38)
+    eta_conv_aux = max(0.5, _get_val('ETA_CONV_AUX', 0.93))  # convertidor auxiliar (catenaria→bus aux)
     dwell_seg = _get_val('DWELL_DEF', 25.0)
     
     n_uni_final = 2 if doble else 1
@@ -657,7 +658,8 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 tipo_tren, aux_kw_nominal, hora_actual, pax_mid,
                 f.get('cap_max', 398) * n_uni_inst, estacion_anio, estado_marcha
             )
-            aux_kwh_step = (aux_kw_inst * dt_actual) / 3600.0
+            # Consumo de catenaria del auxiliar = carga / η_convertidor (la carga es del lado del tren)
+            aux_kwh_step = (aux_kw_inst * dt_actual) / 3600.0 / eta_conv_aux
             
             if f_real_total > 0 and estado_marcha != "BRAKE_STATION":
                 f_limite_potencia_inst = p_max_op_w_real / max(0.1, v_ms)
@@ -726,7 +728,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
                 tipo_tren, aux_kw_nominal_final, hora_media_dwell, pax_abordo,
                 f.get('cap_max', 398) * n_uni_final, estacion_anio, "DWELL"
             )
-            aux_catenaria += aux_kw_dwell * dwell_h
+            aux_catenaria += (aux_kw_dwell * dwell_h) / eta_conv_aux
             t_horas += dwell_h
 
     t_final_mins = t_ini_mins + t_horas * 60.0
