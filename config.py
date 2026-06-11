@@ -73,6 +73,7 @@ ETA_TRAC_SISTEMA = 0.92
 ETA_REGEN_NETA = 0.90  # Eficiencia eléctrica catenaria DC + inversor (separada de receptividad)
 LAMBDA_REGEN_KM  = 5.0     
 ETA_SER_RECTIFICADOR = 0.96 
+ETA_CONV_AUX = 0.93  # rendimiento del convertidor auxiliar (catenaria DC → bus auxiliar del tren)
 ETA_TRAFO_RED = 0.99  # Pérdidas de transformadores de la red (elevador SEAT + reductores SER), ~1%. Reemplaza el antiguo factor de ajuste 1.15² sobre pérdidas de línea.
 ETA_MAX   = 0.70
 V_NOMINAL_DC = 3295.0   # barra SER en vacío: 2 rectificadores en serie × 1.648 kV cc
@@ -250,7 +251,7 @@ __all__ = [
     'CAP_PUERTO', 'CAP_BELLOTO', 'CAP_LIMACHE',
     'SER_DATA', 'SEAT_KM', 'SER_CAPACITY_KW', 'SEAT_CAPACITY_KW', 'N_TRAFOS_SER', 'REG_SER', 'V_REGEN_MAX',
     'Z_EFF_44KV', 'R_AC_44KV', 'V_NOMINAL_AC',
-    'ETA_TRAC_SISTEMA', 'ETA_REGEN_NETA', 'LAMBDA_REGEN_KM', 'ETA_SER_RECTIFICADOR', 'ETA_TRAFO_RED', 'ETA_MAX',
+    'ETA_TRAC_SISTEMA', 'ETA_REGEN_NETA', 'LAMBDA_REGEN_KM', 'ETA_SER_RECTIFICADOR', 'ETA_CONV_AUX', 'ETA_TRAFO_RED', 'ETA_MAX',
     'V_NOMINAL_DC', 'V_SQUEEZE_WARN',
     'PAX_KG', 'DWELL_DEF', 'DAVIS_E_N_PERMIL', 'AUX_HVAC_HORA',
     'FRAC_HVAC', 'FRAC_BASE', 'SPEED_PROFILE', 'FLOTA', 'feriados_2026'
