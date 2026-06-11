@@ -844,7 +844,7 @@ def precalcular_red_electrica_v111(df_dia, pct_trac_ui, use_rm, estacion_anio="p
     # eléctricamente cerca: las subestaciones rectificadoras (SER, cada ~8 km) NO son
     # reversibles, así que la energía no cruza de un tramo de alimentación a otro.
     # Si el receptor está más allá de la subestación más cercana, la receptividad cae.
-    V_NOM_DC      = 3000.0    # V nominal
+    V_NOM_DC      = _get_val('V_NOMINAL_DC', 3295.0)  # tensión de barra SER (desde config)
     ETA_INV       = 0.92      # Eficiencia inversor regenerativo (a distancia ~0)
     DIST_SER_KM   = 8.0       # separación típica entre subestaciones (tramo de alimentación)
     DIST_MAX_REAL = 12.0      # más allá: receptor en otro tramo, sin transferencia útil
@@ -926,6 +926,7 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
     """
     from collections import defaultdict
     v_bus = _get_val('V_NOMINAL_DC', 3295.0)
+    flota = _get_val('FLOTA', {})
     sers = sorted([s[0] for s in _get_val('SER_DATA', [])]) or [4.9, 12.7, 25.5, 28.7]
     DT_BIN = dt_bin_s / 60.0
 
@@ -993,78 +994,130 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
             if not isinstance(datos, dict):
                 continue
             n_uni = 2 if r.get('doble', False) else 1
-            # Agrupar los pasos de ESTE tren por bin y promediar (1 valor por tren/bin)
+            # Tracción eléctrica = mecánica (f·v del perfil) / η; regen ya es eléctrica (índice 4).
+            _f = flota.get(r.get('tipo_tren', ''), {})
+            eta_din = max(0.5, _f.get('eta_motor', 0.92) * _f.get('eta_reductor', 1.0))
             por_bin = defaultdict(list)
             for p in datos.get('perfil', []):
-                P_trac_kw = (p[6] if len(p) > 6 else 0.0) * n_uni
+                P_trac_kw = (p[6] if len(p) > 6 else 0.0) * n_uni / eta_din   # eléctrica consumida
+                P_regen_kw = (p[4] if len(p) > 4 else 0.0) * n_uni            # eléctrica inyectada
                 t_bin = round(p[0] / DT_BIN) * DT_BIN
-                por_bin[t_bin].append((p[1], P_trac_kw))
+                por_bin[t_bin].append((p[1], P_trac_kw, P_regen_kw))
             for t_bin, steps in por_bin.items():
-                P_avg = sum(s[1] for s in steps) / len(steps)
-                if P_avg <= 0:
+                n = len(steps)
+                P_trac = sum(s[1] for s in steps) / n
+                P_regen = sum(s[2] for s in steps) / n
+                if P_trac <= 0 and P_regen <= 0:
                     continue
-                km_avg = sum(s[0] for s in steps) / len(steps)
-                I = P_avg * 1000.0 / v_bus
-                eventos[(via_, t_bin)].append((km_avg, I))
-                eventos_bin[t_bin].append((km_avg, I))
+                km_avg = sum(s[0] for s in steps) / n
+                i_trac = P_trac * 1000.0 / v_bus
+                i_regen = P_regen * 1000.0 / v_bus
+                eventos[(via_, t_bin)].append((km_avg, i_trac, i_regen))
+                eventos_bin[t_bin].append((km_avg, i_trac, i_regen))
 
     ser_nombre = {s[0]: s[1] for s in _get_val('SER_DATA', [])}
     cap_ser = _get_val('SER_CAPACITY_KW', {})
     reg_ser = _get_val('REG_SER', 0.06)  # regulación rectificador (vacío→plena carga)
 
-    # --- Caída en CATENARIA (por vía): dos extremos entre SER, radial en las puntas ---
+    # --- Tensión en CATENARIA (por vía): tracción baja, regeneración SUBE; techo V_REGEN_MAX ---
+    v_regen_max = _get_val('V_REGEN_MAX', 3600.0)
     v_min_global = v_bus
+    v_max_global = v_bus
     n_subtension = 0
-    por_via = {1: {'v_min': v_bus, 'peak_kw': 0.0}, 2: {'v_min': v_bus, 'peak_kw': 0.0}}
+    n_sobretension = 0
+    por_via = {1: {'v_min': v_bus, 'v_max': v_bus, 'peak_kw': 0.0},
+               2: {'v_min': v_bus, 'v_max': v_bus, 'peak_kw': 0.0}}
+
+    def _reg_v(v_k, via_):
+        nonlocal v_min_global, v_max_global, n_subtension, n_sobretension
+        if v_k > v_regen_max:        # la regen tocaría el techo → el tren recorta
+            v_k = v_regen_max
+            n_sobretension += 1
+        v_min_global = min(v_min_global, v_k)
+        v_max_global = max(v_max_global, v_k)
+        por_via[via_]['v_min'] = min(por_via[via_]['v_min'], v_k)
+        por_via[via_]['v_max'] = max(por_via[via_]['v_max'], v_k)
+        if v_k < squeeze_v:
+            n_subtension += 1
+
     for (via_, _t_bin), loads in eventos.items():
-        por_via[via_]['peak_kw'] = max(por_via[via_]['peak_kw'],
-                                       sum(I for _, I in loads) * v_bus / 1000.0)
+        net_kw = sum((it - ir) for _, it, ir in loads) * v_bus / 1000.0
+        por_via[via_]['peak_kw'] = max(por_via[via_]['peak_kw'], net_kw)
         secciones = defaultdict(list)
-        for km, I in loads:
-            secciones[clasif(km)].append((km, I))
+        for km, it, ir in loads:
+            secciones[clasif(km)].append((km, it - ir))   # corriente neta (regen negativa)
         for key, members in secciones.items():
             if key[0] == 'inter':       # alimentado por las dos SER vecinas
                 _, sa, sb = key
-                for xk, _Ik in members:
-                    vdrop = sum(Ij * R_mutua(xk, xj, sa, sb) for xj, Ij in members)
-                    v_k = v_bus - vdrop
-                    v_min_global = min(v_min_global, v_k)
-                    por_via[via_]['v_min'] = min(por_via[via_]['v_min'], v_k)
-                    if v_k < squeeze_v:
-                        n_subtension += 1
+                for xk, _ik in members:
+                    vdrop = sum(ij * R_mutua(xk, xj, sa, sb) for xj, ij in members)
+                    _reg_v(v_bus - vdrop, via_)           # vdrop<0 si domina regen → sube
             else:                        # punta: una sola SER (radial)
                 for _xk, v_k in _caida_radial(members):
-                    v_min_global = min(v_min_global, v_k)
-                    por_via[via_]['v_min'] = min(por_via[via_]['v_min'], v_k)
-                    if v_k < squeeze_v:
-                        n_subtension += 1
+                    _reg_v(v_k, via_)
 
-    # --- Corriente por SER (4 rectif., reparto a dos extremos) y SEAT (sistema completo) ---
-    i_seat_max = 0.0           # corriente total simultánea = subestación principal SEAT
-    t_seat_max = None          # bin (min desde medianoche) del pico de SEAT
+    # --- Corriente y energía por SER (2 extremos) y SEAT, neteando regeneración ---
+    # Reparto de tracción y regen a las SER vecinas; la SER no puede absorber (diodo),
+    # así que su corriente neta = max(0, tracción − regen). El sobrante de regen se quema.
+    i_seat_max = 0.0           # corriente NETA total simultánea = SEAT principal (A)
+    t_seat_max = None
     peak_demand_kw = 0.0
-    i_ser_pico = {}            # km SER -> corriente agregada pico (A)
-    t_ser_pico = {}            # km SER -> bin (min) del pico de esa SER
+    i_ser_pico = {}            # km SER -> corriente NETA pico (A)
+    t_ser_pico = {}
+    e_pant_ser = defaultdict(float)   # kWh netos de tracción entregada por SER
+    e_regen_ser = defaultdict(float)  # kWh de regen absorbida en cada SER
+    e_loss_ser = defaultdict(float)   # kWh de pérdidas de catenaria por SER
+    regen_abs_kwh = 0.0               # regen total absorbida (útil)
+    regen_quemada_kwh = 0.0          # regen total quemada en reóstato
+    dt_h = DT_BIN / 60.0
     for _t_bin, loads in eventos_bin.items():
-        i_total = sum(I for _, I in loads)        # todos los trenes de ambas vías
-        if i_total > i_seat_max:
-            i_seat_max = i_total
-            t_seat_max = _t_bin
-        peak_demand_kw = max(peak_demand_kw, i_total * v_bus / 1000.0)
-        por_ser = defaultdict(float)
-        for km, I in loads:
+        trac_share = defaultdict(float)
+        regen_share = defaultdict(float)
+        loss_share = defaultdict(float)
+        for km, it, ir in loads:
             key = clasif(km)
-            if key[0] == 'inter':                 # repartir entre las dos SER vecinas
+            if key[0] == 'inter':
                 _, sa, sb = key
-                rt = max(1e-9, R_bet(sa, sb))
-                por_ser[sa] += I * R_bet(km, sb) / rt   # más corriente desde la SER más cercana
-                por_ser[sb] += I * R_bet(sa, km) / rt
-            else:                                 # punta: toda a la SER de la punta
-                por_ser[key[1]] += I
-        for sk, i_ser in por_ser.items():
-            if i_ser > i_ser_pico.get(sk, 0.0):
-                i_ser_pico[sk] = i_ser
+                ra = R_bet(sa, km)
+                rb = R_bet(km, sb)
+                rt = max(1e-9, ra + rb)
+                fa, fb = rb / rt, ra / rt              # fracción a la SER más cercana
+                trac_share[sa] += it * fa
+                trac_share[sb] += it * fb
+                regen_share[sa] += ir * fa
+                regen_share[sb] += ir * fb
+                loss_share[sa] += (it * fa) ** 2 * ra
+                loss_share[sb] += (it * fb) ** 2 * rb
+            else:
+                sk = key[1]
+                r = R_bet(sk, km)
+                trac_share[sk] += it
+                regen_share[sk] += ir
+                loss_share[sk] += it * it * r
+        net_total = 0.0
+        trac_total = 0.0
+        regen_total = 0.0
+        for sk in set(trac_share) | set(regen_share):
+            ts = trac_share.get(sk, 0.0)
+            rs = regen_share.get(sk, 0.0)
+            net = max(0.0, ts - rs)                    # diodo: la SER no sumideroa regen
+            absorbed = ts - net                        # = min(ts, rs): regen que compensó tracción
+            net_total += net
+            trac_total += ts
+            regen_total += rs
+            if net > i_ser_pico.get(sk, 0.0):
+                i_ser_pico[sk] = net
                 t_ser_pico[sk] = _t_bin
+            e_pant_ser[sk] += net * v_bus * dt_h / 1000.0
+            e_regen_ser[sk] += absorbed * v_bus * dt_h / 1000.0
+            e_loss_ser[sk] += loss_share.get(sk, 0.0) * dt_h / 1000.0
+        if net_total > i_seat_max:
+            i_seat_max = net_total
+            t_seat_max = _t_bin
+        peak_demand_kw = max(peak_demand_kw, net_total * v_bus / 1000.0)
+        absorbed_total = trac_total - net_total        # tracción cubierta por regen
+        regen_abs_kwh += absorbed_total * v_bus * dt_h / 1000.0
+        regen_quemada_kwh += (regen_total - absorbed_total) * v_bus * dt_h / 1000.0
 
     # --- Tensión de barra de cada SER (2 trafos en serie; regulación bajo su pico) ---
     #   Capacidad es POR TRANSFORMADOR; en serie ambos llevan la misma corriente,
@@ -1097,22 +1150,36 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
                             'i_trafo_A': i_pico,           # en serie, cada trafo lleva la corriente del SER
                             'cap_trafo_kw': cap_trafo, 'cap_total_kw': cap_total,
                             't_pico_min': t_ser_pico.get(sk),
-                            't_pico_hhmm': _hhmm(t_ser_pico.get(sk))}
+                            't_pico_hhmm': _hhmm(t_ser_pico.get(sk)),
+                            'e_traccion_kwh': e_pant_ser.get(sk, 0.0),     # neta (ya descontada regen)
+                            'e_regen_kwh': e_regen_ser.get(sk, 0.0),       # regen absorbida en esta SER
+                            'e_perdidas_kwh': e_loss_ser.get(sk, 0.0),
+                            'e_entregada_kwh': e_pant_ser.get(sk, 0.0) + e_loss_ser.get(sk, 0.0)}
+
+    e_traccion_tot = sum(e_pant_ser.values())
+    e_perdidas_tot = sum(e_loss_ser.values())
 
     return {
-        'v_bus': v_bus, 'v_min_global': v_min_global,
+        'v_bus': v_bus, 'v_min_global': v_min_global, 'v_max_global': v_max_global,
+        'v_regen_max': v_regen_max,
         'peak_demand_kw': peak_demand_kw, 'n_subtension': n_subtension,
+        'n_sobretension': n_sobretension,
         'por_via': por_via, 'sers': sers,
-        'i_ser_max': i_ser_max,        # corriente pico en una SER rectificadora (A)
-        'i_seat_max': i_seat_max,      # corriente total simultánea = SEAT principal (A)
+        'i_ser_max': i_ser_max,        # corriente NETA pico en una SER rectificadora (A)
+        'i_seat_max': i_seat_max,      # corriente NETA total simultánea = SEAT principal (A)
         'v_ser_max': v_bus,            # tensión de barra SER en vacío (máxima)
         'v_ser_min': v_ser_min,        # tensión de barra SER bajo carga pico (mínima)
         'detalle_ser': detalle_ser,
-        't_seat_max_min': t_seat_max,  # hora (min desde medianoche) del pico de SEAT
+        't_seat_max_min': t_seat_max,
         't_seat_max_hhmm': _hhmm(t_seat_max),
-        't_ser_max_min': t_ser_max,    # hora del pico de la SER más cargada
+        't_ser_max_min': t_ser_max,
         't_ser_max_hhmm': _hhmm(t_ser_max),
         'ser_max_nombre': ser_nombre.get(sk_max, '—') if sk_max is not None else '—',
+        'e_traccion_kwh': e_traccion_tot,    # energía NETA de tracción entregada por las SER (regen ya descontada)
+        'e_perdidas_kwh': e_perdidas_tot,
+        'e_entregada_kwh': e_traccion_tot + e_perdidas_tot,  # total NETO entregado por las SER (sin auxiliares)
+        'regen_absorbida_kwh': regen_abs_kwh,   # regeneración aprovechada
+        'regen_quemada_kwh': regen_quemada_kwh, # regeneración quemada en reóstato (techo / sin receptor)
     }
 
 # Configuracion de andenes por terminal: km -> (nombre, n_vias_bloqueo)
