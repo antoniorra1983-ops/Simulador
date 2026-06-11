@@ -1111,21 +1111,29 @@ def main():
                         import motor_fisico as _mf
                         if hasattr(_mf, 'analizar_tension_secciones'):
                             _rep = _mf.analizar_tension_secciones(df_sint_e)
-                            st.caption("⚡ Red DC — corriente simultánea de todos los trenes (modelo radial conservador)")
+                            st.caption("⚡ Red DC — corriente neta simultánea (tracción − regeneración, dos extremos)")
                             _r1 = st.columns(4)
-                            _r1[0].metric("Tensión barra SER máx", f"{_rep['v_ser_max']:.0f} V")
-                            _r1[1].metric("Tensión barra SER mín", f"{_rep['v_ser_min']:.0f} V")
-                            _r1[2].metric("V mín en catenaria", f"{_rep['v_min_global']:.0f} V")
-                            _r1[3].metric("Pasos en subtensión", f"{_rep['n_subtension']}")
+                            _r1[0].metric("V máx catenaria (regen)", f"{_rep.get('v_max_global', _rep['v_bus']):.0f} V")
+                            _r1[1].metric("V mín catenaria", f"{_rep['v_min_global']:.0f} V")
+                            _r1[2].metric("Barra SER mín", f"{_rep['v_ser_min']:.0f} V")
+                            _r1[3].metric("Subtensión / Sobretensión", f"{_rep['n_subtension']} / {_rep.get('n_sobretension',0)}")
                             _r2 = st.columns(3)
                             _r2[0].metric("Corriente máx SER (rectificadora)", f"{_rep['i_ser_max']:.0f} A")
                             _r2[1].metric("Corriente máx SEAT (principal)", f"{_rep['i_seat_max']:.0f} A")
                             _r2[2].metric("Demanda pico", f"{_rep['peak_demand_kw']:.0f} kW")
                             st.caption(f"🕑 Pico del sistema (SEAT) a las **{_rep.get('t_seat_max_hhmm','—')}** · "
                                        f"pico de la SER más cargada ({_rep.get('ser_max_nombre','—')}) a las "
-                                       f"**{_rep.get('t_ser_max_hhmm','—')}**")
+                                       f"**{_rep.get('t_ser_max_hhmm','—')}** · techo de regen **{_rep.get('v_regen_max',3600):.0f} V**")
+                            _ra = _rep.get('regen_absorbida_kwh', 0.0)
+                            _rq = _rep.get('regen_quemada_kwh', 0.0)
+                            _pct = 100.0 * _ra / max(1e-6, _ra + _rq)
+                            st.caption(f"🔌 Energía NETA entregada por las SER (regen ya descontada, sin auxiliares): "
+                                       f"**{_rep.get('e_entregada_kwh',0):,.0f} kWh** "
+                                       f"(tracción neta {_rep.get('e_traccion_kwh',0):,.0f} + pérdidas {_rep.get('e_perdidas_kwh',0):,.0f})")
+                            st.caption(f"♻️ Regeneración: **{_ra:,.0f} kWh** aprovechada ({_pct:.0f}%) · "
+                                       f"**{_rq:,.0f} kWh** quemada en reóstato (sin receptor / techo de tensión)")
 
-                            # Corriente máxima por cada una de las 4 SER (2 trafos en serie c/u)
+                            # Corriente y energía por cada una de las 4 SER (2 trafos en serie c/u)
                             _det = _rep.get('detalle_ser', {})
                             if _det:
                                 _filas = []
@@ -1135,13 +1143,13 @@ def main():
                                         "PK (km)": round(_d['km'], 1),
                                         "I máx (A)": round(_d['i_pico_A']),
                                         "Hora pico": _d.get('t_pico_hhmm', '—'),
-                                        "I nominal (A)": round(_d['i_nom_A']),
                                         "Carga (%)": round(_d['carga_pct']),
                                         "Barra (V)": round(_d['v_barra']),
-                                        "Trafos": _d.get('n_trafos', 2),
+                                        "E neta (kWh)": round(_d.get('e_entregada_kwh', 0)),
+                                        "Regen abs (kWh)": round(_d.get('e_regen_kwh', 0)),
                                         "Cap. total (kW)": round(_d.get('cap_total_kw', 0)),
                                     })
-                                st.caption("Corriente máxima por SER (cada SER = 2 trafos en serie; en serie ambos llevan la misma corriente)")
+                                st.caption("Corriente y energía NETA por SER (regen descontada; dos extremos; incluye pérdidas de línea)")
                                 st.dataframe(pd.DataFrame(_filas), use_container_width=True, hide_index=True)
                     except Exception as _e_red:
                         st.caption(f"(Reporte de tensión no disponible: {_e_red})")
