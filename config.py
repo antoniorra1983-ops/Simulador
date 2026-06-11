@@ -62,6 +62,7 @@ SEAT_KM = KM_ACUM[13] + 1.0
 SER_CAPACITY_KW = {"SER PO": 3000.0, "SER ES": 3000.0, "SER EB": 4500.0, "SER VA": 3000.0}  # capacidad POR TRANSFORMADOR
 N_TRAFOS_SER = 2     # transformadores por SER, en SERIE (1.648 kV c/u → 3.295 kV, misma corriente)
 REG_SER = 0.06       # regulación del rectificador de vacío a plena carga (fracción)
+V_REGEN_MAX = 3600.0 # techo de tensión por regeneración: sobre esto el tren recorta y quema en reóstato
 SEAT_CAPACITY_KW = 20000.0 
 
 Z_EFF_44KV = 0.28  
@@ -247,7 +248,7 @@ feriados_2026 = [
 __all__ = [
     'ESTACIONES', 'EC', 'PAX_COLS', 'PAX_IDX', 'KM_TRAMO', 'KM_ACUM', 'KM_TOTAL', 'N_EST',
     'CAP_PUERTO', 'CAP_BELLOTO', 'CAP_LIMACHE',
-    'SER_DATA', 'SEAT_KM', 'SER_CAPACITY_KW', 'SEAT_CAPACITY_KW', 'N_TRAFOS_SER', 'REG_SER',
+    'SER_DATA', 'SEAT_KM', 'SER_CAPACITY_KW', 'SEAT_CAPACITY_KW', 'N_TRAFOS_SER', 'REG_SER', 'V_REGEN_MAX',
     'Z_EFF_44KV', 'R_AC_44KV', 'V_NOMINAL_AC',
     'ETA_TRAC_SISTEMA', 'ETA_REGEN_NETA', 'LAMBDA_REGEN_KM', 'ETA_SER_RECTIFICADOR', 'ETA_TRAFO_RED', 'ETA_MAX',
     'V_NOMINAL_DC', 'V_SQUEEZE_WARN',
