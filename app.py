@@ -859,8 +859,14 @@ def main():
                 with col_s3: sb_flota = st.selectbox("Tipo de Tren", ["XT-100", "XT-M", "SFE"], key="sb_f")
                 with col_s4: sb_pax = st.number_input("Pasajeros a bordo", 0, 1000, 150)
 
-                sb_modo = st.radio("Modo de Circulación", ["Modo Servicio", "Modo Vacío"], horizontal=True,
-                                   help="Servicio: el tren se detiene en cada estación. Vacío: pasa por las estaciones a 30 km/h sin detenerse.")
+                col_cfg, col_modo = st.columns([1, 2])
+                with col_cfg:
+                    sb_config = st.radio("Configuración", ["Simple", "Doble"], horizontal=True, key="sb_cfg",
+                                         help="Simple: una unidad. Doble: dos unidades acopladas (el doble de potencia, fuerza, masa y plazas).")
+                with col_modo:
+                    sb_modo = st.radio("Modo de Circulación", ["Modo Servicio", "Modo Vacío"], horizontal=True,
+                                       help="Servicio: el tren se detiene en cada estación. Vacío: pasa por las estaciones a 30 km/h sin detenerse.")
+                sb_doble = (sb_config == "Doble")
                 sb_es_vacio = (sb_modo == "Modo Vacío")
                 
                 if st.button("⚡ Simular Tramo", use_container_width=True):
@@ -878,12 +884,12 @@ def main():
                         with st.spinner("Calculando termodinámica..."):
                             try:
                                 trc_sb, aux_sb, reg_sb, datos_sim_sb, neto_sb, th_sb, _ = simular_tramo_termodinamico(
-                                    sb_flota, False, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
+                                    sb_flota, sb_doble, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
                                     None, estacion_anio_plan, 480.0, es_vacio=sb_es_vacio, prevenciones=prevenciones_list
                                 )
                             except TypeError:
                                 trc_sb, aux_sb, reg_sb, datos_sim_sb, neto_sb, th_sb, _ = simular_tramo_termodinamico(
-                                    sb_flota, False, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
+                                    sb_flota, sb_doble, km_o, km_d, via_sb, pct_trac_plan, use_rm, use_pend, nodos_sb, {}, sb_pax, None, 
                                     None, estacion_anio_plan, 480.0, es_vacio=sb_es_vacio
                                 )
                         
@@ -904,7 +910,7 @@ def main():
                             seat_sb = (tot_ser_sb / _eta_trafo_sb) + loss_sb
                             ide_sb = seat_sb / max(0.001, abs(km_d - km_o))
                             
-                            st.success(f"Simulación exitosa: {sb_orig} ➔ {sb_dest} | Distancia: {abs(km_d - km_o):.2f} km")
+                            st.success(f"Simulación exitosa: {sb_orig} ➔ {sb_dest} | {sb_flota} ({sb_config}) | Distancia: {abs(km_d - km_o):.2f} km")
                             c_sb1, c_sb2, c_sb3 = st.columns(3)
                             c_sb1.metric("⏱️ Tiempo de Viaje", f"{th_sb * 60:.1f} min")
                             c_sb2.metric("⚡ Energía Neta (SEAT)", f"{seat_sb:.1f} kWh")
