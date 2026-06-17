@@ -852,10 +852,11 @@ def main():
             elif modo_plan == "Laboratorio (Tramo Único)":
                 try: est_safe = getattr(config, 'ESTACIONES', [])
                 except NameError: est_safe = ['Puerto', 'Limache']
-                
+                est_opciones = list(est_safe) + ["Las Cocheras"]
+
                 col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-                with col_s1: sb_orig = st.selectbox("Estación Origen", est_safe, key="sb_o")
-                with col_s2: sb_dest = st.selectbox("Estación Destino", est_safe, index=max(0, len(est_safe)-1), key="sb_d")
+                with col_s1: sb_orig = st.selectbox("Estación Origen", est_opciones, key="sb_o")
+                with col_s2: sb_dest = st.selectbox("Estación Destino", est_opciones, index=max(0, len(est_opciones)-2), key="sb_d")
                 with col_s3: sb_flota = st.selectbox("Tipo de Tren", ["XT-100", "XT-M", "SFE"], key="sb_f")
                 with col_s4: sb_pax = st.number_input("Pasajeros a bordo", 0, 1000, 150)
 
@@ -870,7 +871,82 @@ def main():
                 sb_es_vacio = (sb_modo == "Modo Vacío")
                 
                 if st.button("⚡ Simular Tramo", use_container_width=True):
-                    if sb_orig != sb_dest:
+                    es_cochera = "Las Cocheras" in (sb_orig, sb_dest)
+                    if es_cochera:
+                        otro = sb_dest if sb_orig == "Las Cocheras" else sb_orig
+                        if sb_orig == sb_dest or otro != "El Belloto":
+                            st.warning("🚧 Las Cocheras se conecta con la vía principal en **El Belloto**. "
+                                       "Selecciona **El Belloto** como el otro extremo del tramo.")
+                        else:
+                            try: km_acum_safe = getattr(config, 'KM_ACUM', [])
+                            except NameError: km_acum_safe = []
+                            if not km_acum_safe: km_acum_safe = [0.0, 43.13]
+                            try: km_bell = km_acum_safe[est_safe.index("El Belloto")]
+                            except Exception: km_bell = 19.1
+                            D_T1, D_T2, V_COCH, CAB_MIN = 0.600, 0.480, 20.0, 2.0
+                            entrando = (sb_dest == "Las Cocheras")
+
+                            def _run_seg(k0, k1):
+                                try:
+                                    return simular_tramo_termodinamico(
+                                        sb_flota, sb_doble, k0, k1, 1, pct_trac_plan, use_rm, False,
+                                        [(0.0, k0), (0.0, k1)], {}, sb_pax, V_COCH, None,
+                                        estacion_anio_plan, 480.0, es_vacio=False, prevenciones=prevenciones_list)
+                                except TypeError:
+                                    return simular_tramo_termodinamico(
+                                        sb_flota, sb_doble, k0, k1, 1, pct_trac_plan, use_rm, False,
+                                        [(0.0, k0), (0.0, k1)], {}, sb_pax, V_COCH, None,
+                                        estacion_anio_plan, 480.0, es_vacio=False)
+
+                            with st.spinner("Calculando maniobra de cocheras..."):
+                                trcA, auxA, _rA, dsA, _nA, thA, _pA = _run_seg(km_bell, km_bell + D_T1)
+                                trcB, auxB, _rB, dsB, _nB, thB, _pB = _run_seg(km_bell + D_T1, km_bell + D_T1 + D_T2)
+
+                            aux_rate = (auxA + auxB) / max(0.001, thA + thB)   # kW medio (aux en marcha)
+                            aux_cab = aux_rate * (CAB_MIN / 60.0)              # aux durante cambio de cabina
+                            t_total_min = thA * 60 + CAB_MIN + thB * 60
+                            ener_tot = trcA + trcB + auxA + auxB + aux_cab
+                            dist_tot_m = (D_T1 + D_T2) * 1000
+
+                            sentido = "entrando a cocheras" if entrando else "saliendo de cocheras"
+                            st.success(f"Maniobra simulada: El Belloto ↔ Las Cocheras ({sentido}) | {sb_flota} ({sb_config})")
+                            m1, m2, m3 = st.columns(3)
+                            m1.metric("⏱️ Tiempo total", f"{t_total_min:.1f} min")
+                            m2.metric("⚡ Energía (tracción+aux)", f"{ener_tot:.1f} kWh")
+                            m3.metric("📏 Distancia", f"{dist_tot_m:.0f} m")
+
+                            fase_t1 = ("El Belloto → 1er tope", D_T1 * 1000, thA * 60, trcA + auxA)
+                            fase_t2 = ("1er tope → estacionamiento", D_T2 * 1000, thB * 60, trcB + auxB)
+                            fase_cab = ("🔄 Cambio de cabina (parada total)", 0.0, CAB_MIN, aux_cab)
+                            if entrando:
+                                orden = [fase_t1, fase_cab, fase_t2]
+                            else:
+                                orden = [("Estacionamiento → 1er tope", D_T2 * 1000, thB * 60, trcB + auxB),
+                                         fase_cab,
+                                         ("1er tope → El Belloto", D_T1 * 1000, thA * 60, trcA + auxA)]
+                            df_seg = pd.DataFrame(
+                                [{"Fase": n, "Distancia (m)": f"{d:.0f}", "Tiempo (min)": f"{t:.2f}", "Energía (kWh)": f"{e:.2f}"}
+                                 for (n, d, t, e) in orden])
+                            st.dataframe(df_seg, use_container_width=True, hide_index=True)
+                            st.caption(f"🚉 Maniobra a {V_COCH:.0f} km/h máx en ramal plano conectado en El Belloto. "
+                                       f"El tren se detiene por completo en el primer tope, el maquinista cambia de cabina "
+                                       f"(~{CAB_MIN:.0f} min) invirtiendo el sentido, y avanza hasta estacionar contra el "
+                                       f"segundo tope. Ambos extremos son topes (parada total).")
+
+                            try:
+                                filas_v = []
+                                for p in (dsA.get('perfil', []) if isinstance(dsA, dict) else []):
+                                    filas_v.append({"Distancia (m)": (p[1] - km_bell) * 1000, "Velocidad (km/h)": p[2]})
+                                filas_v.append({"Distancia (m)": D_T1 * 1000, "Velocidad (km/h)": 0.0})  # parada total 1er tope
+                                for p in (dsB.get('perfil', []) if isinstance(dsB, dict) else []):
+                                    filas_v.append({"Distancia (m)": D_T1 * 1000 + (p[1] - (km_bell + D_T1)) * 1000, "Velocidad (km/h)": p[2]})
+                                filas_v.append({"Distancia (m)": (D_T1 + D_T2) * 1000, "Velocidad (km/h)": 0.0})  # parada total 2do tope
+                                if filas_v:
+                                    st.caption("Perfil de velocidad a lo largo de la maniobra (0 m = El Belloto, 1.080 m = estacionamiento):")
+                                    st.line_chart(pd.DataFrame(filas_v).set_index("Distancia (m)"), height=240)
+                            except Exception as _ev:
+                                st.caption(f"Perfil de velocidad no disponible: {_ev}")
+                    elif sb_orig != sb_dest:
                         idx_o, idx_d = est_safe.index(sb_orig), est_safe.index(sb_dest)
                         try: km_acum_safe = getattr(config, 'KM_ACUM', [])
                         except NameError: km_acum_safe = [0.0, 43.13]
