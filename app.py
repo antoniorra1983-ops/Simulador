@@ -18,11 +18,14 @@ def nf(x, dec=1):
         return str(x)
 
 def fmt_df(df, dec=1):
-    """Copia del DataFrame con columnas numéricas formateadas al estilo es-CL para mostrar."""
+    """Copia del DataFrame con columnas numéricas formateadas al estilo es-CL para mostrar.
+    Las columnas enteras se muestran sin decimales; las de punto flotante con `dec` decimales."""
     try:
         d = df.copy()
         for c in d.columns:
-            if pd.api.types.is_numeric_dtype(d[c]):
+            if pd.api.types.is_integer_dtype(d[c]):
+                d[c] = d[c].map(lambda v: "" if pd.isna(v) else nf(v, 0))
+            elif pd.api.types.is_numeric_dtype(d[c]):
                 d[c] = d[c].map(lambda v: "" if pd.isna(v) else nf(v, dec))
         return d
     except Exception:
