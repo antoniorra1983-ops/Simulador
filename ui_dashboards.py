@@ -11,6 +11,30 @@ from red_electrica import calcular_flujo_ac_nodo, distribuir_potencia_sers_kw, d
 from motor_fisico import km_at_t, vel_at_km, get_train_state_and_speed, calcular_aux_dinamico, simular_tramo_termodinamico
 
 
+# === Formato numérico chileno: punto para miles, coma para decimales ===
+def nf(x, dec=1):
+    """Formatea un número al estilo es-CL: 1.234,56 (punto miles, coma decimales)."""
+    try:
+        s = f"{float(x):,.{int(dec)}f}"          # formato US: 1,234.56
+        return s.replace(",", "\u00A0").replace(".", ",").replace("\u00A0", ".")
+    except (ValueError, TypeError):
+        return str(x)
+
+def fmt_df(df, dec=1):
+    """Copia del DataFrame con columnas numéricas formateadas al estilo es-CL para mostrar.
+    Las columnas enteras se muestran sin decimales; las de punto flotante con `dec` decimales."""
+    try:
+        d = df.copy()
+        for c in d.columns:
+            if pd.api.types.is_integer_dtype(d[c]):
+                d[c] = d[c].map(lambda v: "" if pd.isna(v) else nf(v, 0))
+            elif pd.api.types.is_numeric_dtype(d[c]):
+                d[c] = d[c].map(lambda v: "" if pd.isna(v) else nf(v, dec))
+        return d
+    except Exception:
+        return df
+
+
 def _eta_trafo_red():
     """Eficiencia de los transformadores de la red (elevador SEAT + reductores SER).
     Representa las pérdidas de transformación (~1%) en la cadena SEAT→44kV→SER."""
@@ -56,7 +80,7 @@ def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, tit
     svg += f'''
         <polygon points="{seat_x},{Y_44KV-30} {seat_x-12},{Y_44KV-10} {seat_x+12},{Y_44KV-10}" fill="#FBC02D" stroke="black" stroke-width="1" />
         <text x="{seat_x}" y="{Y_44KV-45}" font-size="10" font-weight="bold" fill="#111" text-anchor="middle">⚡ SEAT EL SOL</text>
-        <text x="{seat_x}" y="{Y_44KV-33}" font-size="10" fill="#111" text-anchor="middle">{seat_accum_plot:,.0f} kWh</text>
+        <text x="{seat_x}" y="{Y_44KV-33}" font-size="10" fill="#111" text-anchor="middle">{nf(seat_accum_plot, 0)} kWh</text>
         <line x1="{seat_x}" y1="{Y_44KV-10}" x2="{seat_x}" y2="{Y_44KV}" stroke="#FBC02D" stroke-width="4" />
     '''
 
@@ -68,7 +92,7 @@ def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, tit
         
         if is_active:
             color, fill, txt_color = "#FBC02D", "#FFF3E0", "#E65100"
-            status_lbl = f"{val:,.0f} kWh"
+            status_lbl = f"{nf(val, 0)} kWh"
             svg += f'<line x1="{xp}" y1="{Y_SER+15}" x2="{xp}" y2="{Y_V2}" stroke="#E65100" stroke-width="2" />'
             svg += f'<line x1="{xp}" y1="{Y_V2}" x2="{xp}" y2="{Y_V1}" stroke="#1565C0" stroke-width="1" stroke-dasharray="4,4" />'
             dash = ""
@@ -143,7 +167,7 @@ def draw_diagram_svg(df_act_plot, ser_accum_plot, seat_accum_plot, hora_str, tit
             svg += f'<text x="{xp}" y="{y_ln+base_dy-2}" font-size="10" font-weight="bold" fill="#111" text-anchor="middle">{xt_lbl}</text>'
             svg += f'<text x="{xp}" y="{y_ln+base_dy+9}" font-size="9" font-weight="bold" fill="#111" text-anchor="middle">Serv. {serv}</text>'
             
-            svg += f'<text x="{xp - r_c - 6}" y="{y_ln+3}" font-size="10" font-weight="bold" fill="#2E7D32" text-anchor="end">{kwh_n:.0f} kWh</text>'
+            svg += f'<text x="{xp - r_c - 6}" y="{y_ln+3}" font-size="10" font-weight="bold" fill="#2E7D32" text-anchor="end">{nf(kwh_n, 0)} kWh</text>'
             if not is_parked:
                 svg += f'<text x="{xp + r_c + 6}" y="{y_ln+3}" font-size="10" font-weight="bold" fill="#1565c0" text-anchor="start">{pax_v} pax</text>'
             else:
@@ -467,11 +491,11 @@ def render_dashboard_energia_v112(df_dia_e, active_sers, fecha_sel, hora_m1):
     
     st.markdown(f"### ⚡ Balance Energético Integral — {fecha_sel} (Acumulado {hora_str})")
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("🔋 Tracción", f"{t_trac:,.0f} kWh")
-    k2.metric("❄️ Auxiliar", f"{t_aux:,.0f} kWh")
-    k3.metric("✅ Regen Útil", f"{t_regen:,.0f} kWh")
-    k4.metric("🔥 Reóstato", f"{t_reostat:,.0f} kWh")
-    k5.metric("💡 IDE Neto", f"{t_neto/max(0.1, tren_km):.3f} kWh/km")
+    k1.metric("🔋 Tracción", f"{nf(t_trac, 0)} kWh")
+    k2.metric("❄️ Auxiliar", f"{nf(t_aux, 0)} kWh")
+    k3.metric("✅ Regen Útil", f"{nf(t_regen, 0)} kWh")
+    k4.metric("🔥 Reóstato", f"{nf(t_reostat, 0)} kWh")
+    k5.metric("💡 IDE Neto", f"{nf(t_neto/max(0.1, tren_km), 3)} kWh/km")
     st.divider()
 
 # =============================================================================
@@ -572,7 +596,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             ahead = df_via[df_via['km_pos'] > km] if row['Via'] == 1 else df_via[df_via['km_pos'] < km]
             if ahead.empty: return '—'
             d = abs(ahead['km_pos'] - km).min()
-            return f"{round(d/max(1, vel)*60,1)} min ({d:.1f} km)"
+            return f"{round(d/max(1, vel)*60,1)} min ({nf(d, 1)} km)"
         
         df_act['sep_next'] = df_act.apply(lambda r: _sep_next(r, df_act[df_act['Via']==r['Via']].drop(index=r.name)), axis=1)
 
@@ -591,7 +615,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             elif man == 'ACOPLE_SA': doble_tramo = False if row['km_pos'] > KM_ACUM[18] else True
                 
             cab = f"Tren: {nombre_tren} (Serv. {serv}) | {'DOBLE' if doble_tramo else 'Simple'}\n"
-            cab += f"Vía {row['Via']} | km {row['km_pos']:.2f} | {int(row['vel'])} km/h\n"
+            cab += f"Vía {row['Via']} | km {nf(row['km_pos'], 2)} | {int(row['vel'])} km/h\n"
             
             f_flota = FLOTA.get(tipo, FLOTA["XT-100"])
             n_unidades = 2 if doble_tramo else 1
@@ -623,7 +647,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                     pax_items = [f"{k}:{v}" for k, v in pax_d.items() if v > 0]
                     for i in range(0, len(pax_items), 4): cab += " | ".join(pax_items[i:i+4]) + "\n"
             
-            cab += f"Masa Dinámica: {masa_total:.1f} t\n"
+            cab += f"Masa Dinámica: {nf(masa_total, 1)} t\n"
             if not is_parked: cab += f"Siguiente Tren: {row['sep_next']}"
             return cab
 
@@ -748,9 +772,9 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     
     r2a,r2b,r2c,r2d = st.columns(4)
     r2a.metric("🧑‍🤝‍🧑 Pax en Vía Inst.", f"{pax_t:,}")
-    r2b.metric("⚡ kWh neto", f"{kwh_t:,.0f}", f"−{regen_t:,.0f} regen util")
-    r2c.metric("📏 Tren-km Inst.", f"{trenkm:,.1f}")
-    r2d.metric("💡 IDE inst.", f"{ide_i:.3f} kWh/km")
+    r2b.metric("⚡ kWh neto", f"{nf(kwh_t, 0)}", f"−{nf(regen_t, 0)} regen util")
+    r2c.metric("📏 Tren-km Inst.", f"{nf(trenkm, 1)}")
+    r2d.metric("💡 IDE inst.", f"{nf(ide_i, 3)} kWh/km")
 
     st.divider()
     st.markdown("#### 🔌 Cargabilidad Instantánea de Subestaciones (Squeeze Control)")
@@ -758,7 +782,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
         st.info("No hay SERs activas para monitorear.")
     else:
         flujo_ac_dc = calcular_flujo_ac_nodo(instant_ser_demands_kw)
-        st.markdown(f"<div style='text-align:right; font-size:12px; color:#c62828;'>🔥 Pérdidas térmicas AC (I²R) de la red troncal en este instante: <b>{flujo_ac_dc.get('P_loss_kw', 0.0):.1f} kW</b></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:right; font-size:12px; color:#c62828;'>🔥 Pérdidas térmicas AC (I²R) de la red troncal en este instante: <b>{nf(flujo_ac_dc.get('P_loss_kw', 0.0), 1)} kW</b></div>", unsafe_allow_html=True)
         cols_ser = st.columns(len(active_sers))
         for i, ser_info in enumerate(active_sers):
             s_name = ser_info[1]
@@ -776,11 +800,11 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             else: color_bar, texto_estado = "#F9A825", "Capacidad exigida"
                 
             with cols_ser[i]:
-                st.markdown(f"**{s_name}** ({cap_kw/1000:.1f} MVA)")
-                st.markdown(f"<div style='font-size:18px; font-weight:bold; color:{color_bar};'>{dem_kw:,.0f} kW</div>", unsafe_allow_html=True)
-                st.markdown(f"<div style='font-size:13px; font-family:monospace; margin-bottom:4px;'><span style='color:#666;'>Tensión AC:</span> <b>{vac_actual/1000:.2f} kV</b><br><span style='color:#666;'>Barra DC:</span> <b style='color:{color_bar};'>{vdc_actual:.0f} Vcc</b></div>", unsafe_allow_html=True)
+                st.markdown(f"**{s_name}** ({nf(cap_kw/1000, 1)} MVA)")
+                st.markdown(f"<div style='font-size:18px; font-weight:bold; color:{color_bar};'>{nf(dem_kw, 0)} kW</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='font-size:13px; font-family:monospace; margin-bottom:4px;'><span style='color:#666;'>Tensión AC:</span> <b>{nf(vac_actual/1000, 2)} kV</b><br><span style='color:#666;'>Barra DC:</span> <b style='color:{color_bar};'>{nf(vdc_actual, 0)} Vcc</b></div>", unsafe_allow_html=True)
                 st.markdown(f"<div style='width:100%; background-color:#e0e0e0; border-radius:4px; margin-bottom: 4px;'><div style='width:{min(100, max(0, pct_carga))}%; background-color:{color_bar}; height:8px; border-radius:4px;'></div></div>", unsafe_allow_html=True)
-                st.markdown(f"<span style='font-size:11px; color:#666;'>Uso: {pct_carga:.1f}% - {texto_estado}</span>", unsafe_allow_html=True)
+                st.markdown(f"<span style='font-size:11px; color:#666;'>Uso: {nf(pct_carga, 1)}% - {texto_estado}</span>", unsafe_allow_html=True)
 
     df_comp = df_dia_e[df_dia_e['t_fin']<=hora_m1]
     df_inic = df_dia_e[df_dia_e['t_ini']<=hora_m1]
@@ -817,7 +841,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             km_flota = subset_acum['tren_km'].sum() if not subset_acum.empty else 0.0
             ide_flota = tot_e_com / km_flota if km_flota > 0 else 0.0
             prom_flota = tot_e_com / cnt_v if cnt_v > 0 else 0.0
-            e_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; text-align:center; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333;'>Flota {f_type}</div><div style='font-size:22px; font-weight:bold; color:#2E7D32; margin:10px 0;'>{tot_e_com:,.0f} kWh</div><div style='font-size:12px; color:#666;'>Viajes iniciados: {cnt_v}</div><div style='font-size:13px; color:#1565C0; font-weight:bold; margin-top:5px;'>Promedio: {prom_flota:,.1f} kWh/v</div><div style='font-size:14px; color:#E65100; font-weight:bold; margin-top:4px;'>IDE: {ide_flota:,.2f} kWh/km</div></div>", unsafe_allow_html=True)
+            e_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; text-align:center; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333;'>Flota {f_type}</div><div style='font-size:22px; font-weight:bold; color:#2E7D32; margin:10px 0;'>{nf(tot_e_com, 0)} kWh</div><div style='font-size:12px; color:#666;'>Viajes iniciados: {cnt_v}</div><div style='font-size:13px; color:#1565C0; font-weight:bold; margin-top:5px;'>Promedio: {nf(prom_flota, 1)} kWh/v</div><div style='font-size:14px; color:#E65100; font-weight:bold; margin-top:4px;'>IDE: {nf(ide_flota, 2)} kWh/km</div></div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
         # IDE por tipo de tren desglosado por servicio (trayecto)
@@ -832,7 +856,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                     km_svc = sub_svc['tren_km'].sum()
                     e_svc = sub_svc['kwh_viaje_neto'].sum()
                     ide_svc = e_svc / km_svc if km_svc > 0 else 0.0
-                    filas_svc += f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:13px; color:#555;'>{svc}</span><span style='font-size:13px; font-weight:bold; color:#E65100;'>{ide_svc:,.2f} kWh/km</span></div>"
+                    filas_svc += f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:13px; color:#555;'>{svc}</span><span style='font-size:13px; font-weight:bold; color:#E65100;'>{nf(ide_svc, 2)} kWh/km</span></div>"
             if not filas_svc:
                 filas_svc = "<div style='font-size:12px; color:#999; padding:8px 0;'>Sin viajes</div>"
             ide_svc_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333; text-align:center; margin-bottom:10px;'>Flota {f_type}</div>{filas_svc}</div>", unsafe_allow_html=True)
@@ -861,9 +885,9 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                 ide_ser_tipo = total_tipo / km_tipo if km_tipo > 0 else 0.0
                 for s_name in ser_names:
                     e_ser_44 = ser_acc_tipo[s_name] / eta_ser_cfg
-                    filas += f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:13px; color:#555;'>{s_name}</span><span style='font-size:13px; font-weight:bold; color:#1565C0;'>{e_ser_44:,.0f} kWh</span></div>"
-                filas += f"<div style='display:flex; justify-content:space-between; padding:5px 0; margin-top:4px; border-top:2px solid #1565C0;'><span style='font-size:13px; font-weight:bold; color:#333;'>Total</span><span style='font-size:13px; font-weight:bold; color:#1565C0;'>{total_tipo:,.0f} kWh</span></div>"
-                filas += f"<div style='display:flex; justify-content:space-between; padding:3px 0;'><span style='font-size:13px; font-weight:bold; color:#333;'>IDE (SER)</span><span style='font-size:14px; font-weight:bold; color:#E65100;'>{ide_ser_tipo:.3f} kWh/km</span></div>"
+                    filas += f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:13px; color:#555;'>{s_name}</span><span style='font-size:13px; font-weight:bold; color:#1565C0;'>{nf(e_ser_44, 0)} kWh</span></div>"
+                filas += f"<div style='display:flex; justify-content:space-between; padding:5px 0; margin-top:4px; border-top:2px solid #1565C0;'><span style='font-size:13px; font-weight:bold; color:#333;'>Total</span><span style='font-size:13px; font-weight:bold; color:#1565C0;'>{nf(total_tipo, 0)} kWh</span></div>"
+                filas += f"<div style='display:flex; justify-content:space-between; padding:3px 0;'><span style='font-size:13px; font-weight:bold; color:#333;'>IDE (SER)</span><span style='font-size:14px; font-weight:bold; color:#E65100;'>{nf(ide_ser_tipo, 3)} kWh/km</span></div>"
             if not filas:
                 filas = "<div style='font-size:12px; color:#999; padding:8px 0;'>Sin viajes</div>"
             ser_tren_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333; text-align:center; margin-bottom:10px;'>Flota {f_type}</div>{filas}</div>", unsafe_allow_html=True)
@@ -894,12 +918,12 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                     seat_total_tipo += seat_svc
                     km_svc = sub_svc['tren_km'].sum()
                     ide_seat_svc = seat_svc / km_svc if km_svc > 0 else 0.0
-                    filas += f"<div style='padding:4px 0; border-bottom:1px solid #eee;'><div style='display:flex; justify-content:space-between;'><span style='font-size:13px; color:#555;'>{svc}</span><span style='font-size:13px; font-weight:bold; color:#2E7D32;'>{seat_svc:,.0f} kWh</span></div><div style='display:flex; justify-content:flex-end;'><span style='font-size:11px; color:#E65100;'>IDE {ide_seat_svc:.3f} kWh/km</span></div></div>"
+                    filas += f"<div style='padding:4px 0; border-bottom:1px solid #eee;'><div style='display:flex; justify-content:space-between;'><span style='font-size:13px; color:#555;'>{svc}</span><span style='font-size:13px; font-weight:bold; color:#2E7D32;'>{nf(seat_svc, 0)} kWh</span></div><div style='display:flex; justify-content:flex-end;'><span style='font-size:11px; color:#E65100;'>IDE {nf(ide_seat_svc, 3)} kWh/km</span></div></div>"
                 # Total e IDE global del tipo
                 km_tipo_seat = subset['tren_km'].sum()
                 ide_seat_tipo = seat_total_tipo / km_tipo_seat if km_tipo_seat > 0 else 0.0
-                filas += f"<div style='display:flex; justify-content:space-between; padding:5px 0; margin-top:4px; border-top:2px solid #2E7D32;'><span style='font-size:13px; font-weight:bold; color:#333;'>Total SEAT</span><span style='font-size:13px; font-weight:bold; color:#2E7D32;'>{seat_total_tipo:,.0f} kWh</span></div>"
-                filas += f"<div style='display:flex; justify-content:space-between; padding:3px 0;'><span style='font-size:13px; font-weight:bold; color:#333;'>IDE (SEAT)</span><span style='font-size:14px; font-weight:bold; color:#E65100;'>{ide_seat_tipo:.3f} kWh/km</span></div>"
+                filas += f"<div style='display:flex; justify-content:space-between; padding:5px 0; margin-top:4px; border-top:2px solid #2E7D32;'><span style='font-size:13px; font-weight:bold; color:#333;'>Total SEAT</span><span style='font-size:13px; font-weight:bold; color:#2E7D32;'>{nf(seat_total_tipo, 0)} kWh</span></div>"
+                filas += f"<div style='display:flex; justify-content:space-between; padding:3px 0;'><span style='font-size:13px; font-weight:bold; color:#333;'>IDE (SEAT)</span><span style='font-size:14px; font-weight:bold; color:#E65100;'>{nf(ide_seat_tipo, 3)} kWh/km</span></div>"
             if not filas:
                 filas = "<div style='font-size:12px; color:#999; padding:8px 0;'>Sin viajes</div>"
             seat_svc_cols[i].markdown(f"<div style='background-color:#f9f9f9; border-radius:8px; padding:15px; border: 1px solid #eee;'><div style='font-size:14px; font-weight:bold; color:#333; text-align:center; margin-bottom:10px;'>Flota {f_type}</div>{filas}</div>", unsafe_allow_html=True)
@@ -951,13 +975,13 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                 color_borde = '#1565C0' if 'Simple' in nombre_g else '#6A1B9A'
 
                 cuerpo = (
-                    f"<div style='font-size:11px; color:#666; margin-bottom:6px;'>{n_viajes} viajes · {m['km']:,.0f} tren-km</div>"
-                    f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:12px; color:#555;'>Pantógrafo</span><span style='font-size:13px; font-weight:bold; color:#2E7D32;'>{m['panto']:,.0f} kWh</span></div>"
-                    f"<div style='display:flex; justify-content:flex-end;'><span style='font-size:10px; color:#E65100;'>IDE {m['ide_panto']:.3f} kWh/km</span></div>"
-                    f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:12px; color:#555;'>SER (44kV)</span><span style='font-size:13px; font-weight:bold; color:#1565C0;'>{m['ser']:,.0f} kWh</span></div>"
-                    f"<div style='display:flex; justify-content:flex-end;'><span style='font-size:10px; color:#E65100;'>IDE {m['ide_ser']:.3f} kWh/km</span></div>"
-                    f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:12px; color:#555;'>SEAT</span><span style='font-size:13px; font-weight:bold; color:#C62828;'>{m['seat']:,.0f} kWh</span></div>"
-                    f"<div style='display:flex; justify-content:flex-end;'><span style='font-size:10px; color:#E65100;'>IDE {m['ide_seat']:.3f} kWh/km</span></div>"
+                    f"<div style='font-size:11px; color:#666; margin-bottom:6px;'>{n_viajes} viajes · {nf(m['km'], 0)} tren-km</div>"
+                    f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:12px; color:#555;'>Pantógrafo</span><span style='font-size:13px; font-weight:bold; color:#2E7D32;'>{nf(m['panto'], 0)} kWh</span></div>"
+                    f"<div style='display:flex; justify-content:flex-end;'><span style='font-size:10px; color:#E65100;'>IDE {nf(m['ide_panto'], 3)} kWh/km</span></div>"
+                    f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:12px; color:#555;'>SER (44kV)</span><span style='font-size:13px; font-weight:bold; color:#1565C0;'>{nf(m['ser'], 0)} kWh</span></div>"
+                    f"<div style='display:flex; justify-content:flex-end;'><span style='font-size:10px; color:#E65100;'>IDE {nf(m['ide_ser'], 3)} kWh/km</span></div>"
+                    f"<div style='display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eee;'><span style='font-size:12px; color:#555;'>SEAT</span><span style='font-size:13px; font-weight:bold; color:#C62828;'>{nf(m['seat'], 0)} kWh</span></div>"
+                    f"<div style='display:flex; justify-content:flex-end;'><span style='font-size:10px; color:#E65100;'>IDE {nf(m['ide_seat'], 3)} kWh/km</span></div>"
                 )
 
                 # Desglose por tipo de servicio dentro del grupo (simple o doble)
@@ -969,9 +993,9 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                         cuerpo += (
                             f"<div style='margin-bottom:5px; padding:4px; background-color:#fff; border-radius:4px;'>"
                             f"<div style='font-size:11px; font-weight:bold; color:#333;'>{svc} ({(sub_g['svc_type']==svc).sum()} viajes)</div>"
-                            f"<div style='display:flex; justify-content:space-between;'><span style='font-size:10px; color:#666;'>Pant: {ms['panto']:,.0f} kWh</span><span style='font-size:10px; color:#E65100;'>{ms['ide_panto']:.2f}</span></div>"
-                            f"<div style='display:flex; justify-content:space-between;'><span style='font-size:10px; color:#666;'>SER: {ms['ser']:,.0f} kWh</span><span style='font-size:10px; color:#E65100;'>{ms['ide_ser']:.2f}</span></div>"
-                            f"<div style='display:flex; justify-content:space-between;'><span style='font-size:10px; color:#666;'>SEAT: {ms['seat']:,.0f} kWh</span><span style='font-size:10px; color:#E65100;'>{ms['ide_seat']:.2f}</span></div>"
+                            f"<div style='display:flex; justify-content:space-between;'><span style='font-size:10px; color:#666;'>Pant: {nf(ms['panto'], 0)} kWh</span><span style='font-size:10px; color:#E65100;'>{nf(ms['ide_panto'], 2)}</span></div>"
+                            f"<div style='display:flex; justify-content:space-between;'><span style='font-size:10px; color:#666;'>SER: {nf(ms['ser'], 0)} kWh</span><span style='font-size:10px; color:#E65100;'>{nf(ms['ide_ser'], 2)}</span></div>"
+                            f"<div style='display:flex; justify-content:space-between;'><span style='font-size:10px; color:#666;'>SEAT: {nf(ms['seat'], 0)} kWh</span><span style='font-size:10px; color:#E65100;'>{nf(ms['ide_seat'], 2)}</span></div>"
                             f"</div>"
                         )
                     cuerpo += "</div>"
@@ -991,29 +1015,29 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             ser_cols = st.columns(len(active_sers))
             for i, ser_info in enumerate(active_sers):
                 e_44 = max(0.0, ser_accum_visual.get(ser_info[1], 0.0)) / ETA_SER_RECTIFICADOR
-                ser_cols[i].markdown(f"<div style='background-color:#FFF3E0; border-radius:8px; padding:15px; text-align:center; border: 1px solid #FFCC80;'><div style='font-size:14px; font-weight:bold; color:#E65100;'>{ser_info[1]}</div><div style='font-size:22px; font-weight:bold; color:#E65100; margin:10px 0;'>{e_44:,.0f} kWh</div><div style='font-size:12px; color:#666;'>Km Total Red: {km_total_red:,.3f} km</div><div style='font-size:14px; color:#C62828; font-weight:bold; margin-top:4px;'>Aporte IDE: {e_44/max(1.0, km_total_red):,.3f} kWh/km</div></div>", unsafe_allow_html=True)
+                ser_cols[i].markdown(f"<div style='background-color:#FFF3E0; border-radius:8px; padding:15px; text-align:center; border: 1px solid #FFCC80;'><div style='font-size:14px; font-weight:bold; color:#E65100;'>{ser_info[1]}</div><div style='font-size:22px; font-weight:bold; color:#E65100; margin:10px 0;'>{nf(e_44, 0)} kWh</div><div style='font-size:12px; color:#666;'>Km Total Red: {nf(km_total_red, 3)} km</div><div style='font-size:14px; color:#C62828; font-weight:bold; margin-top:4px;'>Aporte IDE: {nf(e_44/max(1.0, km_total_red), 3)} kWh/km</div></div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
         st.markdown("##### ⚡ Consumo Acumulado Subestación de Alta Tensión (SEAT 110/44kV)")
-        st.markdown(f"<div style='background-color:#FFFDE7; border-radius:8px; padding:15px; text-align:center; border: 1px solid #FFF59D;'><div style='font-size:16px; font-weight:bold; color:#F57F17;'>SEAT EL SOL (Total Red + Pérdidas AC)</div><div style='font-size:26px; font-weight:bold; color:#F57F17; margin:10px 0;'>{seat_accum_1:,.0f} kWh</div><div style='font-size:13px; color:#666;'>Km Comercial: {df_inic['tren_km'].sum():,.1f} km | Km Vacío: {vacio_km_total:,.3f} km</div><div style='font-size:14px; color:#333; font-weight:bold; margin-top:4px;'>Km Total Red: {km_total_red:,.3f} km</div><div style='font-size:16px; color:#C62828; font-weight:bold; margin-top:6px;'>IDE Global Real: {seat_accum_1/max(1.0, km_total_red):,.3f} kWh/km</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='background-color:#FFFDE7; border-radius:8px; padding:15px; text-align:center; border: 1px solid #FFF59D;'><div style='font-size:16px; font-weight:bold; color:#F57F17;'>SEAT EL SOL (Total Red + Pérdidas AC)</div><div style='font-size:26px; font-weight:bold; color:#F57F17; margin:10px 0;'>{nf(seat_accum_1, 0)} kWh</div><div style='font-size:13px; color:#666;'>Km Comercial: {nf(df_inic['tren_km'].sum(), 1)} km | Km Vacío: {nf(vacio_km_total, 3)} km</div><div style='font-size:14px; color:#333; font-weight:bold; margin-top:4px;'>Km Total Red: {nf(km_total_red, 3)} km</div><div style='font-size:16px; color:#C62828; font-weight:bold; margin-top:6px;'>IDE Global Real: {nf(seat_accum_1/max(1.0, km_total_red), 3)} kWh/km</div></div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
         a1,a2,a3,a4,a5,a6 = st.columns(6)
         with a1: st.metric("📋 Iniciados", n_inic)
         with a2: st.metric("✅ Completados", n_comp)
-        with a3: st.metric("📏 Tren-km", f"{km_ac:,.0f}")
-        with a4: st.metric("⚡ kWh SERs", f"{total_ser_kwh_44kv:,.0f}")
+        with a3: st.metric("📏 Tren-km", f"{nf(km_ac, 0)}")
+        with a4: st.metric("⚡ kWh SERs", f"{nf(total_ser_kwh_44kv, 0)}")
         pax_ac = int(df_inic['pax_abordo'].sum()) if prefix_key == "plan" else (int(df_inic[df_inic['pax_row_idx'] != -1].drop_duplicates(subset=['pax_row_idx'])['pax_abordo'].sum()) if not df_inic.empty and 'pax_row_idx' in df_inic.columns else 0)
         with a5: st.metric("🧑‍🤝‍🧑 Pax Despachados", f"{pax_ac:,}")
-        with a6: st.metric("💡 IDE Promedio (SEAT)", f"{ide_ac:.3f} kWh/km")
+        with a6: st.metric("💡 IDE Promedio (SEAT)", f"{nf(ide_ac, 3)} kWh/km")
 
         if prefix_key in ["mapa", "plan"]:
             st.divider()
             st.markdown("#### 🚉 Maniobras en Vacío (Cochera El Belloto y Transiciones)")
             v1, v2, v3 = st.columns(3)
             v1.metric("Maniobras en Vacío", vacio_count)
-            v2.metric("Kilometraje Improductivo", f"{vacio_km_total:,.3f} Tren-km")
-            v3.metric("Consumo Eléctrico Vacío", f"{vacio_kwh_total:,.0f} kWh")
+            v2.metric("Kilometraje Improductivo", f"{nf(vacio_km_total, 3)} Tren-km")
+            v3.metric("Consumo Eléctrico Vacío", f"{nf(vacio_kwh_total, 0)} kWh")
 
         st.divider()
         st.subheader("📈 Consumo Total y Requerimientos Aguas Arriba (SER & SEAT)")
@@ -1035,16 +1059,16 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
                         row[f'IDE {flota} [kWh/km]'] = round(sub['kwh_viaje_neto'].sum() / sub['tren_km'].sum(), 2) if not sub.empty and sub['tren_km'].sum() > 0 else 0.0
                     pivot_data.append(row)
 
-                st.markdown("##### 🚆 Resumen Consolidado por Familia de Tren (Flota)"); st.dataframe(res_flota, use_container_width=True)
-                st.markdown("##### 🔀 Matriz Detallada: Trayectos vs Flota (Auditoría Ejecutiva con IDE)"); st.dataframe(pd.DataFrame(pivot_data), use_container_width=True)
+                st.markdown("##### 🚆 Resumen Consolidado por Familia de Tren (Flota)"); st.dataframe(fmt_df(res_flota), use_container_width=True)
+                st.markdown("##### 🔀 Matriz Detallada: Trayectos vs Flota (Auditoría Ejecutiva con IDE)"); st.dataframe(fmt_df(pd.DataFrame(pivot_data), 2), use_container_width=True)
 
             st.divider()
             sr1, sr2 = st.columns(2)
-            with sr1: st.info(f"**Demanda en bornes de las SER Activas (a 44 kV): {total_ser_kwh_44kv:,.0f} kWh**")
-            with sr2: st.error(f"**Inyección Total SEAT 110/44kV (Tracción Bruta): {seat_accum_1:,.0f} kWh**")
+            with sr1: st.info(f"**Demanda en bornes de las SER Activas (a 44 kV): {nf(total_ser_kwh_44kv, 0)} kWh**")
+            with sr2: st.error(f"**Inyección Total SEAT 110/44kV (Tracción Bruta): {nf(seat_accum_1, 0)} kWh**")
 
             fig_pie = go.Figure(data=[go.Pie(labels=['Tracción', 'Auxiliar', 'Regeneración Útil', 'Pérdida Reóstato'], values=[df_inic['kwh_viaje_trac'].sum(), df_inic['kwh_viaje_aux'].sum(), df_inic['kwh_viaje_regen'].sum(), df_inic['kwh_reostato'].sum()], hole=.3, marker_colors=['#1565C0', '#F9A825', '#2E7D32', '#C62828'])])
-            fig_pie.update_layout(title="Distribución de Energía")
+            fig_pie.update_layout(title="Distribución de Energía", separators=",.")
 
             df_dia_e['hora'] = (df_dia_e['t_ini'] // 60).astype(int)
             e_hora = df_dia_e.groupby('hora')[['kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_viaje_neto']].sum().reset_index()
@@ -1054,7 +1078,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             fig_hora.add_trace(go.Bar(x=e_hora['hora'], y=e_hora['kwh_viaje_aux'], name='Auxiliar', marker_color='#F9A825'))
             fig_hora.add_trace(go.Bar(x=e_hora['hora'], y=-e_hora['kwh_viaje_regen'], name='Regeneración Útil', marker_color='#2E7D32'))
             fig_hora.add_trace(go.Scatter(x=e_hora['hora'], y=e_hora['kwh_viaje_neto'] / ETA_SER_RECTIFICADOR, mode='lines', name='Demanda Est. SER', line=dict(color='red', width=2, dash='dot')))
-            fig_hora.update_layout(barmode='relative', title="Energía por Hora con Demanda SER", xaxis_title="Hora", yaxis_title="kWh")
+            fig_hora.update_layout(barmode='relative', title="Energía por Hora con Demanda SER", xaxis_title="Hora", yaxis_title="kWh", separators=",.")
 
             ec1, ec2 = st.columns(2)
             with ec1: st.plotly_chart(fig_pie, use_container_width=True)
