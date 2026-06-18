@@ -8,6 +8,26 @@ from datetime import datetime, date, timedelta
 # Configuración de página de Streamlit (DEBE ser la primera instrucción)
 st.set_page_config(page_title="Simulador MERVAL V135", layout="wide", page_icon="🗺️")
 
+# === Formato numérico chileno: punto para miles, coma para decimales ===
+def nf(x, dec=1):
+    """Formatea un número al estilo es-CL: 1.234,56 (punto miles, coma decimales)."""
+    try:
+        s = f"{float(x):,.{int(dec)}f}"          # formato US: 1,234.56
+        return s.replace(",", "\u00A0").replace(".", ",").replace("\u00A0", ".")
+    except (ValueError, TypeError):
+        return str(x)
+
+def fmt_df(df, dec=1):
+    """Copia del DataFrame con columnas numéricas formateadas al estilo es-CL para mostrar."""
+    try:
+        d = df.copy()
+        for c in d.columns:
+            if pd.api.types.is_numeric_dtype(d[c]):
+                d[c] = d[c].map(lambda v: "" if pd.isna(v) else nf(v, dec))
+        return d
+    except Exception:
+        return df
+
 # 🛡️ FALLBACKS DE SEGURIDAD PARA CLOUD
 PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
 SER_DATA_DEFAULT = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
@@ -521,7 +541,7 @@ def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, use_
                 df_tabla = pd.DataFrame(filas)
                 col_cap, col_btn = st.columns([4, 1])
                 with col_cap:
-                    st.caption(f"{len(df_tabla)} servicios | {N_EST} estaciones | {KM_TOTAL:.1f} km")
+                    st.caption(f"{len(df_tabla)} servicios | {N_EST} estaciones | {nf(KM_TOTAL, 1)} km")
                 with col_btn:
                     import io as _io
                     _buf = _io.BytesIO()
@@ -911,9 +931,9 @@ def main():
                             sentido = "entrando a cocheras" if entrando else "saliendo de cocheras"
                             st.success(f"Maniobra simulada: El Belloto ↔ Las Cocheras ({sentido}) | {sb_flota} ({sb_config})")
                             m1, m2, m3 = st.columns(3)
-                            m1.metric("⏱️ Tiempo total", f"{t_total_min:.1f} min")
-                            m2.metric("⚡ Energía (tracción+aux)", f"{ener_tot:.1f} kWh")
-                            m3.metric("📏 Distancia", f"{dist_tot_m:.0f} m")
+                            m1.metric("⏱️ Tiempo total", f"{nf(t_total_min, 1)} min")
+                            m2.metric("⚡ Energía (tracción+aux)", f"{nf(ener_tot, 1)} kWh")
+                            m3.metric("📏 Distancia", f"{nf(dist_tot_m, 0)} m")
 
                             fase_t1 = ("El Belloto → 1er tope", D_T1 * 1000, thA * 60, trcA + auxA)
                             fase_t2 = ("1er tope → estacionamiento", D_T2 * 1000, thB * 60, trcB + auxB)
@@ -925,12 +945,12 @@ def main():
                                          fase_cab,
                                          ("1er tope → El Belloto", D_T1 * 1000, thA * 60, trcA + auxA)]
                             df_seg = pd.DataFrame(
-                                [{"Fase": n, "Distancia (m)": f"{d:.0f}", "Tiempo (min)": f"{t:.2f}", "Energía (kWh)": f"{e:.2f}"}
+                                [{"Fase": n, "Distancia (m)": f"{nf(d, 0)}", "Tiempo (min)": f"{nf(t, 2)}", "Energía (kWh)": f"{nf(e, 2)}"}
                                  for (n, d, t, e) in orden])
                             st.dataframe(df_seg, use_container_width=True, hide_index=True)
-                            st.caption(f"🚉 Maniobra a {V_COCH:.0f} km/h máx en ramal plano conectado en El Belloto. "
+                            st.caption(f"🚉 Maniobra a {nf(V_COCH, 0)} km/h máx en ramal plano conectado en El Belloto. "
                                        f"El tren se detiene por completo en el primer tope, el maquinista cambia de cabina "
-                                       f"(~{CAB_MIN:.0f} min) invirtiendo el sentido, y avanza hasta estacionar contra el "
+                                       f"(~{nf(CAB_MIN, 0)} min) invirtiendo el sentido, y avanza hasta estacionar contra el "
                                        f"segundo tope. Ambos extremos son topes (parada total).")
 
                             try:
@@ -986,13 +1006,13 @@ def main():
                             seat_sb = (tot_ser_sb / _eta_trafo_sb) + loss_sb
                             ide_sb = seat_sb / max(0.001, abs(km_d - km_o))
                             
-                            st.success(f"Simulación exitosa: {sb_orig} ➔ {sb_dest} | {sb_flota} ({sb_config}) | Distancia: {abs(km_d - km_o):.2f} km")
+                            st.success(f"Simulación exitosa: {sb_orig} ➔ {sb_dest} | {sb_flota} ({sb_config}) | Distancia: {nf(abs(km_d - km_o), 2)} km")
                             c_sb1, c_sb2, c_sb3 = st.columns(3)
-                            c_sb1.metric("⏱️ Tiempo de Viaje", f"{th_sb * 60:.1f} min")
-                            c_sb2.metric("⚡ Energía Neta (SEAT)", f"{seat_sb:.1f} kWh")
-                            c_sb3.metric("💡 IDE del Tramo (SEAT)", f"{ide_sb:.3f} kWh/km")
+                            c_sb1.metric("⏱️ Tiempo de Viaje", f"{nf(th_sb * 60, 1)} min")
+                            c_sb2.metric("⚡ Energía Neta (SEAT)", f"{nf(seat_sb, 1)} kWh")
+                            c_sb3.metric("💡 IDE del Tramo (SEAT)", f"{nf(ide_sb, 3)} kWh/km")
                         except Exception as e:
-                            st.error(f"Simulación Física Completada: Tracción {trc_sb:.1f} kWh. (Red Eléctrica no conectada en GUI. Error: {e})")
+                            st.error(f"Simulación Física Completada: Tracción {nf(trc_sb, 1)} kWh. (Red Eléctrica no conectada en GUI. Error: {e})")
 
                         # Perfiles del tramo: velocidad · altura · tracción
                         if figura_perfiles is not None and isinstance(datos_sim_sb, dict):
@@ -1195,25 +1215,25 @@ def main():
                             _rep = _mf.analizar_tension_secciones(df_sint_e)
                             st.caption("⚡ Red DC — corriente neta simultánea (tracción − regeneración, dos extremos)")
                             _r1 = st.columns(4)
-                            _r1[0].metric("V máx catenaria (regen)", f"{_rep.get('v_max_global', _rep['v_bus']):.0f} V")
-                            _r1[1].metric("V mín catenaria", f"{_rep['v_min_global']:.0f} V")
-                            _r1[2].metric("Barra SER mín", f"{_rep['v_ser_min']:.0f} V")
+                            _r1[0].metric("V máx catenaria (regen)", f"{nf(_rep.get('v_max_global', _rep['v_bus']), 0)} V")
+                            _r1[1].metric("V mín catenaria", f"{nf(_rep['v_min_global'], 0)} V")
+                            _r1[2].metric("Barra SER mín", f"{nf(_rep['v_ser_min'], 0)} V")
                             _r1[3].metric("Subtensión / Sobretensión", f"{_rep['n_subtension']} / {_rep.get('n_sobretension',0)}")
                             _r2 = st.columns(3)
-                            _r2[0].metric("Corriente máx SER (rectificadora)", f"{_rep['i_ser_max']:.0f} A")
-                            _r2[1].metric("Corriente máx SEAT (principal)", f"{_rep['i_seat_max']:.0f} A")
-                            _r2[2].metric("Demanda pico", f"{_rep['peak_demand_kw']:.0f} kW")
+                            _r2[0].metric("Corriente máx SER (rectificadora)", f"{nf(_rep['i_ser_max'], 0)} A")
+                            _r2[1].metric("Corriente máx SEAT (principal)", f"{nf(_rep['i_seat_max'], 0)} A")
+                            _r2[2].metric("Demanda pico", f"{nf(_rep['peak_demand_kw'], 0)} kW")
                             st.caption(f"🕑 Pico del sistema (SEAT) a las **{_rep.get('t_seat_max_hhmm','—')}** · "
                                        f"pico de la SER más cargada ({_rep.get('ser_max_nombre','—')}) a las "
-                                       f"**{_rep.get('t_ser_max_hhmm','—')}** · techo de regen **{_rep.get('v_regen_max',3600):.0f} V**")
+                                       f"**{_rep.get('t_ser_max_hhmm','—')}** · techo de regen **{nf(_rep.get('v_regen_max',3600), 0)} V**")
                             _ra = _rep.get('regen_absorbida_kwh', 0.0)
                             _rq = _rep.get('regen_quemada_kwh', 0.0)
                             _pct = 100.0 * _ra / max(1e-6, _ra + _rq)
                             st.caption(f"🔌 Energía NETA entregada por las SER (regen ya descontada, sin auxiliares): "
-                                       f"**{_rep.get('e_entregada_kwh',0):,.0f} kWh** "
-                                       f"(tracción neta {_rep.get('e_traccion_kwh',0):,.0f} + pérdidas {_rep.get('e_perdidas_kwh',0):,.0f})")
-                            st.caption(f"♻️ Regeneración: **{_ra:,.0f} kWh** aprovechada ({_pct:.0f}%) · "
-                                       f"**{_rq:,.0f} kWh** quemada en reóstato (sin receptor / techo de tensión)")
+                                       f"**{nf(_rep.get('e_entregada_kwh',0), 0)} kWh** "
+                                       f"(tracción neta {nf(_rep.get('e_traccion_kwh',0), 0)} + pérdidas {nf(_rep.get('e_perdidas_kwh',0), 0)})")
+                            st.caption(f"♻️ Regeneración: **{nf(_ra, 0)} kWh** aprovechada ({nf(_pct, 0)}%) · "
+                                       f"**{nf(_rq, 0)} kWh** quemada en reóstato (sin receptor / techo de tensión)")
 
                             # Corriente y energía por cada una de las 4 SER (2 trafos en serie c/u)
                             _det = _rep.get('detalle_ser', {})
@@ -1222,14 +1242,14 @@ def main():
                                 for _nom, _d in sorted(_det.items(), key=lambda x: x[1]['km']):
                                     _filas.append({
                                         "SER": _nom,
-                                        "PK (km)": round(_d['km'], 1),
-                                        "I máx (A)": round(_d['i_pico_A']),
+                                        "PK (km)": nf(_d['km'], 1),
+                                        "I máx (A)": nf(_d['i_pico_A'], 0),
                                         "Hora pico": _d.get('t_pico_hhmm', '—'),
-                                        "Carga (%)": round(_d['carga_pct']),
-                                        "Barra (V)": round(_d['v_barra']),
-                                        "E neta (kWh)": round(_d.get('e_entregada_kwh', 0)),
-                                        "Regen abs (kWh)": round(_d.get('e_regen_kwh', 0)),
-                                        "Cap. total (kW)": round(_d.get('cap_total_kw', 0)),
+                                        "Carga (%)": nf(_d['carga_pct'], 0),
+                                        "Barra (V)": nf(_d['v_barra'], 0),
+                                        "E neta (kWh)": nf(_d.get('e_entregada_kwh', 0), 0),
+                                        "Regen abs (kWh)": nf(_d.get('e_regen_kwh', 0), 0),
+                                        "Cap. total (kW)": nf(_d.get('cap_total_kw', 0), 0),
                                     })
                                 st.caption("Corriente y energía NETA por SER (regen descontada; dos extremos; incluye pérdidas de línea)")
                                 st.dataframe(pd.DataFrame(_filas), use_container_width=True, hide_index=True)
@@ -1258,7 +1278,7 @@ def main():
                             sufijo_p = "15min" if paso_p == 15 else "60min"
                             ruta_15 = os.path.join(tempfile.gettempdir(), f"SEAT_{sufijo_p}_Planificador.xlsx")
                             _, df_tabla_15 = generar_tabla_seat_15min(df_sint_e, config, active_sers, distribuir_energia_sers, calcular_flujo_ac_nodo, ruta_15, paso_min=paso_p)
-                            st.dataframe(df_tabla_15, use_container_width=True, height=300)
+                            st.dataframe(fmt_df(df_tabla_15, 1), use_container_width=True, height=300)
                             with open(ruta_15, 'rb') as f:
                                 st.download_button(
                                     f"⬇️ Descargar tabla SEAT ({granularidad_p.lower()}) (xlsx)",
@@ -1331,15 +1351,15 @@ def main():
 
                         # Métricas de ahorro (SEAT total, igual que el planificador)
                         m1, m2, m3 = st.columns(3)
-                        m1.metric("Consumo Actual (SEAT)", f"{resumen['kwh_actual']:,.0f} kWh")
-                        m2.metric("Consumo Optimizado (SEAT)", f"{resumen['kwh_optimo']:,.0f} kWh",
-                                  delta=f"-{resumen['ahorro_kwh']:,.0f} kWh")
-                        m3.metric("Ahorro", f"{resumen['ahorro_pct']:.1f} %")
+                        m1.metric("Consumo Actual (SEAT)", f"{nf(resumen['kwh_actual'], 0)} kWh")
+                        m2.metric("Consumo Optimizado (SEAT)", f"{nf(resumen['kwh_optimo'], 0)} kWh",
+                                  delta=f"-{nf(resumen['ahorro_kwh'], 0)} kWh")
+                        m3.metric("Ahorro", f"{nf(resumen['ahorro_pct'], 1)} %")
 
                         m4, m5, m6 = st.columns(3)
-                        m4.metric("IDE Actual", f"{resumen.get('ide_actual', 0):.3f} kWh/km")
-                        m5.metric("IDE Optimizado", f"{resumen.get('ide_optimo', 0):.3f} kWh/km")
-                        m6.metric("Kilometraje (Tren-km)", f"{resumen.get('km_total', 0):,.1f} km")
+                        m4.metric("IDE Actual", f"{nf(resumen.get('ide_actual', 0), 3)} kWh/km")
+                        m5.metric("IDE Optimizado", f"{nf(resumen.get('ide_optimo', 0), 3)} kWh/km")
+                        m6.metric("Kilometraje (Tren-km)", f"{nf(resumen.get('km_total', 0), 1)} km")
                         if resumen.get('usa_seat_real'):
                             st.caption("✅ Consumo calculado como SEAT total (incluye pérdidas de rectificador y AC), "
                                        "idéntico al del Planificador, con la misma carga de pasajeros y prevenciones. "
@@ -1400,7 +1420,7 @@ def main():
                                 'km_tramo': 'km', 'tipo_tren': 'Actual', 'tipo_optimo': 'Óptimo',
                                 'kwh_actual': 'kWh actual', 'kwh_optimo': 'kWh óptimo'
                             })
-                            st.dataframe(tabla.round(1), use_container_width=True, height=400)
+                            st.dataframe(fmt_df(tabla, 1), use_container_width=True, height=400)
                         else:
                             st.info("La distribución actual ya es óptima — no se proponen cambios.")
 
@@ -1452,7 +1472,7 @@ def main():
                                 sufijo_o = "15min" if paso_o == 15 else "60min"
                                 ruta_15o = os.path.join(tempfile.gettempdir(), f"SEAT_{sufijo_o}_Optimizador.xlsx")
                                 _, df_t15o = generar_tabla_seat_15min(df_base_consumo, config, active_sers, distribuir_energia_sers, calcular_flujo_ac_nodo, ruta_15o, paso_min=paso_o)
-                                st.dataframe(df_t15o, use_container_width=True, height=300)
+                                st.dataframe(fmt_df(df_t15o, 1), use_container_width=True, height=300)
                                 with open(ruta_15o, 'rb') as f:
                                     st.download_button(
                                         f"⬇️ Descargar tabla SEAT ({granularidad_o.lower()}) (xlsx)",
