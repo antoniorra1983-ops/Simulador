@@ -72,12 +72,26 @@ def construir_perfiles(datos_sim):
     return df
 
 
-def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
-    """Construye la figura Plotly de 3 paneles (velocidad, altura, tracción)
-    alineados por PK. Devuelve None si el perfil está vacío."""
+def figura_perfiles(datos_sim, titulo="Perfiles del viaje", tipo_tren=None, doble=False):
+    """Figura Plotly de 4 paneles (velocidad, altura, traccion kN+kW, % traccion)
+    alineados por PK, con estaciones marcadas y nombradas. None si el perfil esta vacio."""
     df = construir_perfiles(datos_sim)
     if df.empty:
         return None
+
+    # Potencia maxima del tren (x2 si doble) para el % de traccion
+    pmax_kw = None
+    try:
+        import config as _cfg
+        _pm = float(_cfg.FLOTA.get(tipo_tren, {}).get('p_max_kw', 0)) * (2 if doble else 1)
+        if _pm > 0:
+            pmax_kw = _pm
+    except Exception:
+        pmax_kw = None
+    if not pmax_kw or pmax_kw <= 0:
+        _mx = float(df['P_neta_kW'].abs().max())
+        pmax_kw = _mx if _mx > 0 else 1.0
+    df['pct_trac'] = (df['P_neta_kW'] / pmax_kw) * 100.0
 
     cota = _cota_geografica()
     pk_el = np.arange(len(cota)) / 1000.0
@@ -86,11 +100,13 @@ def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
     x_lo, x_hi = max(0.0, km_min - pad), min(43.2, km_max + pad)
 
     fig = make_subplots(
-        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.07,
-        specs=[[{}], [{}], [{"secondary_y": True}]],
+        rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+        row_heights=[0.22, 0.18, 0.32, 0.28],
+        specs=[[{}], [{}], [{"secondary_y": True}], [{}]],
         subplot_titles=("Velocidad (km/h)",
-                        "Altura — rasante (m)",
-                        "Tracción — esfuerzo en rueda (kN) y potencia (kW)"))
+                        "Altura - rasante (m)",
+                        "Traccion - esfuerzo en rueda (kN) y potencia (kW)",
+                        "% de traccion  (+ traccion / - freno-regen)"))
 
     # 1) VELOCIDAD
     fig.add_trace(go.Scatter(x=df['km'], y=df['v_kmh'], mode='lines',
@@ -98,17 +114,17 @@ def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
                              hovertemplate='PK %{x:.2f} km<br>%{y:.0f} km/h<extra></extra>'),
                   row=1, col=1)
 
-    # 2) ALTURA (rasante geográfica)
+    # 2) ALTURA (rasante geografica)
     fig.add_trace(go.Scatter(x=pk_el, y=cota, mode='lines', name='Cota rasante',
                              line=dict(color='#2b2d42', width=1.6),
                              fill='tozeroy', fillcolor='rgba(141,153,174,0.30)',
                              hovertemplate='PK %{x:.2f} km<br>%{y:.0f} m<extra></extra>'),
                   row=2, col=1)
 
-    # 3) TRACCIÓN: esfuerzo (kN) + potencia (kW) en eje secundario
+    # 3) TRACCION: esfuerzo (kN) + potencia (kW) en eje secundario
     f = df['f_real_kN']
     fig.add_trace(go.Scatter(x=df['km'], y=f.clip(lower=0), mode='lines',
-                             name='Tracción', line=dict(color='#2a9d8f', width=0.8),
+                             name='Traccion', line=dict(color='#2a9d8f', width=0.8),
                              fill='tozeroy', fillcolor='rgba(42,157,143,0.55)',
                              hovertemplate='PK %{x:.2f} km<br>+%{y:.0f} kN<extra></extra>'),
                   row=3, col=1)
@@ -118,50 +134,80 @@ def figura_perfiles(datos_sim, titulo="Perfiles del viaje"):
                              hovertemplate='PK %{x:.2f} km<br>%{y:.0f} kN<extra></extra>'),
                   row=3, col=1)
     fig.add_trace(go.Scatter(x=df['km'], y=df['P_neta_kW'], mode='lines',
-                             name='Potencia (+consumo / −regen)',
+                             name='Potencia (+consumo / -regen)',
                              line=dict(color='#264653', width=1.0, dash='dot'),
                              opacity=0.7,
                              hovertemplate='PK %{x:.2f} km<br>%{y:.0f} kW<extra></extra>'),
                   row=3, col=1, secondary_y=True)
 
-    # Estaciones como líneas verticales en los 3 paneles (robusto ante eje secundario)
+    # 4) % DE TRACCION (+ traccion / - freno)
+    pct = df['pct_trac']
+    fig.add_trace(go.Scatter(x=df['km'], y=pct.clip(lower=0), mode='lines',
+                             name='% traccion', line=dict(color='#2a9d8f', width=0.8),
+                             fill='tozeroy', fillcolor='rgba(42,157,143,0.45)',
+                             showlegend=False,
+                             hovertemplate='PK %{x:.2f} km<br>+%{y:.0f}%<extra></extra>'),
+                  row=4, col=1)
+    fig.add_trace(go.Scatter(x=df['km'], y=pct.clip(upper=0), mode='lines',
+                             name='% freno', line=dict(color='#e76f51', width=0.8),
+                             fill='tozeroy', fillcolor='rgba(231,111,81,0.45)',
+                             showlegend=False,
+                             hovertemplate='PK %{x:.2f} km<br>%{y:.0f}%<extra></extra>'),
+                  row=4, col=1)
+
+    # Estaciones: lineas verticales VISIBLES en los 4 paneles
     for k in _KM:
         if x_lo <= k <= x_hi:
-            for r in (1, 2, 3):
+            for r in (1, 2, 3, 4):
                 try:
                     if r == 3:
-                        fig.add_vline(x=k, line_width=0.4,
-                                      line_color='rgba(120,120,120,0.35)',
+                        fig.add_vline(x=k, line_width=0.9, line_dash='dot',
+                                      line_color='rgba(90,90,120,0.5)',
                                       row=r, col=1, secondary_y=False)
                     else:
-                        fig.add_vline(x=k, line_width=0.4,
-                                      line_color='rgba(120,120,120,0.35)',
+                        fig.add_vline(x=k, line_width=0.9, line_dash='dot',
+                                      line_color='rgba(90,90,120,0.5)',
                                       row=r, col=1)
                 except Exception:
                     pass
 
     fig.update_layout(
         title=dict(text=titulo, font=dict(size=15)),
-        height=760, hovermode='x unified',
-        margin=dict(l=60, r=60, t=70, b=40),
+        height=980, hovermode='x unified', dragmode='zoom',
+        margin=dict(l=60, r=60, t=80, b=95),
         legend=dict(orientation='h', yanchor='bottom', y=1.02, x=0),
         plot_bgcolor='white')
-    fig.update_xaxes(range=[x_lo, x_hi], showgrid=True, gridcolor='rgba(0,0,0,0.06)')
+
+    # Eje X: ESTACIONES como etiquetas (en su PK), rotadas -> "marcar donde esta cada estacion"
+    est_ticks = [(k, _EST[i]) for i, k in enumerate(_KM) if x_lo <= k <= x_hi]
+    if est_ticks:
+        fig.update_xaxes(range=[x_lo, x_hi], showgrid=False,
+                         tickmode='array',
+                         tickvals=[t[0] for t in est_ticks],
+                         ticktext=[t[1] for t in est_ticks],
+                         tickangle=-45, tickfont=dict(size=9))
+    else:
+        fig.update_xaxes(range=[x_lo, x_hi])
     fig.update_yaxes(showgrid=True, gridcolor='rgba(0,0,0,0.06)')
-    fig.update_xaxes(title_text="PK (km)  ·  Puerto = 0 → Limache = 43.1", row=3, col=1)
+    fig.update_xaxes(title_text="Estaciones  (PK, km)", row=4, col=1)
     fig.update_yaxes(range=[0, 130], row=1, col=1)
-    # Ejes del panel de tracción: escalados a los datos de ESTE tren (no fijos),
-    # si no, trenes potentes (XT-M, SFE) se recortan y parecen iguales.
+
+    # Ejes del panel de traccion escalados a ESTE tren
     f_axis = max(50.0, float(df['f_real_kN'].abs().max()) * 1.12)
     p_hi = max(100.0, float(df['P_neta_kW'].max()) * 1.10)
     p_lo = min(0.0, float(df['P_neta_kW'].min()) * 1.10)
     fig.update_yaxes(title_text="Esfuerzo (kN)", row=3, col=1, secondary_y=False,
                      range=[-f_axis, f_axis])
-    fig.update_yaxes(title_text="Potencia (kW): +consumo / −regen", row=3, col=1,
+    fig.update_yaxes(title_text="Potencia (kW): +consumo / -regen", row=3, col=1,
                      secondary_y=True, range=[p_lo, p_hi], showgrid=False)
-    # línea de cero en el panel de tracción para separar tracción/freno y consumo/regen
     fig.add_hline(y=0, line_width=0.6, line_color='rgba(0,0,0,0.45)', row=3, col=1,
                   secondary_y=False)
+
+    # % traccion: rango con margen y linea de cero
+    pct_hi = max(105.0, float(pct.max()) * 1.10)
+    pct_lo = min(-5.0, float(pct.min()) * 1.10)
+    fig.update_yaxes(title_text="% de P_max", row=4, col=1, range=[pct_lo, pct_hi])
+    fig.add_hline(y=0, line_width=0.6, line_color='rgba(0,0,0,0.45)', row=4, col=1)
     return fig
 
 
@@ -198,11 +244,23 @@ def render_perfiles_viaje(df_dia_e, prefix_key="perf"):
     idx_sel = opciones[etiqueta]
     row = cand.loc[idx_sel]
 
-    fig = figura_perfiles(row['datos_sim'], titulo=etiqueta)
+    # tipo de tren y config (Simple/Doble) para el % de traccion — robusto a nombres de columna
+    _tipo = None
+    for _c in ('tipo_tren', 'Tipo', 'tipo'):
+        if _c in row and pd.notna(row.get(_c)):
+            _tipo = row.get(_c); break
+    _doble = False
+    if 'doble' in row and pd.notna(row.get('doble')):
+        _doble = bool(row.get('doble'))
+    elif 'Config' in row and pd.notna(row.get('Config')):
+        _doble = (str(row.get('Config')).strip().lower() == 'doble')
+
+    fig = figura_perfiles(row['datos_sim'], titulo=etiqueta, tipo_tren=_tipo, doble=_doble)
     if fig is None:
         st.warning("El viaje seleccionado no tiene perfil de simulación.")
         return
-    st.plotly_chart(fig, use_container_width=True, key=f"{prefix_key}_fig_perfiles")
+    st.plotly_chart(fig, use_container_width=True, key=f"{prefix_key}_fig_perfiles",
+                    config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
 
     # Métricas rápidas del viaje
     dfp = construir_perfiles(row['datos_sim'])
