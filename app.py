@@ -32,23 +32,6 @@ def fmt_df(df, dec=1):
         return df
 
 
-def df_pct_traccion(perfil, tipo_tren, doble):
-    """DataFrame [Distancia (m), % Tracción] = potencia de tracción / potencia máxima del tren (x2 si doble)."""
-    try:
-        pmax = float(getattr(config, 'FLOTA', {}).get(tipo_tren, {}).get('p_max_kw', 0)) * (2 if doble else 1)
-        if pmax <= 0 or not perfil:
-            return None
-        k0 = perfil[0][1]
-        filas = []
-        for p in perfil:
-            ptrac = p[6] if len(p) > 6 else 0.0
-            pct = max(0.0, min(105.0, (float(ptrac) / pmax) * 100.0))
-            filas.append({"Distancia (m)": abs(p[1] - k0) * 1000.0, "% Tracción": pct})
-        d = pd.DataFrame(filas)
-        return d.set_index("Distancia (m)") if not d.empty else None
-    except Exception:
-        return None
-
 # 🛡️ FALLBACKS DE SEGURIDAD PARA CLOUD
 PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
 SER_DATA_DEFAULT = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
@@ -1095,23 +1078,18 @@ def main():
                         except Exception as e:
                             st.error(f"Simulación Física Completada: Tracción {nf(trc_sb, 1)} kWh. (Red Eléctrica no conectada en GUI. Error: {e})")
 
-                        # Perfiles del tramo: velocidad · altura · tracción
+                        # Perfiles del tramo: velocidad · altura · tracción · % de tracción
                         if figura_perfiles is not None and isinstance(datos_sim_sb, dict):
                             _fig_lab = figura_perfiles(
                                 datos_sim_sb,
-                                titulo=f"{sb_orig} → {sb_dest} · {sb_flota} · V{via_sb}")
+                                titulo=f"{sb_orig} → {sb_dest} · {sb_flota} · V{via_sb}",
+                                tipo_tren=sb_flota, doble=sb_doble)
                             if _fig_lab is not None:
                                 st.plotly_chart(_fig_lab, use_container_width=True,
-                                                key="lab_perfiles_fig")
+                                                key="lab_perfiles_fig",
+                                                config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
                         elif figura_perfiles is None:
                             st.caption(f"📈 Perfiles no disponibles: {_PERFILES_IMPORT_ERROR}")
-
-                        # % de tracción a lo largo del recorrido (Opción B)
-                        if isinstance(datos_sim_sb, dict):
-                            _dfpct = df_pct_traccion(datos_sim_sb.get('perfil', []), sb_flota, sb_doble)
-                            if _dfpct is not None and not _dfpct.empty:
-                                st.caption("📈 % de tracción usado a lo largo del recorrido (potencia de tracción ÷ potencia máxima del tren):")
-                                st.line_chart(_dfpct, height=240)
 
             # === EDITOR DE MANIOBRAS DE ACOPLE / DESACOPLE ===
             if st.session_state.get('raw_plan_df') is not None:
@@ -1264,37 +1242,6 @@ def main():
                     else:
                         st.warning(f"📈 Módulo de perfiles no cargado. Verifica que **perfiles_viaje.py** "
                                    f"esté junto a app.py. Detalle: {_PERFILES_IMPORT_ERROR}")
-
-                    # % de tracción por servicio (Opción B)
-                    try:
-                        _rp_pt = st.session_state.get('raw_plan_df')
-                        if _rp_pt is not None and len(_rp_pt) > 0 and 'num_servicio' in _rp_pt.columns:
-                            st.markdown("##### 📈 % de tracción por servicio")
-                            _svcs_pt = [str(x) for x in _rp_pt['num_servicio'].tolist()]
-                            _sel_pt = st.selectbox("Servicio", _svcs_pt, key="pct_trac_svc_plan")
-                            _row_pt = _rp_pt[_rp_pt['num_servicio'].astype(str) == _sel_pt].iloc[0]
-                            _key_pt = f"{_sel_pt}|{pct_trac_plan}|{use_rm}|{use_pend}|{len(_rp_pt)}"
-                            if st.session_state.get('_pcttrac_key') != _key_pt:
-                                with st.spinner("Calculando perfil de tracción..."):
-                                    try:
-                                        _rr_pt = simular_tramo_termodinamico(
-                                            _row_pt['tipo_tren'], bool(_row_pt['doble']), _row_pt['km_orig'], _row_pt['km_dest'], int(_row_pt['Via']),
-                                            pct_trac_plan, use_rm, use_pend, _row_pt.get('nodos'), {}, int(pax_promedio_viaje),
-                                            None, _row_pt.get('maniobra'), estacion_anio_plan, float(_row_pt['t_ini']), es_vacio=False, prevenciones=prevenciones_list)
-                                    except TypeError:
-                                        _rr_pt = simular_tramo_termodinamico(
-                                            _row_pt['tipo_tren'], bool(_row_pt['doble']), _row_pt['km_orig'], _row_pt['km_dest'], int(_row_pt['Via']),
-                                            pct_trac_plan, use_rm, use_pend, _row_pt.get('nodos'), {}, int(pax_promedio_viaje),
-                                            None, _row_pt.get('maniobra'), estacion_anio_plan, float(_row_pt['t_ini']), es_vacio=False)
-                                _perfil_pt = _rr_pt[3].get('perfil', []) if isinstance(_rr_pt[3], dict) else []
-                                st.session_state['_pcttrac_df'] = df_pct_traccion(_perfil_pt, _row_pt['tipo_tren'], bool(_row_pt['doble']))
-                                st.session_state['_pcttrac_key'] = _key_pt
-                            _dfpct_pt = st.session_state.get('_pcttrac_df')
-                            if _dfpct_pt is not None and not _dfpct_pt.empty:
-                                st.caption(f"Servicio {_sel_pt} · {_row_pt['tipo_tren']} ({'Doble' if bool(_row_pt['doble']) else 'Simple'}) · % de tracción (potencia de tracción ÷ máx):")
-                                st.line_chart(_dfpct_pt, height=240)
-                    except Exception as _e_pt:
-                        st.caption(f"No se pudo generar el % de tracción por servicio: {_e_pt}")
 
                     # Reporte de tensión de red con la corriente SIMULTÁNEA de los trenes
                     try:
