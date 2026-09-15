@@ -234,6 +234,44 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
     json_data = json.dumps(trips_data)
     json_km_acum = json.dumps(KM_ACUM[:N_EST])
     json_pax_cols = json.dumps(PAX_COLS)
+
+    # === Curva de potencia del SISTEMA (minuto a minuto) desde el perfil real de cada tren ===
+    # P_neta = P_traccion (indice 6) - p_regen (indice 4). Potencia inst. = kWh del minuto x 60.
+    sys_e_min = [0.0] * 1440
+    _hay_energia = False
+    for _, _r in df_dia_e.iterrows():
+        _ds = _r.get('datos_sim')
+        _perfil = _ds.get('perfil') if isinstance(_ds, dict) else None
+        _uso = False
+        if _perfil and len(_perfil) >= 2 and len(_perfil[0]) >= 7:
+            for _i in range(len(_perfil) - 1):
+                _p = _perfil[_i]
+                _t = float(_p[0])
+                _dt_s = max(0.0, (float(_perfil[_i+1][0]) - _t) * 60.0)
+                _pn = float(_p[6]) - float(_p[4])
+                _m = int(_t)
+                if 0 <= _m < 1440:
+                    sys_e_min[_m] += _pn * _dt_s / 3600.0
+                    _hay_energia = True
+                    _uso = True
+        if not _uso:
+            _kwh = float(_r.get('kwh_viaje_neto', 0) or 0)
+            if abs(_kwh) > 1e-9:
+                _ti, _tf = float(_r['t_ini']), float(_r['t_fin'])
+                _dur = max(1e-6, _tf - _ti)
+                for _m in range(int(_ti), min(1440, int(_tf) + 1)):
+                    _fm = (min(_tf, _m + 1) - max(_ti, _m)) / _dur
+                    if _fm > 0:
+                        sys_e_min[_m] += _kwh * _fm
+                        _hay_energia = True
+    sys_power_min = [round(e * 60.0, 1) for e in sys_e_min]
+    _cum = 0.0
+    sys_energy_cum = []
+    for e in sys_e_min:
+        _cum += e
+        sys_energy_cum.append(round(_cum, 1))
+    json_syspow = json.dumps(sys_power_min)
+    json_syse = json.dumps(sys_energy_cum)
     
     svg_bg, H = draw_diagram_svg(pd.DataFrame(), ser_accum_plot, seat_accum_plot, "Modo SCADA Activo", titulo_extra, active_sers_list, gap_vias)
     svg_bg = svg_bg.replace('</svg>', '<g id="trains_layer"></g></svg>') 
@@ -242,6 +280,8 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
     const trips = JSON_DATA_HERE;
     const KM_ACUM = KM_ACUM_HERE;
     const PAX_COLS = PAX_COLS_HERE;
+    const sysPower = SYS_POWER_HERE;
+    const sysEnergy = SYS_ENERGY_HERE;
     const W = 1200;
     const PADDING_X = 40; 
     const KM_TOTAL = KM_TOTAL_HERE;
@@ -258,6 +298,8 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
     const timeDisplay = document.getElementById('timeDisplay');
     const speedSelect = document.getElementById('speedSelect');
     const trainsLayer = document.getElementById('trains_layer');
+    const powerDisplay = document.getElementById('powerDisplay');
+    const energyDisplay = document.getElementById('energyDisplay');
     
     function formatTime(mins) {
         let h = Math.floor(mins / 60);
@@ -388,6 +430,9 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
         
         trainsLayer.innerHTML = html;
         timeDisplay.innerText = formatTime(currentTime);
+        let _mi = Math.min(1439, Math.max(0, Math.floor(currentTime)));
+        if (powerDisplay) powerDisplay.innerText = Math.round(sysPower[_mi]).toLocaleString('es-CL') + ' kW';
+        if (energyDisplay) energyDisplay.innerText = Math.round(sysEnergy[_mi]).toLocaleString('es-CL') + ' kWh';
     }
     
     function loop(timestamp) {
@@ -433,7 +478,16 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
     js_code = js_code.replace("KM_TOTAL_HERE", str(KM_TOTAL))
     js_code = js_code.replace("GAP_VIAS_HERE", str(gap_vias))
     js_code = js_code.replace("HORA_INICIAL_HERE", str(hora_inicial))
+    js_code = js_code.replace("SYS_POWER_HERE", json_syspow)
+    js_code = js_code.replace("SYS_ENERGY_HERE", json_syse)
 
+    kpibar_html = ""
+    if _hay_energia:
+        kpibar_html = (
+            '<div class="kpibar">'
+            '<div class="kpi kpi-pow">\u26a1 Potencia sistema (tracci\u00f3n \u2212 regen): <b id="powerDisplay">0 kW</b></div>'
+            '<div class="kpi kpi-e">\U0001f50b Energ\u00eda de tracci\u00f3n acumulada: <b id="energyDisplay">0 kWh</b></div>'
+            '</div>')
     html_template = f"""
     <!DOCTYPE html>
     <html>
@@ -447,6 +501,13 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
             input[type=range]::-webkit-slider-thumb {{ appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #1565c0; cursor: pointer; }}
             .time-disp {{ font-family: monospace; font-size: 26px; font-weight: bold; color: #111; min-width: 90px; text-align: center; background: white; padding: 6px 12px; border-radius: 6px; border: 2px solid #90caf9; box-shadow: inset 0 2px 4px rgba(0,0,0,0.05); }}
             select {{ padding: 10px; border-radius: 6px; border: 1px solid #bbdefb; font-weight: bold; background: white; cursor: pointer; color: #1565c0; }}
+            .kpibar {{ display: flex; gap: 15px; margin-bottom: 10px; }}
+            .kpi {{ flex: 1; background: #fff; border: 1px solid #bbdefb; border-radius: 8px; padding: 10px 16px; font-size: 15px; font-weight: 600; color: #333; box-shadow: 0 2px 4px rgba(0,0,0,0.06); }}
+            .kpi b {{ font-family: monospace; font-size: 21px; }}
+            .kpi-pow {{ border-left: 6px solid #e76f51; }}
+            .kpi-pow b {{ color: #c1440e; }}
+            .kpi-e {{ border-left: 6px solid #2a9d8f; }}
+            .kpi-e b {{ color: #1f7a6e; }}
         </style>
     </head>
     <body>
@@ -462,6 +523,7 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
                 <option value="60">Time-Lapse (60x)</option>
             </select>
         </div>
+        {kpibar_html}
         <div id="mapContainer">
             {svg_bg}
         </div>
