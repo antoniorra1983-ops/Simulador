@@ -508,6 +508,58 @@ def generar_fila_thdr_sintetica(tipo_tren, doble, via, pct_trac, t_ini_mins, est
     return fila
 
 
+def aplicar_flota_editada(df_asignado, df_flota_edit):
+    """Reasigna tipo de tren y config (Simple/Doble) a cada servicio segun la matriz
+    de flota editada por el usuario, por trayecto. Preserva la asignacion original en
+    los trayectos que el usuario no modifico. Devuelve (df, avisos)."""
+    df = df_asignado.copy()
+    avisos = []
+    try:
+        fe = df_flota_edit.copy()
+        fe = fe[fe['Trayecto'] != 'TOTAL']
+    except Exception:
+        return df, avisos
+    for _, row in fe.iterrows():
+        tray = row.get('Trayecto')
+        if tray is None:
+            continue
+        idxs = list(df[df['svc_type'] == tray].index)
+        if not idxs:
+            continue
+        idxs = sorted(idxs, key=lambda i: df.loc[i, 't_ini'] if 't_ini' in df.columns else 0)
+        n = len(idxs)
+        tgt = {t: int(pd.to_numeric(row.get(t, 0), errors='coerce') or 0) for t in ['XT-100', 'XT-M', 'SFE']}
+        s = int(pd.to_numeric(row.get('Simple', 0), errors='coerce') or 0)
+        d = int(pd.to_numeric(row.get('Doble', 0), errors='coerce') or 0)
+        cur = {t: int((df.loc[idxs, 'tipo_tren'] == t).sum()) for t in ['XT-100', 'XT-M', 'SFE']}
+        cur_s = int((~df.loc[idxs, 'doble'].astype(bool)).sum())
+        cur_d = int(df.loc[idxs, 'doble'].astype(bool).sum())
+        tipo_sin_cambio = (sum(tgt.values()) == 0) or (cur == tgt)
+        cfg_sin_cambio = (s + d == 0) or (cur_s == s and cur_d == d)
+        if tipo_sin_cambio and cfg_sin_cambio:
+            continue  # trayecto no editado: preservar
+        # Tipos objetivo
+        if sum(tgt.values()) > 0:
+            tipos = []
+            for t in ['XT-100', 'XT-M', 'SFE']:
+                tipos += [t] * tgt[t]
+            if len(tipos) != n:
+                avisos.append(f"{tray}: {len(tipos)} trenes por tipo vs {n} servicios")
+            tipos = tipos[:n] if len(tipos) >= n else tipos + [tipos[-1]] * (n - len(tipos))
+        else:
+            tipos = list(df.loc[idxs, 'tipo_tren'])
+        # Config objetivo
+        if s + d > 0:
+            cfgs = [False] * s + [True] * d
+            cfgs = cfgs[:n] if len(cfgs) >= n else cfgs + [cfgs[-1]] * (n - len(cfgs))
+        else:
+            cfgs = list(df.loc[idxs, 'doble'].astype(bool))
+        for k, i in enumerate(idxs):
+            df.loc[i, 'tipo_tren'] = tipos[k]
+            df.loc[i, 'doble'] = bool(cfgs[k])
+    return df, avisos
+
+
 def render_tablas_thdr_planificador(df_sint_final, pct_trac, estacion_anio, use_rm, prevenciones=None):
     from config import N_EST, ESTACIONES, KM_TOTAL
     from etl_parser import mins_to_time_str
@@ -832,6 +884,17 @@ def main():
                 if 'df_plan' not in st.session_state: 
                     st.session_state['df_plan'] = pd.DataFrame([{"Origen": "Puerto", "Destino": "Limache", "Flota": "XT-100", "Configuración": "Doble", "Cantidad": 40}])
                 df_plan_edit = st.data_editor(st.session_state['df_plan'], num_rows="dynamic", use_container_width=True)
+                try:
+                    _dp = df_plan_edit.copy()
+                    _dp['Cantidad'] = pd.to_numeric(_dp['Cantidad'], errors='coerce').fillna(0).astype(int)
+                    _por_tipo = _dp.groupby('Flota')['Cantidad'].sum().to_dict()
+                    _mc = st.columns(4)
+                    _mc[0].metric("🚆 Total trenes", nf(int(_dp['Cantidad'].sum()), 0))
+                    _mc[1].metric("XT-100", nf(int(_por_tipo.get('XT-100', 0)), 0))
+                    _mc[2].metric("XT-M", nf(int(_por_tipo.get('XT-M', 0)), 0))
+                    _mc[3].metric("SFE", nf(int(_por_tipo.get('SFE', 0)), 0))
+                except Exception:
+                    pass
             
             elif modo_plan == "Planilla Maestra (Subir CSV/Excel)":
                 # El uploader de Planilla Maestra ahora está en el sidebar (archivo_planilla)
@@ -856,31 +919,34 @@ def main():
                                         'Trayecto': r,
                                         'Simple': int((~sub['doble']).sum()),
                                         'Doble':  int(sub['doble'].sum()),
-                                        'Total':  len(sub),
                                         'XT-100': int((sub['tipo_tren']=='XT-100').sum()),
                                         'XT-M':   int((sub['tipo_tren']=='XT-M').sum()),
                                         'SFE':    int((sub['tipo_tren']=='SFE').sum()),
                                         'km/viaje': round(abs(sub['km_dest'].iloc[0]-sub['km_orig'].iloc[0]),2) if len(sub)>0 else 0,
                                         'Total km': round(sum(abs(r2['km_dest']-r2['km_orig'])*(2 if r2['doble'] else 1) for _,r2 in sub.iterrows()),2),
                                     })
-                                # Fila total
-                                total_km = sum(f['Total km'] for f in filas)
-                                filas.append({
-                                    'Trayecto': 'TOTAL',
-                                    'Simple': sum(f['Simple'] for f in filas),
-                                    'Doble':  sum(f['Doble']  for f in filas),
-                                    'Total':  sum(f['Total']  for f in filas),
-                                    'XT-100': sum(f['XT-100'] for f in filas),
-                                    'XT-M':   sum(f['XT-M']   for f in filas),
-                                    'SFE':    sum(f['SFE']    for f in filas),
-                                    'km/viaje': '',
-                                    'Total km': round(total_km, 2),
-                                })
                                 st.session_state['flota_map_v2'] = pd.DataFrame(filas)
                             df_flota_edit = st.data_editor(st.session_state['flota_map_v2'], hide_index=True, use_container_width=True)
                             st.session_state['temp_df_plan'] = df_asignado
                             st.session_state['temp_flota_edit'] = df_flota_edit
                             st.session_state['flota_map_v2'] = df_flota_edit  # reflejar ediciones
+                            try:
+                                _fe = df_flota_edit.copy()
+                                _fe = _fe[_fe['Trayecto'] != 'TOTAL'].copy()
+                                for _c in ['XT-100', 'XT-M', 'SFE']:
+                                    _fe[_c] = pd.to_numeric(_fe[_c], errors='coerce').fillna(0).astype(int)
+                                _fe['Total'] = _fe[['XT-100', 'XT-M', 'SFE']].sum(axis=1)
+                                _resumen = _fe[['Trayecto', 'XT-100', 'XT-M', 'SFE', 'Total']].copy()
+                                _fila_total = {'Trayecto': 'TOTAL',
+                                               'XT-100': int(_fe['XT-100'].sum()),
+                                               'XT-M': int(_fe['XT-M'].sum()),
+                                               'SFE': int(_fe['SFE'].sum()),
+                                               'Total': int(_fe['Total'].sum())}
+                                _resumen = pd.concat([_resumen, pd.DataFrame([_fila_total])], ignore_index=True)
+                                st.caption("📊 Totales en vivo (se recalculan al editar las cantidades por tipo):")
+                                st.dataframe(_resumen, hide_index=True, use_container_width=True)
+                            except Exception as _et:
+                                st.caption(f"No se pudieron calcular los totales: {_et}")
                     except Exception as err:
                         st.error(f"Fallo de lectura de planilla maestra: {err}")
             
@@ -1174,9 +1240,14 @@ def main():
                         df_sint = pd.DataFrame(df_sintetico_list)
                     else:
                         if 'temp_df_plan' not in st.session_state: st.stop()
-                        df_sint = st.session_state['temp_df_plan'].copy().sort_values('t_ini')
-                        # Si todos son XT-100, re-ejecutar asignación de flota
-                        # tipo_tren ya viene asignado desde parsear_planilla_maestra
+                        df_sint = st.session_state['temp_df_plan'].copy()
+                        # Aplicar la matriz de flota editada por el usuario (por trayecto)
+                        _fe_edit = st.session_state.get('temp_flota_edit', None)
+                        if _fe_edit is not None:
+                            df_sint, _avisos_fl = aplicar_flota_editada(df_sint, _fe_edit)
+                            for _av in _avisos_fl:
+                                st.warning(f"⚠️ Flota {_av}; se ajustó al número de servicios del trayecto.")
+                        df_sint = df_sint.sort_values('t_ini')
 
                     if df_sint.empty: st.stop()
                     st.session_state['raw_plan_df'] = df_sint
@@ -1331,37 +1402,16 @@ def main():
                                          ["Minimizar consumo total (kWh)", "Minimizar IDE promedio"],
                                          key="opt_crit")
             with col_o2:
-                _def_fl = {}
+                st.caption("Flota disponible (config):")
+                fd = {}
                 try:
                     for t, p in getattr(config, 'FLOTA', {}).items():
-                        _def_fl[t] = int(p.get('unidades_disponibles', 0))
+                        fd[t] = p.get('unidades_disponibles', 0)
                 except Exception:
                     pass
-                if not any(_def_fl.values()):
-                    _def_fl = {'XT-100': 27, 'XT-M': 8, 'SFE': 5}
-                if '_flota_orig' not in st.session_state:
-                    st.session_state['_flota_orig'] = dict(_def_fl)
-
-                flota_manual = st.checkbox("✏️ Ajustar flota manualmente", key="opt_flota_manual")
-                fd = {}
-                if flota_manual:
-                    st.caption("Flota disponible (manual):")
-                    cfa, cfb, cfc = st.columns(3)
-                    fd['XT-100'] = cfa.number_input("XT-100", 0, 200, int(st.session_state['_flota_orig'].get('XT-100', 0)), key="fl_xt100")
-                    fd['XT-M']   = cfb.number_input("XT-M",   0, 200, int(st.session_state['_flota_orig'].get('XT-M', 0)),   key="fl_xtm")
-                    fd['SFE']    = cfc.number_input("SFE",    0, 200, int(st.session_state['_flota_orig'].get('SFE', 0)),    key="fl_sfe")
-                    st.info(f"**Total flota: {sum(fd.values())} trenes**")
-                else:
-                    fd = dict(st.session_state['_flota_orig'])
-                    st.caption("Flota disponible (config):")
-                    st.write(" · ".join(f"**{k}**: {v}" for k, v in fd.items()) + f"  |  **Total: {sum(fd.values())}**")
-
-                try:
-                    for _t, _v in fd.items():
-                        if _t in config.FLOTA:
-                            config.FLOTA[_t]['unidades_disponibles'] = int(_v)
-                except Exception:
-                    pass
+                if not any(fd.values()):
+                    fd = {'XT-100': 27, 'XT-M': 8, 'SFE': 5}
+                st.write(" · ".join(f"**{k}**: {v}" for k, v in fd.items()))
 
             if st.button("🔧 Optimizar Distribución de Flota", use_container_width=True, type="primary"):
                 with st.spinner("Calculando asignación óptima de flota..."):
