@@ -689,6 +689,18 @@ def main():
         f_px2 = st.file_uploader("Pasajeros Vía 2", accept_multiple_files=True, key="px2")
         tipo_dia_plan = st.selectbox("Tipo de Día para Demanda", ["Laboral", "Sábado", "Domingo/Festivo"], key="td_plan")
         f_prev = st.file_uploader("🚧 Prevenciones de Vía (.csv, .xlsx)", accept_multiple_files=True, key="prev")
+
+        if st.button("🔄 Reiniciar simulador", use_container_width=True,
+                     help="Limpia resultados y caché para tomar la planilla nueva. No borra los archivos cargados."):
+            try:
+                st.cache_data.clear(); st.cache_resource.clear()
+            except Exception:
+                pass
+            _preservar = {"planilla_maestra_sidebar", "px1", "px2", "prev", "td_plan"}
+            for _k in list(st.session_state.keys()):
+                if _k not in _preservar:
+                    del st.session_state[_k]
+            st.rerun()
         
         st.divider()
         st.subheader("⚙️ Parámetros Físicos de Red")
@@ -772,7 +784,7 @@ def main():
     ])
     
     with tab_planificador:
-        st.subheader("🔮 Proyección de Malla y Capex Operativo")
+        st.subheader("🔮 Demanda Energética")
 
         # Variables Externas y Rendimiento del Tren ahora en el sidebar (junto a archivos)
         with st.sidebar:
@@ -1319,16 +1331,37 @@ def main():
                                          ["Minimizar consumo total (kWh)", "Minimizar IDE promedio"],
                                          key="opt_crit")
             with col_o2:
-                st.caption("Flota disponible (config):")
-                fd = {}
+                _def_fl = {}
                 try:
                     for t, p in getattr(config, 'FLOTA', {}).items():
-                        fd[t] = p.get('unidades_disponibles', 0)
+                        _def_fl[t] = int(p.get('unidades_disponibles', 0))
                 except Exception:
                     pass
-                if not any(fd.values()):
-                    fd = {'XT-100': 27, 'XT-M': 8, 'SFE': 5}
-                st.write(" · ".join(f"**{k}**: {v}" for k, v in fd.items()))
+                if not any(_def_fl.values()):
+                    _def_fl = {'XT-100': 27, 'XT-M': 8, 'SFE': 5}
+                if '_flota_orig' not in st.session_state:
+                    st.session_state['_flota_orig'] = dict(_def_fl)
+
+                flota_manual = st.checkbox("✏️ Ajustar flota manualmente", key="opt_flota_manual")
+                fd = {}
+                if flota_manual:
+                    st.caption("Flota disponible (manual):")
+                    cfa, cfb, cfc = st.columns(3)
+                    fd['XT-100'] = cfa.number_input("XT-100", 0, 200, int(st.session_state['_flota_orig'].get('XT-100', 0)), key="fl_xt100")
+                    fd['XT-M']   = cfb.number_input("XT-M",   0, 200, int(st.session_state['_flota_orig'].get('XT-M', 0)),   key="fl_xtm")
+                    fd['SFE']    = cfc.number_input("SFE",    0, 200, int(st.session_state['_flota_orig'].get('SFE', 0)),    key="fl_sfe")
+                    st.info(f"**Total flota: {sum(fd.values())} trenes**")
+                else:
+                    fd = dict(st.session_state['_flota_orig'])
+                    st.caption("Flota disponible (config):")
+                    st.write(" · ".join(f"**{k}**: {v}" for k, v in fd.items()) + f"  |  **Total: {sum(fd.values())}**")
+
+                try:
+                    for _t, _v in fd.items():
+                        if _t in config.FLOTA:
+                            config.FLOTA[_t]['unidades_disponibles'] = int(_v)
+                except Exception:
+                    pass
 
             if st.button("🔧 Optimizar Distribución de Flota", use_container_width=True, type="primary"):
                 with st.spinner("Calculando asignación óptima de flota..."):
