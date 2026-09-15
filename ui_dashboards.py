@@ -264,11 +264,37 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
                     if _fm > 0:
                         sys_e_min[_m] += _kwh * _fm
                         _hay_energia = True
-    sys_power_min = [round(e * 60.0, 1) for e in sys_e_min]
+    # SEAT total del dia (mismo calculo que render_gemelo_digital) para escalar el acumulado
+    _ser_dia = {}
+    for _, _r in df_dia_e.iterrows():
+        _kwh = float(_r.get('kwh_viaje_neto', 0) or 0)
+        if abs(_kwh) < 1e-9:
+            continue
+        _th = max(0.001, (float(_r['t_fin']) - float(_r['t_ini'])) / 60.0)
+        try:
+            _d = distribuir_energia_sers(_kwh, _th, float(_r['km_orig']), float(_r['km_dest']), active_sers_list)
+        except Exception:
+            _d = {}
+        for _sn, _ev in _d.items():
+            _ser_dia[_sn] = _ser_dia.get(_sn, 0.0) + _ev
+    seat_dia_total = 0.0
+    if _ser_dia:
+        _tot_ser = sum(max(0.0, v) for v in _ser_dia.values()) / ETA_SER_RECTIFICADOR
+        _t_op = max(0.001, (float(df_dia_e['t_fin'].max()) - float(df_dia_e['t_ini'].min())) / 60.0)
+        try:
+            _fl = calcular_flujo_ac_nodo({k: max(0.0, v) / ETA_SER_RECTIFICADOR / _t_op for k, v in _ser_dia.items()})
+            _loss = _fl.get('P_loss_kw', 0.0) * _t_op
+        except Exception:
+            _loss = 0.0
+        seat_dia_total = _tot_ser / _eta_trafo_red() + _loss
+    # Escalar la curva de traccion para que el acumulado coincida con el SEAT del dia
+    _trac_tot = sum(sys_e_min)
+    _factor = (seat_dia_total / _trac_tot) if (_trac_tot > 1e-6 and seat_dia_total > 0) else 1.0
+    sys_power_min = [round(e * 60.0 * _factor, 1) for e in sys_e_min]
     _cum = 0.0
     sys_energy_cum = []
     for e in sys_e_min:
-        _cum += e
+        _cum += e * _factor
         sys_energy_cum.append(round(_cum, 1))
     json_syspow = json.dumps(sys_power_min)
     json_syse = json.dumps(sys_energy_cum)
@@ -485,8 +511,8 @@ def draw_scada_js(df_dia_e, ser_accum_plot, seat_accum_plot, hora_inicial, titul
     if _hay_energia:
         kpibar_html = (
             '<div class="kpibar">'
-            '<div class="kpi kpi-pow">\u26a1 Potencia sistema (tracci\u00f3n \u2212 regen): <b id="powerDisplay">0 kW</b></div>'
-            '<div class="kpi kpi-e">\U0001f50b Energ\u00eda de tracci\u00f3n acumulada: <b id="energyDisplay">0 kWh</b></div>'
+            '<div class="kpi kpi-pow">\u26a1 Potencia del sistema (SEAT): <b id="powerDisplay">0 kW</b></div>'
+            '<div class="kpi kpi-e">\U0001f50b Energ\u00eda SEAT acumulada: <b id="energyDisplay">0 kWh</b></div>'
             '</div>')
     html_template = f"""
     <!DOCTYPE html>
@@ -601,7 +627,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     with cm: 
         modo = st.radio("Motor de Renderizado", ["🔒 Analítico (Estático Python)", "🚀 SCADA (Animado JS)"], horizontal=True, key=f"modo_{prefix_key}")
 
-    if modo != "▶️ Animado" and "SCADA" not in modo: 
+    if "SCADA" in modo: 
         st.session_state[f'play_{prefix_key}'] = False
 
     if st.session_state[f'play_{prefix_key}']:
@@ -614,7 +640,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             st.session_state[time_key] = new_val
 
     if "SCADA" not in modo:
-        c1,c2,c3,c4,c5,_ = st.columns([1,1,1,1,1,2])
+        c1,c2,c3,c4,c5,c6 = st.columns([1,1,1,1,1,2])
         if c1.button("−15m", key=f"m15_{prefix_key}"): st.session_state[time_key] = max(0.0, st.session_state[time_key] - 15.0)
         if c2.button("−1m", key=f"m1_{prefix_key}"): st.session_state[time_key] = max(0.0, st.session_state[time_key] - 1.0)
         if c3.button("⏸" if st.session_state[f'play_{prefix_key}'] else "▶️", key=f"pb_{prefix_key}"):
@@ -622,6 +648,8 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             st.rerun() 
         if c4.button("+1m", key=f"p1_{prefix_key}"): st.session_state[time_key] = min(1439.0, st.session_state[time_key] + 1.0)
         if c5.button("+15m", key=f"p15_{prefix_key}"): st.session_state[time_key] = min(1439.0, st.session_state[time_key] + 15.0)
+        c6.selectbox("Velocidad", [1, 2, 5, 10, 30], index=2, key=f'vs1_{prefix_key}',
+                     format_func=lambda x: f"{int(x)}x")
 
         def sync_time():
             st.session_state[time_key] = st.session_state[slider_key]
@@ -1146,6 +1174,6 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             with ec1: st.plotly_chart(fig_pie, use_container_width=True)
             with ec2: st.plotly_chart(fig_hora, use_container_width=True)
 
-    if st.session_state[f'play_{prefix_key}'] and modo != "▶️ Animado":
+    if st.session_state[f'play_{prefix_key}'] and "SCADA" not in modo:
         time.sleep(max(0.05, 0.3 / st.session_state.get(f'vs1_{prefix_key}', 1.0)))
         st.rerun()
