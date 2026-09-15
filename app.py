@@ -31,6 +31,24 @@ def fmt_df(df, dec=1):
     except Exception:
         return df
 
+
+def df_pct_traccion(perfil, tipo_tren, doble):
+    """DataFrame [Distancia (m), % Tracción] = potencia de tracción / potencia máxima del tren (x2 si doble)."""
+    try:
+        pmax = float(getattr(config, 'FLOTA', {}).get(tipo_tren, {}).get('p_max_kw', 0)) * (2 if doble else 1)
+        if pmax <= 0 or not perfil:
+            return None
+        k0 = perfil[0][1]
+        filas = []
+        for p in perfil:
+            ptrac = p[6] if len(p) > 6 else 0.0
+            pct = max(0.0, min(105.0, (float(ptrac) / pmax) * 100.0))
+            filas.append({"Distancia (m)": abs(p[1] - k0) * 1000.0, "% Tracción": pct})
+        d = pd.DataFrame(filas)
+        return d.set_index("Distancia (m)") if not d.empty else None
+    except Exception:
+        return None
+
 # 🛡️ FALLBACKS DE SEGURIDAD PARA CLOUD
 PAX_COLS_DEFAULT = ['PUE','BEL','FRA','BAR','POR','REC','MIR','VIN','HOS','CHO','SLT','VAL','QUI','SOL','BTO','AME','CON','VAM','SGA','PEN','LIM']
 SER_DATA_DEFAULT = [(3.9, "SER PO"), (11.7, "SER ES"), (25.3, "SER EB"), (29.1, "SER VA")]
@@ -125,10 +143,8 @@ def get_config_hash():
         return "no_config"
 
 try:
-    from optimizador_flota import optimizar_asignacion_flota, generar_planillas_xlsx, generar_tabla_seat_15min
+    from optimizador_flota import generar_tabla_seat_15min
 except ImportError:
-    optimizar_asignacion_flota = None
-    generar_planillas_xlsx = None
     generar_tabla_seat_15min = None
 
 # =============================================================================
@@ -833,10 +849,7 @@ def main():
 
     fechas = sorted(list(set([str(d) for d in df_all['Fecha_str'].unique() if pd.notna(d)]))) if not df_all.empty else []
 
-    tab_planificador, tab_optimizador = st.tabs([
-        "🔮 Planificador de Escenarios",
-        "⚡ Optimizador de Flota"
-    ])
+    tab_planificador = st.container()
     
     with tab_planificador:
         st.subheader("🔮 Demanda Energética")
@@ -881,25 +894,9 @@ def main():
 
         # Fuente de Datos a pantalla completa (ancho completo)
         if True:
-            modo_plan = st.radio("Fuente de Datos", ["Planilla Maestra (Subir CSV/Excel)", "Matriz Sintética", "Laboratorio (Tramo Único)"], horizontal=True)
+            modo_plan = st.radio("Fuente de Datos", ["Planilla Maestra (Subir CSV/Excel)", "Consumo Tracción Vacío"], horizontal=True)
             
-            if modo_plan == "Matriz Sintética":
-                if 'df_plan' not in st.session_state: 
-                    st.session_state['df_plan'] = pd.DataFrame([{"Origen": "Puerto", "Destino": "Limache", "Flota": "XT-100", "Configuración": "Doble", "Cantidad": 40}])
-                df_plan_edit = st.data_editor(st.session_state['df_plan'], num_rows="dynamic", use_container_width=True)
-                try:
-                    _dp = df_plan_edit.copy()
-                    _dp['Cantidad'] = pd.to_numeric(_dp['Cantidad'], errors='coerce').fillna(0).astype(int)
-                    _por_tipo = _dp.groupby('Flota')['Cantidad'].sum().to_dict()
-                    _mc = st.columns(4)
-                    _mc[0].metric("🚆 Total trenes", nf(int(_dp['Cantidad'].sum()), 0))
-                    _mc[1].metric("XT-100", nf(int(_por_tipo.get('XT-100', 0)), 0))
-                    _mc[2].metric("XT-M", nf(int(_por_tipo.get('XT-M', 0)), 0))
-                    _mc[3].metric("SFE", nf(int(_por_tipo.get('SFE', 0)), 0))
-                except Exception:
-                    pass
-            
-            elif modo_plan == "Planilla Maestra (Subir CSV/Excel)":
+            if modo_plan == "Planilla Maestra (Subir CSV/Excel)":
                 # El uploader de Planilla Maestra ahora está en el sidebar (archivo_planilla)
                 if not archivo_planilla:
                     st.info("👈 Sube tu Planilla Maestra en el panel lateral (sección 'Carga de Planillas Locales').")
@@ -953,7 +950,7 @@ def main():
                     except Exception as err:
                         st.error(f"Fallo de lectura de planilla maestra: {err}")
             
-            elif modo_plan == "Laboratorio (Tramo Único)":
+            elif modo_plan == "Consumo Tracción Vacío":
                 try: est_safe = getattr(config, 'ESTACIONES', [])
                 except NameError: est_safe = ['Puerto', 'Limache']
                 est_opciones = list(est_safe) + ["Las Cocheras"]
@@ -1109,6 +1106,13 @@ def main():
                         elif figura_perfiles is None:
                             st.caption(f"📈 Perfiles no disponibles: {_PERFILES_IMPORT_ERROR}")
 
+                        # % de tracción a lo largo del recorrido (Opción B)
+                        if isinstance(datos_sim_sb, dict):
+                            _dfpct = df_pct_traccion(datos_sim_sb.get('perfil', []), sb_flota, sb_doble)
+                            if _dfpct is not None and not _dfpct.empty:
+                                st.caption("📈 % de tracción usado a lo largo del recorrido (potencia de tracción ÷ potencia máxima del tren):")
+                                st.line_chart(_dfpct, height=240)
+
             # === EDITOR DE MANIOBRAS DE ACOPLE / DESACOPLE ===
             if st.session_state.get('raw_plan_df') is not None:
                 with st.expander("🔗 Acoplar / Desacoplar trenes (cambio de formación a mitad de servicio)"):
@@ -1190,7 +1194,7 @@ def main():
                     else:
                         st.info("No hay maniobras definidas. El plan usa las formaciones de la planilla.")
 
-            _modo_ok = modo_plan in ["Matriz Sintética", "Planilla Maestra (Subir CSV/Excel)"]
+            _modo_ok = modo_plan == "Planilla Maestra (Subir CSV/Excel)"
             if _modo_ok:
                 st.markdown("**Ejecutar simulación:**")
                 _bc1, _bc2 = st.columns(2)
@@ -1213,35 +1217,7 @@ def main():
                 st.session_state['simulacion_plan_lista'] = False
                 st.session_state['maniobras_cambiadas'] = False
                 with st.spinner("Decodificando Malla e inyectando al Motor Cinemático Termodinámico..."):
-                    if modo_plan == "Matriz Sintética":
-                        df_sintetico_list = []
-                        try: est_safe = getattr(config, 'ESTACIONES', [])
-                        except NameError: est_safe = ['Puerto', 'Limache']
-                        try: km_acum_safe = getattr(config, 'KM_ACUM', [])
-                        except NameError: km_acum_safe = [0.0, 43.13]
-                        try: ec_safe = getattr(config, 'EC', [])
-                        except NameError: ec_safe = ['PU', 'LI']
-                        
-                        for idx, row in df_plan_edit.iterrows():
-                            if row['Cantidad'] <= 0 or row['Origen'] == row['Destino']: continue
-                            try:
-                                i_o, i_d = est_safe.index(row['Origen']), est_safe.index(row['Destino'])
-                                via = 1 if i_o < i_d else 2
-                                nodos_sint = [(0.0, km_acum_safe[i]) for i in (range(i_o, i_d + 1) if via==1 else range(i_o, i_d - 1, -1))]
-                                k_o, k_d = km_acum_safe[i_o], km_acum_safe[i_d]
-                                svc_t = f"{ec_safe[i_o]}-{ec_safe[i_d]}"
-                                interval = (1350 - 360) / row['Cantidad']
-                                
-                                for i in range(int(row['Cantidad'])):
-                                    df_sintetico_list.append({
-                                        '_id': f"SINT_{idx}_{i}", 't_ini': 360 + i * interval, 'Via': via, 
-                                        'km_orig': k_o, 'km_dest': k_d, 'nodos': nodos_sint, 
-                                        'tipo_tren': row['Flota'], 'doble': row['Configuración'] == "Doble", 
-                                        'num_servicio': f"VIRT_{idx}_{i}", 'maniobra': None, 'svc_type': svc_t
-                                    })
-                            except: pass
-                        df_sint = pd.DataFrame(df_sintetico_list)
-                    else:
+                    if True:
                         if 'temp_df_plan' not in st.session_state: st.stop()
                         df_sint = st.session_state['temp_df_plan'].copy()
                         # Aplicar la matriz de flota editada por el usuario (por trayecto)
@@ -1268,14 +1244,6 @@ def main():
                 plan_sig = str(st.session_state.get('df_plan', '')) + str(st.session_state.get('temp_flota_edit', '')) + str(pax_promedio_viaje) + file_signature + str(sorted([(p.get('km_min',0),p.get('km_max',0),p.get('v_kmh',0),p.get('via',0)) for p in (prevenciones_list or [])], key=lambda x: x[0])) + str(use_pend) + str(use_rm) + str(use_regen) + str(tipo_regen) + str(estacion_anio_plan) + str(pct_trac_plan) + _man_sig
                 _con_aa = st.session_state.get('modo_ejecucion', 'circulacion') == 'consumo'
                 df_sint_final, df_sint_e = procesar_planificador_reactivo(_df_plan_con_man, df_px_filtered, estacion_anio_plan, pct_trac_plan, use_rm, use_pend, use_regen, tipo_regen, pax_promedio_viaje, prevenciones_list, plan_sig, config_sig=get_config_hash(), man_sig=_man_sig, con_anti_alcance=_con_aa)
-                # Guardar resultados para el Optimizador de Flota
-                st.session_state['opt_df_sint_e'] = df_sint_e
-                st.session_state['opt_params'] = {
-                    'pct_trac': pct_trac_plan, 'use_rm': use_rm, 'use_pend': use_pend,
-                    'use_regen': use_regen, 'tipo_regen': tipo_regen,
-                    'estacion_anio': estacion_anio_plan,
-                }
-                
                 # Forzar tipos numéricos
                 cols_num = ['t_ini', 't_fin', 'kwh_viaje_trac', 'kwh_viaje_aux', 'kwh_viaje_regen', 'kwh_reostato', 'kwh_viaje_neto', 't_viaje_h', 'tren_km']
                 for col in cols_num:
@@ -1296,6 +1264,37 @@ def main():
                     else:
                         st.warning(f"📈 Módulo de perfiles no cargado. Verifica que **perfiles_viaje.py** "
                                    f"esté junto a app.py. Detalle: {_PERFILES_IMPORT_ERROR}")
+
+                    # % de tracción por servicio (Opción B)
+                    try:
+                        _rp_pt = st.session_state.get('raw_plan_df')
+                        if _rp_pt is not None and len(_rp_pt) > 0 and 'num_servicio' in _rp_pt.columns:
+                            st.markdown("##### 📈 % de tracción por servicio")
+                            _svcs_pt = [str(x) for x in _rp_pt['num_servicio'].tolist()]
+                            _sel_pt = st.selectbox("Servicio", _svcs_pt, key="pct_trac_svc_plan")
+                            _row_pt = _rp_pt[_rp_pt['num_servicio'].astype(str) == _sel_pt].iloc[0]
+                            _key_pt = f"{_sel_pt}|{pct_trac_plan}|{use_rm}|{use_pend}|{len(_rp_pt)}"
+                            if st.session_state.get('_pcttrac_key') != _key_pt:
+                                with st.spinner("Calculando perfil de tracción..."):
+                                    try:
+                                        _rr_pt = simular_tramo_termodinamico(
+                                            _row_pt['tipo_tren'], bool(_row_pt['doble']), _row_pt['km_orig'], _row_pt['km_dest'], int(_row_pt['Via']),
+                                            pct_trac_plan, use_rm, use_pend, _row_pt.get('nodos'), {}, int(pax_promedio_viaje),
+                                            None, _row_pt.get('maniobra'), estacion_anio_plan, float(_row_pt['t_ini']), es_vacio=False, prevenciones=prevenciones_list)
+                                    except TypeError:
+                                        _rr_pt = simular_tramo_termodinamico(
+                                            _row_pt['tipo_tren'], bool(_row_pt['doble']), _row_pt['km_orig'], _row_pt['km_dest'], int(_row_pt['Via']),
+                                            pct_trac_plan, use_rm, use_pend, _row_pt.get('nodos'), {}, int(pax_promedio_viaje),
+                                            None, _row_pt.get('maniobra'), estacion_anio_plan, float(_row_pt['t_ini']), es_vacio=False)
+                                _perfil_pt = _rr_pt[3].get('perfil', []) if isinstance(_rr_pt[3], dict) else []
+                                st.session_state['_pcttrac_df'] = df_pct_traccion(_perfil_pt, _row_pt['tipo_tren'], bool(_row_pt['doble']))
+                                st.session_state['_pcttrac_key'] = _key_pt
+                            _dfpct_pt = st.session_state.get('_pcttrac_df')
+                            if _dfpct_pt is not None and not _dfpct_pt.empty:
+                                st.caption(f"Servicio {_sel_pt} · {_row_pt['tipo_tren']} ({'Doble' if bool(_row_pt['doble']) else 'Simple'}) · % de tracción (potencia de tracción ÷ máx):")
+                                st.line_chart(_dfpct_pt, height=240)
+                    except Exception as _e_pt:
+                        st.caption(f"No se pudo generar el % de tracción por servicio: {_e_pt}")
 
                     # Reporte de tensión de red con la corriente SIMULTÁNEA de los trenes
                     try:
@@ -1381,202 +1380,6 @@ def main():
                             st.warning(f"No se pudo generar la tabla: {e}")
                 except Exception as e:
                     st.error(f"Fallo al graficar UI del Planificador: {e}")
-
-    with tab_optimizador:
-        st.subheader("⚡ Optimizador de Distribución de Flota")
-        st.markdown(
-            "Reasigna el **tipo de tren** asignado a cada servicio para minimizar el consumo "
-            "energético, respetando la flota disponible y la capacidad de pasajeros. "
-            "Los trenes más eficientes (XT-M) se asignan a los servicios de mayor distancia. "
-            "**No altera los horarios** — solo qué unidad cubre cada servicio."
-        )
-
-        if optimizar_asignacion_flota is None:
-            st.error("Módulo optimizador no disponible (falta optimizador_flota.py).")
-        elif not st.session_state.get('simulacion_plan_lista', False) or 'raw_plan_df' not in st.session_state:
-            st.info("👈 Primero carga y ejecuta una malla en la pestaña **Planificador de Escenarios**. "
-                    "Luego vuelve aquí para optimizar la asignación de flota.")
-        else:
-            df_base_opt = st.session_state['raw_plan_df'].copy()
-
-            col_o1, col_o2 = st.columns([1, 1])
-            with col_o1:
-                priorizar_opt = st.radio("Criterio de optimización",
-                                         ["Minimizar consumo total (kWh)", "Minimizar IDE promedio"],
-                                         key="opt_crit")
-            with col_o2:
-                st.caption("Flota disponible (config):")
-                fd = {}
-                try:
-                    for t, p in getattr(config, 'FLOTA', {}).items():
-                        fd[t] = p.get('unidades_disponibles', 0)
-                except Exception:
-                    pass
-                if not any(fd.values()):
-                    fd = {'XT-100': 27, 'XT-M': 8, 'SFE': 5}
-                st.write(" · ".join(f"**{k}**: {v}" for k, v in fd.items()))
-
-            if st.button("🔧 Optimizar Distribución de Flota", use_container_width=True, type="primary"):
-                with st.spinner("Calculando asignación óptima de flota..."):
-                    try:
-                        # Asegurar t_fin
-                        if 't_fin' not in df_base_opt.columns:
-                            df_base_opt['t_fin'] = df_base_opt['t_ini'] + 55
-                        prio = 'energia' if "consumo" in priorizar_opt else 'eficiencia'
-                        df_base_consumo = st.session_state.get('opt_df_sint_e', None)
-                        params_sim = st.session_state.get('opt_params', None)
-                        df_opt, resumen = optimizar_asignacion_flota(
-                            df_base_opt, config, priorizar=prio,
-                            df_consumo_base=df_base_consumo,
-                            simular_fn=calcular_termodinamica_flota_v111,
-                            precalcular_fn=precalcular_red_electrica_v111,
-                            params_sim=params_sim,
-                            prevenciones=prevenciones_list,
-                            active_sers=active_sers,
-                            distribuir_fn=distribuir_energia_sers,
-                            flujo_fn=calcular_flujo_ac_nodo)
-
-                        st.success(f"Optimización completada: {resumen['n_cambios']} de {resumen['n_servicios']} servicios reasignados.")
-
-                        # Métricas de ahorro (SEAT total, igual que el planificador)
-                        m1, m2, m3 = st.columns(3)
-                        m1.metric("Consumo Actual (SEAT)", f"{nf(resumen['kwh_actual'], 0)} kWh")
-                        m2.metric("Consumo Optimizado (SEAT)", f"{nf(resumen['kwh_optimo'], 0)} kWh",
-                                  delta=f"-{nf(resumen['ahorro_kwh'], 0)} kWh")
-                        m3.metric("Ahorro", f"{nf(resumen['ahorro_pct'], 1)} %")
-
-                        m4, m5, m6 = st.columns(3)
-                        m4.metric("IDE Actual", f"{nf(resumen.get('ide_actual', 0), 3)} kWh/km")
-                        m5.metric("IDE Optimizado", f"{nf(resumen.get('ide_optimo', 0), 3)} kWh/km")
-                        m6.metric("Kilometraje (Tren-km)", f"{nf(resumen.get('km_total', 0), 1)} km")
-                        if resumen.get('usa_seat_real'):
-                            st.caption("✅ Consumo calculado como SEAT total (incluye pérdidas de rectificador y AC), "
-                                       "idéntico al del Planificador, con la misma carga de pasajeros y prevenciones. "
-                                       "El IDE usa el kilometraje Tren-km (formaciones dobles cuentan 2×).")
-
-                        # Capacidad de terminales (restricción operativa)
-                        st.divider()
-                        st.markdown("##### 🚉 Ocupación de Terminales")
-                        cap_term = resumen.get('cap_terminales', {})
-                        if cap_term:
-                            tcols = st.columns(len(cap_term))
-                            for i, (nombre, v) in enumerate(cap_term.items()):
-                                with tcols[i]:
-                                    excede = v['excede']
-                                    color = "#C62828" if excede else "#2E7D32"
-                                    icono = "❌" if excede else "✅"
-                                    h = int(v['pico_min']//60); m = int(v['pico_min']%60)
-                                    st.markdown(
-                                        f"<div style='background-color:#f9f9f9; border-radius:8px; padding:12px; "
-                                        f"text-align:center; border:1px solid #eee;'>"
-                                        f"<div style='font-size:14px; font-weight:bold; color:#333;'>{nombre}</div>"
-                                        f"<div style='font-size:22px; font-weight:bold; color:{color}; margin:6px 0;'>"
-                                        f"{icono} {v['max_ocup']} / {v['capacidad']}</div>"
-                                        f"<div style='font-size:11px; color:#666;'>Pico: {h:02d}:{m:02d}</div>"
-                                        f"</div>", unsafe_allow_html=True)
-                            if resumen.get('excede_terminales'):
-                                st.error("⚠️ La malla actual EXCEDE la capacidad de uno o más terminales. "
-                                         "Puerto: máx 4 · El Belloto: máx 16 · Limache: máx 16 trenes. "
-                                         "Revisa los horarios para no superar el estacionamiento disponible.")
-                            else:
-                                st.success("✅ La malla respeta la capacidad de todos los terminales.")
-
-                        st.divider()
-
-                        # Composición de flota antes/después
-                        st.markdown("##### Composición de la flota (servicios por tipo)")
-                        comp_cols = st.columns(2)
-                        with comp_cols[0]:
-                            st.caption("**Distribución actual**")
-                            for tipo, n in sorted(resumen['comp_antes'].items()):
-                                st.write(f"  {tipo}: {n} servicios")
-                        with comp_cols[1]:
-                            st.caption("**Distribución optimizada**")
-                            for tipo, n in sorted(resumen['comp_despues'].items()):
-                                st.write(f"  {tipo}: {n} servicios")
-
-                        st.divider()
-
-                        # Tabla de cambios propuestos
-                        st.markdown("##### Cambios propuestos")
-                        cambios = df_opt[df_opt['tipo_tren'] != df_opt['tipo_optimo']].copy()
-                        if not cambios.empty:
-                            cols_mostrar = ['num_servicio', 'Via', 'svc_type', 'km_tramo',
-                                            'tipo_tren', 'tipo_optimo', 'kwh_actual', 'kwh_optimo']
-                            cols_disp = [c for c in cols_mostrar if c in cambios.columns]
-                            tabla = cambios[cols_disp].rename(columns={
-                                'num_servicio': 'Servicio', 'svc_type': 'Trayecto',
-                                'km_tramo': 'km', 'tipo_tren': 'Actual', 'tipo_optimo': 'Óptimo',
-                                'kwh_actual': 'kWh actual', 'kwh_optimo': 'kWh óptimo'
-                            })
-                            st.dataframe(fmt_df(tabla, 1), use_container_width=True, height=400)
-                        else:
-                            st.info("La distribución actual ya es óptima — no se proponen cambios.")
-
-                        # Generar planillas V1 y V2 descargables
-                        st.divider()
-                        st.markdown("##### 📥 Descargar planillas optimizadas")
-                        if generar_planillas_xlsx is not None:
-                            try:
-                                import tempfile, os
-                                tmpdir = tempfile.gettempdir()
-                                ruta_v1 = os.path.join(tmpdir, "Planilla_Optimizada_V1.xlsx")
-                                ruta_v2 = os.path.join(tmpdir, "Planilla_Optimizada_V2.xlsx")
-                                generar_planillas_xlsx(df_opt, ruta_v1, ruta_v2)
-
-                                dl1, dl2 = st.columns(2)
-                                with dl1:
-                                    with open(ruta_v1, 'rb') as f:
-                                        st.download_button(
-                                            "⬇️ Planilla Vía 1 (optimizada)",
-                                            data=f.read(),
-                                            file_name="Planilla_Optimizada_V1.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            use_container_width=True)
-                                with dl2:
-                                    with open(ruta_v2, 'rb') as f:
-                                        st.download_button(
-                                            "⬇️ Planilla Vía 2 (optimizada)",
-                                            data=f.read(),
-                                            file_name="Planilla_Optimizada_V2.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            use_container_width=True)
-                                st.caption("Formato idéntico a las planillas del Planificador: "
-                                           "N° Viaje · Servicio · Hr Partida · N° Partida · Intervalo · Unidad · Motriz 1 · Motriz 2. "
-                                           "Las motrices se asignan según el tipo óptimo (1-27 XT-100, 28-35 XT-M, 410-414 SFE).")
-                            except Exception as e:
-                                st.warning(f"No se pudieron generar las planillas: {e}")
-
-                        # Tabla SEAT por franja (de la malla base)
-                        if generar_tabla_seat_15min is not None and df_base_consumo is not None:
-                            st.divider()
-                            st.markdown("##### 📊 Consumo SEAT por Franja Horaria")
-                            try:
-                                import tempfile, os
-                                granularidad_o = st.radio(
-                                    "Intervalo de la tabla",
-                                    ["Cada 15 minutos", "Cada hora"],
-                                    horizontal=True, key="gran_seat_opt")
-                                paso_o = 15.0 if granularidad_o == "Cada 15 minutos" else 60.0
-                                sufijo_o = "15min" if paso_o == 15 else "60min"
-                                ruta_15o = os.path.join(tempfile.gettempdir(), f"SEAT_{sufijo_o}_Optimizador.xlsx")
-                                _, df_t15o = generar_tabla_seat_15min(df_base_consumo, config, active_sers, distribuir_energia_sers, calcular_flujo_ac_nodo, ruta_15o, paso_min=paso_o)
-                                st.dataframe(fmt_df(df_t15o, 1), use_container_width=True, height=300)
-                                with open(ruta_15o, 'rb') as f:
-                                    st.download_button(
-                                        f"⬇️ Descargar tabla SEAT ({granularidad_o.lower()}) (xlsx)",
-                                        data=f.read(),
-                                        file_name=f"SEAT_{sufijo_o}_Optimizador.xlsx",
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        use_container_width=True)
-                                st.caption("Consumo SEAT por franja: total y por subestación, en kWh y kW medio.")
-                            except Exception as e:
-                                st.warning(f"No se pudo generar la tabla de 15 min: {e}")
-
-                    except Exception as e:
-                        st.error(f"Error en la optimización: {e}")
-                        import traceback
-                        st.code(traceback.format_exc())
 
 if __name__ == "__main__": 
     main()
