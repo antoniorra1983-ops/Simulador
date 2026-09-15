@@ -514,6 +514,9 @@ def aplicar_flota_editada(df_asignado, df_flota_edit):
     los trayectos que el usuario no modifico. Devuelve (df, avisos)."""
     df = df_asignado.copy()
     avisos = []
+    def _i(x):
+        v = pd.to_numeric(x, errors='coerce')
+        return int(v) if pd.notna(v) else 0
     try:
         fe = df_flota_edit.copy()
         fe = fe[fe['Trayecto'] != 'TOTAL']
@@ -521,16 +524,16 @@ def aplicar_flota_editada(df_asignado, df_flota_edit):
         return df, avisos
     for _, row in fe.iterrows():
         tray = row.get('Trayecto')
-        if tray is None:
+        if tray is None or pd.isna(tray):
             continue
         idxs = list(df[df['svc_type'] == tray].index)
         if not idxs:
             continue
         idxs = sorted(idxs, key=lambda i: df.loc[i, 't_ini'] if 't_ini' in df.columns else 0)
         n = len(idxs)
-        tgt = {t: int(pd.to_numeric(row.get(t, 0), errors='coerce') or 0) for t in ['XT-100', 'XT-M', 'SFE']}
-        s = int(pd.to_numeric(row.get('Simple', 0), errors='coerce') or 0)
-        d = int(pd.to_numeric(row.get('Doble', 0), errors='coerce') or 0)
+        tgt = {t: _i(row.get(t, 0)) for t in ['XT-100', 'XT-M', 'SFE']}
+        s = _i(row.get('Simple', 0))
+        d = _i(row.get('Doble', 0))
         cur = {t: int((df.loc[idxs, 'tipo_tren'] == t).sum()) for t in ['XT-100', 'XT-M', 'SFE']}
         cur_s = int((~df.loc[idxs, 'doble'].astype(bool)).sum())
         cur_d = int(df.loc[idxs, 'doble'].astype(bool).sum())
