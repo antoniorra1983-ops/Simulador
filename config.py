@@ -548,3 +548,23 @@ CURVAS_KM = [
     (42.827,42.891,250), (42.891,42.955,195), (43.082,43.145,300), (43.145,43.209,235),
     (43.209,43.273,200),
 ]
+
+
+# =============================================================================
+# CATENARIA CC — escenarios de resistencia (Siemens, IV Etapa Merval, 2004)
+# Los datos de geometría y corriente son informativos, no límites operacionales.
+# La resistencia histórica conserva los valores del simulador V135.
+# =============================================================================
+CATENARIA_HISTORICA = ((2.25, 0.0638), (6.80, 0.0530), (10.92, 0.0495),
+                      (21.41, 0.0417), (30.36, 0.0399), (float("inf"), 0.0355))
+CATENARIA_SIEMENS = {
+    "hilos_principal": 2, "hilos_secundaria": 1,
+    "hilo_mm2": 107.0, "mensajero_mm2": 150.0,
+    "hilo_corriente_a": 413.0, "mensajero_corriente_a": 510.0,
+    "hilo_tension_kn": 10.0, "mensajero_tension_kn": 15.0,
+    "pendola_mm2": 10.0, "altura_nominal_m": 6.0,
+    "altura_min_m": 4.70, "altura_max_m": 6.25, "vano_max_m": 60.0,
+}
+# Hipótesis de cálculo, no valores de resistividad medidos por Siemens.
+CATENARIA_RHO_CU_20 = 0.01724  # ohm mm2/m
+CATENARIA_ALPHA_CU = 0.00393   # 1/°C

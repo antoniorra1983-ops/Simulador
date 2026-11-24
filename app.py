@@ -6,7 +6,7 @@ from io import BytesIO
 from datetime import datetime, date, timedelta
 
 # Configuración de página de Streamlit (DEBE ser la primera instrucción)
-st.set_page_config(page_title="Simulador MERVAL V135", layout="wide", page_icon="🗺️")
+st.set_page_config(page_title="Simulador MERVAL V136", layout="wide", page_icon="🗺️")
 
 # === Formato numérico chileno: punto para miles, coma para decimales ===
 def nf(x, dec=1):
@@ -42,6 +42,7 @@ except ImportError:
     pass
 
 import etl_parser
+import catenaria as _cat
 
 # =============================================================================
 # IMPORTACIONES BLINDADAS - Tolerancia a fallos de caché en Streamlit Cloud
@@ -121,6 +122,7 @@ def get_config_hash():
         snap  = {t: {k: v for k, v in f.items() if isinstance(v, (int, float, str, bool))}
                  for t, f in flota.items()}
         snap['_ETA_REGEN_NETA'] = eta
+        snap['_CATENARIA'] = repr(_cat.firma())
         return hashlib.md5(json.dumps(snap, sort_keys=True).encode()).hexdigest()[:8]
     except Exception:
         return "no_config"
@@ -789,7 +791,10 @@ def main():
         if not active_sers: 
             active_sers = [ser_data_safe[0]]
         
+        escenario_cat = _cat.selector_streamlit('plan_cat')
         gap_vias = st.slider("Separación Visual Vías (px)", 120, 350, 200, 10)
+
+    _cat.configurar(escenario_cat, active_sers)
 
     # Ingesta en memoria
     def _all_blobs_internal(f_uploader, gh_key): 

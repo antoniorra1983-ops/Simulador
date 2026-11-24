@@ -1,4 +1,5 @@
 import numpy as np
+import catenaria as _cat
 
 # Escudo Defensivo Cloud: Evita NameErrors si Streamlit limpia la memoria
 try:
@@ -13,15 +14,10 @@ def _get_val(name, default):
 def calcular_demanda_ser(e_pantografo_kwh, t_horas, km_punto, km_ser):
     if t_horas <= 0: return e_pantografo_kwh
     
-    # 💡 Lógica Física Nodal: Resistencias de Catenaria según sección (Ohmios/km)
-    if km_punto < 2.25: r_km = 0.0638       
-    elif km_punto < 6.80: r_km = 0.0530     
-    elif km_punto < 10.92: r_km = 0.0495    
-    elif km_punto < 21.41: r_km = 0.0417    
-    elif km_punto < 30.36: r_km = 0.0399    
-    else: r_km = 0.0355                     
-    
-    R_total = r_km * abs(km_punto - km_ser)
+    # Mantiene la aproximación histórica; Siemens integra el trayecto.
+    R_total = (_cat.resistencia_km(km_punto) * abs(km_punto - km_ser)
+               if _cat.escenario_actual().modo == "historico"
+               else _cat.resistencia_entre(km_punto, km_ser))
     P_kW = abs(e_pantografo_kwh) / t_horas
     
     v_nom_dc = _get_val('V_NOMINAL_DC', 3000.0)
@@ -34,6 +30,9 @@ def calcular_demanda_ser(e_pantografo_kwh, t_horas, km_punto, km_ser):
         return -max(0.0, abs(e_pantografo_kwh) - (P_loss_kW * t_horas))
 
 def distribuir_energia_sers(e_pantografo, t_horas, km_ini, km_fin, active_sers):
+    if _cat.escenario_actual().modo != 'historico':
+        return _cat.distribuir_energia_bilateral(e_pantografo, t_horas, km_ini, km_fin,
+                                                active_sers, _get_val('V_NOMINAL_DC', 3295.0))
     if not active_sers: 
         return {}
     if len(active_sers) == 1:
@@ -69,6 +68,8 @@ def distribuir_energia_sers(e_pantografo, t_horas, km_ini, km_fin, active_sers):
     return resultados
 
 def distribuir_potencia_sers_kw(p_kw, km_punto, active_sers):
+    if active_sers and _cat.escenario_actual().modo != 'historico':
+        return {n: p_kw * f for n, f, _ in _cat.ramas_alimentacion(km_punto, active_sers)}
     if not active_sers: 
         return {}
     if len(active_sers) == 1: 

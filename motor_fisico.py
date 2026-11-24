@@ -98,13 +98,11 @@ for ki, kf, r_m in _curvas:
     s_i, e_i = int(ki * 1000), min(int(kf * 1000), 44999)
     if s_i < e_i: _CURVA_ARRAY[s_i:e_i] = w_c
 
+import catenaria as _cat
+
+
 def _get_resistencia_catenaria_km(km):
-    if km < 2.25: return 0.0638
-    elif km < 6.80: return 0.0530
-    elif km < 10.92: return 0.0495
-    elif km < 21.41: return 0.0417
-    elif km < 30.36: return 0.0399
-    else: return 0.0355
+    return _cat.resistencia_km(km)
 
 # =============================================================================
 # 2. FUNCIONES BASE DE MOVIMIENTO Y RADAR ELÉCTRICO
@@ -349,7 +347,7 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
     paradas_km.sort(reverse=(via_op == 2))
     V_PASO_VACIO_KMH = 30.0  # velocidad de paso por estación en modo vacío
     
-    ser_data = _get_val('SER_DATA', [(4.9, "SER PO"), (12.7, "SER ES"), (25.5, "SER EB"), (28.7, "SER VA")])
+    ser_data = _cat.sers_activas()
     dt = 1.0  
     eta_motor = f.get('eta_motor', 0.92)
     eta_regen_mec = eta_motor * f.get('eta_reductor', 1.0)  # motor × reductor (rueda→catenaria)
@@ -522,7 +520,9 @@ def simular_tramo_termodinamico(tipo_tren, doble, km_ini, km_fin, via_op, pct_tr
             f_res_total = f_davis + f_pend + f_curva
             
             dist_ser = min([abs(km_actual - s[0]) for s in ser_data]) if ser_data else 5.0
-            r_linea = _get_resistencia_catenaria_km(km_actual) * dist_ser
+            r_linea = (_get_resistencia_catenaria_km(km_actual) * dist_ser
+                       if _cat.escenario_actual().modo == 'historico'
+                       else _cat.resistencia_equivalente(km_actual, ser_data))
             # Caída de tensión con corriente real I = P/V (física correcta):
             #   en aceleración la demanda ≈ p_max; en crucero solo vence la resistencia.
             _eta_t = _get_val('ETA_TRAC_SISTEMA', 0.85)
@@ -929,7 +929,7 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
     from collections import defaultdict
     v_bus = _get_val('V_NOMINAL_DC', 3295.0)
     flota = _get_val('FLOTA', {})
-    sers = sorted([s[0] for s in _get_val('SER_DATA', [])]) or [4.9, 12.7, 25.5, 28.7]
+    sers = sorted(s[0] for s in _cat.sers_activas())
     DT_BIN = dt_bin_s / 60.0
 
     def nearest_ser(km):
@@ -1017,7 +1017,7 @@ def analizar_tension_secciones(df_dia, dt_bin_s=10.0, squeeze_v=2800.0):
                 eventos[(via_, t_bin)].append((km_avg, i_trac, i_regen))
                 eventos_bin[t_bin].append((km_avg, i_trac, i_regen))
 
-    ser_nombre = {s[0]: s[1] for s in _get_val('SER_DATA', [])}
+    ser_nombre = {s[0]: s[1] for s in _cat.sers_activas()}
     cap_ser = _get_val('SER_CAPACITY_KW', {})
     reg_ser = _get_val('REG_SER', 0.06)  # regulación rectificador (vacío→plena carga)
 

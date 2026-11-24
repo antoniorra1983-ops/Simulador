@@ -21,6 +21,7 @@ import streamlit as st
 # Reutilizar exactamente el control de acceso que usa el simulador existente.
 # Importar app no ejecuta main(), pues tiene guardia __main__.
 from app import verificar_acceso
+import catenaria as _cat
 from etl_parser import procesar_thdr, cargar_pax, match_pax, clasificar_dia
 from motor_fisico import calcular_termodinamica_flota_v111
 try:
@@ -238,6 +239,9 @@ if not escogidos_archivos:
     st.info("Selecciona al menos un archivo THDR para continuar.")
     st.stop()
 
+escenario_cat = _cat.selector_streamlit('thdr_cat')
+_cat.configurar(escenario_cat)
+
 with st.expander("⚙️ Configuración física y ocupación", expanded=True):
     c1, c2, c3 = st.columns(3)
     pct_traccion = c1.slider("Tracción máxima (%)", 30, 100,
@@ -269,6 +273,7 @@ if st.button("▶️ Simular consumo del día", type="primary", use_container_wi
         errores += err_pax
         firma = tuple((x["ruta"], x["sha"]) for x in escogidos_archivos) + (
             ("pax_estimados", int(pax_estimados)),
+            ("catenaria", _cat.firma()),
             ("pax1", tuple(hashlib.sha256(uf.getvalue()).hexdigest() for uf in (px1 or []))),
             ("pax2", tuple(hashlib.sha256(uf.getvalue()).hexdigest() for uf in (px2 or []))),
         )
@@ -280,6 +285,7 @@ if st.button("▶️ Simular consumo del día", type="primary", use_container_wi
             st.stop()
     st.session_state["thdr_sim_resultado"] = resultado
     st.session_state["thdr_sim_fecha"] = fecha
+    st.session_state["thdr_sim_catenaria"] = _cat.firma()
     st.session_state["thdr_sim_errores"] = errores
     st.session_state["thdr_sim_pax_reales"] = pax_reales
     st.session_state["thdr_sim_fuentes"] = [(x["via"], x["nombre"]) for x in escogidos_archivos]
@@ -289,6 +295,8 @@ if isinstance(resultado, pd.DataFrame) and not resultado.empty:
     fecha_result = st.session_state.get("thdr_sim_fecha", "")
     if fecha_result != fecha:
         st.warning("Los resultados que aparecen corresponden a otra fecha. Presiona Simular para actualizarlos.")
+    elif st.session_state.get("thdr_sim_catenaria") != _cat.firma():
+        st.warning("Cambió el escenario de catenaria. Presiona Simular para actualizar los resultados.")
     else:
         st.subheader(f"Resultados simulados · {fecha_result}")
         columnas = ["kwh_viaje_trac", "kwh_viaje_aux", "kwh_viaje_regen", "kwh_viaje_neto"]

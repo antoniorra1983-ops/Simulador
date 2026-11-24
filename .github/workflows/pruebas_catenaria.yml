@@ -1,0 +1,25 @@
+name: Pruebas del modelo de catenaria
+on:
+  push:
+    paths:
+      - "catenaria.py"
+      - "config.py"
+      - "motor_fisico.py"
+      - "red_electrica.py"
+      - "app.py"
+      - "pages/**"
+      - "tests/**"
+      - ".github/workflows/pruebas_catenaria.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m compileall -q .
+      - run: python -m unittest discover -s tests -v
