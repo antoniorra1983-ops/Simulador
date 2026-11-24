@@ -138,9 +138,14 @@ def calcular_flujo_ac_nodo(demands_kw):
     """
     historico = _flujo_ac_historico(demands_kw)
     documento = _r44.calcular_documento(demands_kw)
-    activo = documento.copy() if _r44.escenario_actual().modo == "documento" else historico.copy()
+    registro = _r44.calcular_registro(demands_kw)
+    modo = _r44.escenario_actual().modo
+    activo = {"historico": historico, "documento": documento, "registro2013": registro}[modo].copy()
     activo["P_loss_hist_kw"] = historico["P_loss_kw"]
     activo["P_loss_doc_kw"] = documento["P_loss_kw"]
+    activo["P_loss_reg_kw"] = registro["P_loss_kw"]
+    activo["registro_convergio"] = registro["convergio_44kv"]
+    activo["ramas_44kv_registro"] = registro["ramas_44kv"]
     activo["ramas_44kv_documento"] = documento["ramas_44kv"]
     activo["modelo_44kv"] = _r44.escenario_actual().modo
     return activo

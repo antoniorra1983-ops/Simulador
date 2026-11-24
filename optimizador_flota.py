@@ -509,6 +509,7 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
         hf = int((f + paso_min) // 60); mf = int((f + paso_min) % 60)
         hist = flujo.get("P_loss_hist_kw", flujo.get("P_loss_kw", 0.0)) * horas_frac
         doc = flujo.get("P_loss_doc_kw", flujo.get("P_loss_kw", 0.0)) * horas_frac
+        reg = flujo.get("P_loss_reg_kw", float("nan")) * horas_frac
         fila = {
             'Franja': f"{h:02d}:{m:02d}-{hf:02d}:{mf:02d}",
             'SEAT kWh': round(seat_total, 1),
@@ -517,6 +518,10 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
             'Pérdidas 44kV históricas kWh': round(hist, 4),
             'Pérdidas 44kV documento kWh': round(doc, 4),
             'Diferencia 44kV kWh': round(doc-hist, 4),
+            'Pérdidas 44kV registro 2013 kWh': round(reg, 4),
+            'Diferencia registro-histórico kWh': round(reg-hist, 4),
+            'SEAT registro 2013 kWh': round(total_ser_44 / eta_trafo_t + reg, 4),
+            'Convergencia registro': 'Sí' if flujo.get('registro_convergio', False) else 'No',
             'SEAT histórico 44kV kWh': round(total_ser_44 / eta_trafo_t + hist, 4),
             'SEAT documento 44kV kWh': round(total_ser_44 / eta_trafo_t + doc, 4),
         }
@@ -543,7 +548,7 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
 
     for r_idx, (_, row) in enumerate(df_tabla.iterrows(), start=2):
         for c_idx, col in enumerate(cols, start=1):
-            cell = ws.cell(row=r_idx, column=c_idx, value=row[col])
+            cell = ws.cell(row=r_idx, column=c_idx, value=None if pd.isna(row[col]) else row[col])
             cell.alignment = center; cell.border = border
             cell.font = Font(name='Arial', size=9)
             if c_idx > 1:
@@ -556,8 +561,8 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
         if c_idx == 1:
             continue
         if 'kWh' in col:  # sumar kWh; el kW medio no se suma
-            total = df_tabla[col].sum()
-            cell = ws.cell(row=tot_row, column=c_idx, value=round(total, 1))
+            total = df_tabla[col].sum() if not df_tabla[col].isna().any() else None
+            cell = ws.cell(row=tot_row, column=c_idx, value=round(total, 1) if total is not None else None)
             cell.font = Font(name='Arial', bold=True, size=9)
             cell.number_format = '#,##0.0'
 

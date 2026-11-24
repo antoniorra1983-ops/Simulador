@@ -582,3 +582,16 @@ RED44_PF_REF = 0.95
 # Reactancias de escenario, NO documentadas ni medidas (ohm/km por fase).
 RED44_X_AEREO_REF = 0.30
 RED44_X_XLPE_REF = 0.10
+
+
+# Registro técnico Secciones Tramos 2013, Patron filas 884–886, L068.
+# (longitud km, R30 ohm/km, X ohm/km, B microS/km, I nominal A,
+#  R0 a 30 °C ohm/km, X0 ohm/km, B0 microS/km).
+RED44_REGISTRO_2013 = {
+    "SEAT-ES": (11.2, 0.2374, 0.3717, 3.1, 368., 0.4839, 1.7535, 2.476),
+    "ES-PO": (10.3, 0.5634, 0.5301, 60.4, 276., 1.1485655, 2.4937, 4.82149),
+    "SEAT-VA": (4.8, 0.3765, 0.3931, 2.9, 276., 0.7675, 1.8535, 2.315),
+}
+# ES-PO declara reactores de 0,333 MVAr en ambos extremos, desconectables.
+# No se presume que estén conectados en operación normal.
+RED44_REACTOR_PO_MVAR = 0.333

@@ -6,7 +6,7 @@ from io import BytesIO
 from datetime import datetime, date, timedelta
 
 # Configuración de página de Streamlit (DEBE ser la primera instrucción)
-st.set_page_config(page_title="Simulador MERVAL V137", layout="wide", page_icon="🗺️")
+st.set_page_config(page_title="Simulador MERVAL V138", layout="wide", page_icon="🗺️")
 
 # === Formato numérico chileno: punto para miles, coma para decimales ===
 def nf(x, dec=1):
