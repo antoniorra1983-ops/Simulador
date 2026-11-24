@@ -70,28 +70,33 @@ def _get_json(url: str):
 
 
 @st.cache_data(show_spinner=False, ttl=900)
+def _arbol_thdr():
+    """Un solo árbol recursivo para descubrir carpetas año/mes de ambas vías."""
+    datos = _get_json(f"{API}/git/trees/{BRANCH}?recursive=1")
+    if not isinstance(datos, dict) or datos.get("truncated"):
+        raise RuntimeError("El árbol de GitHub no está completo; no se puede garantizar el catálogo THDR.")
+    return datos.get("tree", [])
+
+
+@st.cache_data(show_spinner=False, ttl=900)
 def _catalogo(tipo: str) -> list[dict]:
-    """Consulta exclusivamente la carpeta THDR de la vía indicada."""
     if tipo not in ("thdr_v1", "thdr_v2"):
         raise ValueError("Carpeta THDR no reconocida")
-    ruta = f"data/{tipo}"
     from urllib.parse import quote
-    datos = _get_json(f"{API}/contents/{quote(ruta, safe='/')}?ref={BRANCH}")
-    if not isinstance(datos, list):
-        raise RuntimeError(f"No se pudo listar {ruta} de GitHub")
+    prefijo = f"data/{tipo}/"
     archivos = []
-    for item in datos:
-        if item.get("type") != "file":
+    for item in _arbol_thdr():
+        ruta = str(item.get("path", ""))
+        if item.get("type") != "blob" or not ruta.startswith(prefijo):
             continue
-        nombre = str(item.get("name", ""))
+        nombre = PurePosixPath(ruta).name
         if not nombre.lower().endswith(EXTS):
             continue
-        archivos.append({"nombre": nombre,
-                         "ruta": str(item.get("path", "")),
+        archivos.append({"nombre": nombre, "ruta": ruta,
                          "fecha": _fecha_nombre(nombre),
                          "tam": int(item.get("size", 0)),
                          "sha": str(item.get("sha", "")),
-                         "url": item.get("download_url") or ""})
+                         "url": f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{quote(ruta, safe='/')}"})
     return sorted(archivos, key=lambda x: (x["fecha"] or "", x["nombre"]), reverse=True)
 
 
@@ -229,7 +234,7 @@ seleccion = {x["ruta"] for x in coinciden}
 if not coinciden:
     st.warning("No se identificaron archivos para esa fecha. Abre la selección manual y elige las THDR.")
 with st.expander("📁 Seleccionar o corregir archivos THDR de ese día", expanded=not bool(coinciden)):
-    opciones = {f"Vía {x['via']} · {x['nombre']}": x for x in catalogo}
+    opciones = {f"Vía {x['via']} · {x['ruta']}": x for x in catalogo}
     predet = [k for k, x in opciones.items() if x["ruta"] in seleccion]
     escogidos = st.multiselect("Archivos a procesar", list(opciones), default=predet,
                                 help="Usa una THDR Vía 1 y otra Vía 2 correspondientes al mismo día.")
@@ -240,7 +245,14 @@ if not escogidos_archivos:
     st.stop()
 
 escenario_cat = _cat.selector_streamlit('thdr_cat')
-_cat.configurar(escenario_cat)
+from config import SER_DATA
+ser_por_nombre = {nombre: (km, nombre) for km, nombre in SER_DATA}
+nombres_activas = st.multiselect("Subestaciones activas (THDR)", list(ser_por_nombre),
+                                default=list(ser_por_nombre), key="thdr_cat_sers")
+if not nombres_activas:
+    st.warning("Selecciona al menos una subestación activa.")
+    st.stop()
+_cat.configurar(escenario_cat, [ser_por_nombre[n] for n in nombres_activas])
 
 with st.expander("⚙️ Configuración física y ocupación", expanded=True):
     c1, c2, c3 = st.columns(3)
