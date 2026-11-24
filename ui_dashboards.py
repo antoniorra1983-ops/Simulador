@@ -871,12 +871,18 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
     if not active_sers:
         st.info("No hay SERs activas para monitorear.")
     else:
-        flujo_ac_dc = calcular_flujo_ac_nodo(instant_ser_demands_kw)
+        # instant_ser_demands_kw se construye con auxiliares del tren,
+        # no es demanda instantánea completa de tracción.
+        st.caption("Vista instantánea: estimación basada en auxiliares; "
+                   "no representa la carga total de tracción de las SER.")
+        flujo_ac_dc = calcular_flujo_ac_nodo({k: max(0., v)/ETA_SER_RECTIFICADOR
+                                              for k,v in instant_ser_demands_kw.items()})
         st.markdown(f"<div style='text-align:right; font-size:12px; color:#c62828;'>🔥 Pérdidas térmicas AC (I²R) de la red troncal en este instante: <b>{nf(flujo_ac_dc.get('P_loss_kw', 0.0), 1)} kW</b></div>", unsafe_allow_html=True)
         cols_ser = st.columns(len(active_sers))
         for i, ser_info in enumerate(active_sers):
             s_name = ser_info[1]
-            cap_kw = SER_CAPACITY_KW.get(s_name, 3000.0)
+            # La capacidad de config es por conjunto trafo-rectificador.
+            cap_kw = SER_CAPACITY_KW.get(s_name, 3000.0) * N_TRAFOS_SER
             dem_kw_bruta = instant_ser_demands_kw.get(s_name, 0.0)
             dem_kw = max(0.0, dem_kw_bruta) 
             vac_actual = flujo_ac_dc.get(s_name, {}).get('Vac', V_NOMINAL_AC)
@@ -890,7 +896,7 @@ def render_gemelo_digital(df_dia, df_dia_e, active_sers, fecha_sel, pct_trac, us
             else: color_bar, texto_estado = "#F9A825", "Capacidad exigida"
                 
             with cols_ser[i]:
-                st.markdown(f"**{s_name}** ({nf(cap_kw/1000, 1)} MVA)")
+                st.markdown(f"**{s_name}** ({nf(cap_kw/1000, 1)} MW configurados)")
                 st.markdown(f"<div style='font-size:18px; font-weight:bold; color:{color_bar};'>{nf(dem_kw, 0)} kW</div>", unsafe_allow_html=True)
                 st.markdown(f"<div style='font-size:13px; font-family:monospace; margin-bottom:4px;'><span style='color:#666;'>Tensión AC:</span> <b>{nf(vac_actual/1000, 2)} kV</b><br><span style='color:#666;'>Barra DC:</span> <b style='color:{color_bar};'>{nf(vdc_actual, 0)} Vcc</b></div>", unsafe_allow_html=True)
                 st.markdown(f"<div style='width:100%; background-color:#e0e0e0; border-radius:4px; margin-bottom: 4px;'><div style='width:{min(100, max(0, pct_carga))}%; background-color:{color_bar}; height:8px; border-radius:4px;'></div></div>", unsafe_allow_html=True)

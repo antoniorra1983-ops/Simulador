@@ -1,5 +1,6 @@
 import numpy as np
 import catenaria as _cat
+import red_44kv as _r44
 
 # Escudo Defensivo Cloud: Evita NameErrors si Streamlit limpia la memoria
 try:
@@ -93,8 +94,8 @@ def distribuir_potencia_sers_kw(p_kw, km_punto, active_sers):
             
     return {active_sers[0][1]: p_kw}
 
-def calcular_flujo_ac_nodo(demands_kw):
-    """ Load Flow AC (Norma IEEE) para la transmisión trifásica a 44kV """
+def _flujo_ac_historico(demands_kw):
+    """Aproximación histórica de transmisión trifásica V136."""
     v_nom_ac = _get_val('V_NOMINAL_AC', 44000.0)
     z_eff = _get_val('Z_EFF_44KV', 0.28)
     r_ac = _get_val('R_AC_44KV', 0.17)
@@ -128,3 +129,18 @@ def calcular_flujo_ac_nodo(demands_kw):
         'SER VA': {'Vac': v_ac_va, 'Vdc': v_nom_dc * (v_ac_va / v_nom_ac)},
         'P_loss_kw': loss_seat_es + loss_es_po + loss_seat_eb + loss_eb_va
     }
+
+
+def calcular_flujo_ac_nodo(demands_kw):
+    """Entrada: demanda activa kW en bornes AC de cada SER.
+    Devuelve mismas claves históricas y pérdidas de ambos escenarios
+    para comparar sin cambiar la demanda de tracción.
+    """
+    historico = _flujo_ac_historico(demands_kw)
+    documento = _r44.calcular_documento(demands_kw)
+    activo = documento.copy() if _r44.escenario_actual().modo == "documento" else historico.copy()
+    activo["P_loss_hist_kw"] = historico["P_loss_kw"]
+    activo["P_loss_doc_kw"] = documento["P_loss_kw"]
+    activo["ramas_44kv_documento"] = documento["ramas_44kv"]
+    activo["modelo_44kv"] = _r44.escenario_actual().modo
+    return activo

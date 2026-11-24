@@ -412,7 +412,12 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
             frac = solape / dur
             e_frac = e_total * frac
             th_frac = (dur / 60.0) * frac
-            for s_name, e_val in distribuir_fn(e_frac, th_frac, km_ref_o, km_ref_d, active_sers).items():
+            # Posiciones del tren dentro de la franja, interpolación uniforme.
+            p0 = (max(t_a, f_ini) - t_a) / dur
+            p1 = (min(t_b, f_fin) - t_a) / dur
+            ko = km_ref_o + (km_ref_d - km_ref_o) * p0
+            kd = km_ref_o + (km_ref_d - km_ref_o) * p1
+            for s_name, e_val in distribuir_fn(e_frac, th_frac, ko, kd, active_sers).items():
                 ser_por_franja[f][s_name] = ser_por_franja[f].get(s_name, 0.0) + max(0.0, e_val)
 
     for _, r in df.iterrows():
@@ -421,6 +426,10 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
         dur_v = max(0.001, t_fin_v - t_ini_v)
         # Consumo del VIAJE sin el prepost (que se ubica en sus franjas propias aparte)
         prepost = r.get('kwh_prepost', 0.0) or 0.0
+        # Si no hay motriz conocida, conservar pre/post en el propio viaje.
+        import re
+        if not re.findall(r'\d+', str(r.get('motriz_num', ''))):
+            prepost = 0.0
         aux_viaje = (r.get('kwh_viaje_aux', 0) or 0) - prepost
         e_panto_total = r.get('kwh_viaje_trac', 0) + aux_viaje - r.get('kwh_viaje_regen', 0)
         km_o, km_d = r['km_orig'], r['km_dest']
@@ -443,7 +452,12 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
         if not idxs:
             continue
         sub = df.loc[idxs].sort_values('t_ini').reset_index(drop=True)
-        kwh_pp_tren = sub['kwh_prepost'].fillna(0.0).sum() if 'kwh_prepost' in sub.columns else 0.0
+        # kwh_prepost por fila ya suma todas las motrices: repartir para no
+        # contar dos veces la energía de un tren doble.
+        kwh_pp_tren = sum(float(row.get('kwh_prepost', 0) or 0) /
+                          max(1, len(_re.findall(r'\d+', str(row.get('motriz_num', '')))))
+                          for _, row in sub.iterrows()
+                          if pd.notna(row.get('kwh_prepost', 0)))
         if kwh_pp_tren <= 0:
             continue
 
@@ -493,10 +507,18 @@ def generar_tabla_seat_15min(df_e, config, active_sers, distribuir_fn, flujo_fn,
 
         h = int(f // 60); m = int(f % 60)
         hf = int((f + paso_min) // 60); mf = int((f + paso_min) % 60)
+        hist = flujo.get("P_loss_hist_kw", flujo.get("P_loss_kw", 0.0)) * horas_frac
+        doc = flujo.get("P_loss_doc_kw", flujo.get("P_loss_kw", 0.0)) * horas_frac
         fila = {
             'Franja': f"{h:02d}:{m:02d}-{hf:02d}:{mf:02d}",
             'SEAT kWh': round(seat_total, 1),
             'SEAT kW medio': round(seat_total / horas_frac, 1),
+            'Pérdidas 44kV activas kWh': round(loss_ac, 4),
+            'Pérdidas 44kV históricas kWh': round(hist, 4),
+            'Pérdidas 44kV documento kWh': round(doc, 4),
+            'Diferencia 44kV kWh': round(doc-hist, 4),
+            'SEAT histórico 44kV kWh': round(total_ser_44 / eta_trafo_t + hist, 4),
+            'SEAT documento 44kV kWh': round(total_ser_44 / eta_trafo_t + doc, 4),
         }
         for n in ser_names:
             fila[f'{n} kWh'] = round(ser_seat[n], 1)

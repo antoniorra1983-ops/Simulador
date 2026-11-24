@@ -568,3 +568,17 @@ CATENARIA_SIEMENS = {
 # Hipótesis de cálculo, no valores de resistividad medidos por Siemens.
 CATENARIA_RHO_CU_20 = 0.01724  # ohm mm2/m
 CATENARIA_ALPHA_CU = 0.00393   # 1/°C
+
+
+# Red 44 kV, descripción de instalaciones AT/MT, apartado 1.1.
+# Longitudes de conductor por tramo (km); secciones nominales por fase.
+# Cu para XLPE es una hipótesis configurable mediante factores R.
+RED44_DOCUMENTO = {
+    "SEAT-ES": (("aereo_3_0", 10.7, 85.03), ("xlpe_150", 0.5, 150.0)),
+    "ES-PO": (("aereo_1_0", 0.7, 53.49), ("xlpe_120", 6.8, 120.0)),
+    "SEAT-VA": (("aereo_1_0", 5.0, 53.49),),
+}
+RED44_PF_REF = 0.95
+# Reactancias de escenario, NO documentadas ni medidas (ohm/km por fase).
+RED44_X_AEREO_REF = 0.30
+RED44_X_XLPE_REF = 0.10

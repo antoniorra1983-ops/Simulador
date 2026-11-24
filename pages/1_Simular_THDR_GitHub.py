@@ -22,6 +22,7 @@ import streamlit as st
 # Importar app no ejecuta main(), pues tiene guardia __main__.
 from app import verificar_acceso
 import catenaria as _cat
+import red_44kv as _r44
 from etl_parser import procesar_thdr, cargar_pax, match_pax, clasificar_dia
 from motor_fisico import calcular_termodinamica_flota_v111
 try:
@@ -253,6 +254,8 @@ if not nombres_activas:
     st.warning("Selecciona al menos una subestación activa.")
     st.stop()
 _cat.configurar(escenario_cat, [ser_por_nombre[n] for n in nombres_activas])
+escenario_44 = _r44.selector_streamlit('thdr_44')
+_r44.configurar(escenario_44)
 
 with st.expander("⚙️ Configuración física y ocupación", expanded=True):
     c1, c2, c3 = st.columns(3)
@@ -286,6 +289,7 @@ if st.button("▶️ Simular consumo del día", type="primary", use_container_wi
         firma = tuple((x["ruta"], x["sha"]) for x in escogidos_archivos) + (
             ("pax_estimados", int(pax_estimados)),
             ("catenaria", _cat.firma()),
+            ("red44", _r44.firma()),
             ("pax1", tuple(hashlib.sha256(uf.getvalue()).hexdigest() for uf in (px1 or []))),
             ("pax2", tuple(hashlib.sha256(uf.getvalue()).hexdigest() for uf in (px2 or []))),
         )
@@ -298,6 +302,7 @@ if st.button("▶️ Simular consumo del día", type="primary", use_container_wi
     st.session_state["thdr_sim_resultado"] = resultado
     st.session_state["thdr_sim_fecha"] = fecha
     st.session_state["thdr_sim_catenaria"] = _cat.firma()
+    st.session_state["thdr_sim_red44"] = _r44.firma()
     st.session_state["thdr_sim_errores"] = errores
     st.session_state["thdr_sim_pax_reales"] = pax_reales
     st.session_state["thdr_sim_fuentes"] = [(x["via"], x["nombre"]) for x in escogidos_archivos]
@@ -307,8 +312,9 @@ if isinstance(resultado, pd.DataFrame) and not resultado.empty:
     fecha_result = st.session_state.get("thdr_sim_fecha", "")
     if fecha_result != fecha:
         st.warning("Los resultados que aparecen corresponden a otra fecha. Presiona Simular para actualizarlos.")
-    elif st.session_state.get("thdr_sim_catenaria") != _cat.firma():
-        st.warning("Cambió el escenario de catenaria. Presiona Simular para actualizar los resultados.")
+    elif (st.session_state.get("thdr_sim_catenaria") != _cat.firma() or
+          st.session_state.get("thdr_sim_red44") != _r44.firma()):
+        st.warning("Cambió el escenario eléctrico. Presiona Simular para actualizar los resultados.")
     else:
         st.subheader(f"Resultados simulados · {fecha_result}")
         columnas = ["kwh_viaje_trac", "kwh_viaje_aux", "kwh_viaje_regen", "kwh_viaje_neto"]
@@ -336,6 +342,25 @@ if isinstance(resultado, pd.DataFrame) and not resultado.empty:
         st.dataframe(por_via.style.format({c: "{:,.1f}" for c in cols.values()}),
                      use_container_width=True, hide_index=True)
         st.bar_chart(por_via.set_index("Via")["Neto (kWh)"], x_label="Vía", y_label="kWh netos")
+        with st.expander("⚡ SEAT estimado y comparación de red 44 kV — 15 min"):
+            st.caption("Incluye pérdidas estimadas DC, rectificadores y 44 kV; no es medición "
+                       "SEAT ni incluye toda la baja tensión o servicios auxiliares de estaciones.")
+            if st.button("Calcular tabla SEAT 15 min", key="thdr_seat44"):
+                try:
+                    from io import BytesIO
+                    from optimizador_flota import generar_tabla_seat_15min
+                    from red_electrica import distribuir_energia_sers, calcular_flujo_ac_nodo
+                    import config
+                    salida = BytesIO()
+                    _, tabla44 = generar_tabla_seat_15min(resultado, config, _cat.sers_activas(),
+                        distribuir_energia_sers, calcular_flujo_ac_nodo, salida, paso_min=15.)
+                    _r44.mostrar_comparacion(tabla44)
+                    st.dataframe(tabla44, hide_index=True, use_container_width=True)
+                    st.download_button("Descargar tabla SEAT 15 min (Excel)", salida.getvalue(),
+                        file_name=f"SEAT_THDR_{fecha_result}_15min.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                except Exception as exc:
+                    st.error(f"No fue posible calcular SEAT: {exc}")
         st.markdown("#### Consumo estimado por viaje")
         lista = ["Fecha_str", "Via", "num_servicio", "motriz_num", "tipo_tren", "doble",
                  "t_ini", "km_orig", "km_dest", "pax_abordo", "tren_km"] + columnas

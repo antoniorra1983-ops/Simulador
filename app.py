@@ -6,7 +6,7 @@ from io import BytesIO
 from datetime import datetime, date, timedelta
 
 # Configuración de página de Streamlit (DEBE ser la primera instrucción)
-st.set_page_config(page_title="Simulador MERVAL V136", layout="wide", page_icon="🗺️")
+st.set_page_config(page_title="Simulador MERVAL V137", layout="wide", page_icon="🗺️")
 
 # === Formato numérico chileno: punto para miles, coma para decimales ===
 def nf(x, dec=1):
@@ -43,6 +43,7 @@ except ImportError:
 
 import etl_parser
 import catenaria as _cat
+import red_44kv as _r44
 
 # =============================================================================
 # IMPORTACIONES BLINDADAS - Tolerancia a fallos de caché en Streamlit Cloud
@@ -123,6 +124,7 @@ def get_config_hash():
                  for t, f in flota.items()}
         snap['_ETA_REGEN_NETA'] = eta
         snap['_CATENARIA'] = repr(_cat.firma())
+        snap['_RED44'] = repr(_r44.firma())
         return hashlib.md5(json.dumps(snap, sort_keys=True).encode()).hexdigest()[:8]
     except Exception:
         return "no_config"
@@ -792,9 +794,11 @@ def main():
             active_sers = [ser_data_safe[0]]
         
         escenario_cat = _cat.selector_streamlit('plan_cat')
+        escenario_44 = _r44.selector_streamlit('plan_44')
         gap_vias = st.slider("Separación Visual Vías (px)", 120, 350, 200, 10)
 
     _cat.configurar(escenario_cat, active_sers)
+    _r44.configurar(escenario_44)
 
     # Ingesta en memoria
     def _all_blobs_internal(f_uploader, gh_key): 
@@ -1316,16 +1320,16 @@ def main():
                                 horizontal=True, key="gran_seat_plan")
                             paso_p = 15.0 if granularidad_p == "Cada 15 minutos" else 60.0
                             sufijo_p = "15min" if paso_p == 15 else "60min"
-                            ruta_15 = os.path.join(tempfile.gettempdir(), f"SEAT_{sufijo_p}_Planificador.xlsx")
+                            ruta_15 = BytesIO()
                             _, df_tabla_15 = generar_tabla_seat_15min(df_sint_e, config, active_sers, distribuir_energia_sers, calcular_flujo_ac_nodo, ruta_15, paso_min=paso_p)
+                            _r44.mostrar_comparacion(df_tabla_15)
                             st.dataframe(fmt_df(df_tabla_15, 1), use_container_width=True, height=300)
-                            with open(ruta_15, 'rb') as f:
-                                st.download_button(
-                                    f"⬇️ Descargar tabla SEAT ({granularidad_p.lower()}) (xlsx)",
-                                    data=f.read(),
-                                    file_name=f"SEAT_{sufijo_p}_Planificador.xlsx",
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    use_container_width=True)
+                            st.download_button(
+                                f"⬇️ Descargar tabla SEAT ({granularidad_p.lower()}) (xlsx)",
+                                data=ruta_15.getvalue(),
+                                file_name=f"SEAT_{sufijo_p}_Planificador.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True)
                             st.caption(f"Consumo SEAT por franja: total y por subestación, en kWh y kW medio. "
                                        "Incluye pérdidas de rectificador y AC.")
                         except Exception as e:
