@@ -157,10 +157,10 @@ def selector_streamlit(prefix="cat"):
     import streamlit as st
     with st.expander("⚡ Modelo de catenaria CC", expanded=False):
         opciones = {"historico": "Histórico (resistencias por PK)",
-                    "siemens_principal": "Siemens — vía principal (2 hilos)",
-                    "siemens_secundaria": "Siemens — vía secundaria (1 hilo, escenario)"}
+                    "siemens_principal": "Vía principal (2 hilos)",
+                    "siemens_secundaria": "Vía secundaria (1 hilo, escenario)"}
         modo = st.selectbox("Escenario eléctrico", list(opciones),
-                            format_func=opciones.get, key=prefix+"_modo")
+                            format_func=opciones.get, index=1, key=prefix+"_modo")
         t = st.number_input("Temperatura conductor (°C)", -30.0, 120.0, 20.0, 5.0,
                             key=prefix+"_temp", disabled=modo=="historico")
         d = st.number_input("Desgaste de sección del hilo (%)", 0.0, 50.0, 0.0, 1.0,
@@ -173,11 +173,11 @@ def selector_streamlit(prefix="cat"):
         comparativo = EscenarioCatenaria("siemens_secundaria" if modo=="siemens_secundaria" else "siemens_principal",
                                         float(t), float(d), float(f), float(r))
         rp, rl = resistencia_siemens(comparativo)
-        st.metric("Siemens — conductores positivos", f"{rp:.5f} Ω/km")
+        st.metric("Resistencia de conductores positivos", f"{rp:.5f} Ω/km")
         st.caption(f"Con retorno ingresado: {rl:.5f} Ω/km. "
                    "0 en feeder/retorno significa omitido, no inexistente.")
         st.dataframe([{"PK hasta": f"{k:g}" if math.isfinite(k) else "Fin",
-                       "Histórico Ω/km": rh, "Siemens Ω/km": round(rl, 5),
+                       "Histórico Ω/km": rh, "Catenaria calculada Ω/km": round(rl, 5),
                        "Diferencia %": round((rl / rh - 1) * 100, 2)}
                       for k, rh in config.CATENARIA_HISTORICA], hide_index=True)
         if modo != "historico":

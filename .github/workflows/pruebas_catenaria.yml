@@ -11,6 +11,7 @@ on:
       - "ui_dashboards.py"
       - "app.py"
       - "pages/**"
+      - "thdr_ui.py"
       - "tests/**"
       - ".github/workflows/pruebas_catenaria.yml"
   workflow_dispatch:

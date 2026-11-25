@@ -219,7 +219,7 @@ def selector_streamlit(prefix="red44"):
     with st.expander("🔌 Modelo de red 44 kV", expanded=False):
         modos = {"historico": "Histórico V136", "documento": "Documento AT/MT — conductores por tramo",
                  "registro2013": "Registro técnico MERVAL 2013 — modelo π"}
-        modo = st.selectbox("Escenario 44 kV", list(modos), format_func=modos.get, key=prefix+"_modo")
+        modo = st.selectbox("Escenario 44 kV", list(modos), format_func=modos.get, index=2, key=prefix+"_modo")
         des = modo == "historico"
         des_doc = modo != "documento"
         temp = st.number_input("Temperatura de conductores 44 kV (°C)", -30., 120., 20., 5.,

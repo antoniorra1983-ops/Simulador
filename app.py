@@ -6,7 +6,7 @@ from io import BytesIO
 from datetime import datetime, date, timedelta
 
 # Configuración de página de Streamlit (DEBE ser la primera instrucción)
-st.set_page_config(page_title="Simulador MERVAL V138", layout="wide", page_icon="🗺️")
+st.set_page_config(page_title="Simulador MERVAL V139", layout="wide", page_icon="🗺️")
 
 # === Formato numérico chileno: punto para miles, coma para decimales ===
 def nf(x, dec=1):
@@ -697,7 +697,43 @@ def main():
             if key in st.session_state:
                 del st.session_state[key]
 
+    # Un único punto de entrada y una configuración de red compartida.
+    # No se ejecuta ni se descarga la otra modalidad al cambiar de vista.
     with st.sidebar:
+        st.header("Simulador MERVAL")
+        modo_modelacion = st.radio("Modalidad de modelación",
+            ["Modelación por planilla", "Modelación por THDR"],
+            index=0, key="modo_modelacion_v139")
+        st.divider()
+        st.subheader("🔌 Configuración de Red")
+        ser_data_safe = getattr(config, 'SER_DATA', SER_DATA_DEFAULT)
+        all_ser_names = [s[1] for s in ser_data_safe]
+        active_ser_names = st.multiselect("Subestaciones activas", all_ser_names,
+            default=all_ser_names, key="red_sers_v139", on_change=reset_plan_state)
+        active_sers = [s for s in ser_data_safe if s[1] in active_ser_names]
+        if not active_sers:
+            st.warning("Selecciona al menos una subestación activa.")
+            st.stop()
+        escenario_cat = _cat.selector_streamlit('red_cat_v139')
+        escenario_44 = _r44.selector_streamlit('red_44_v139')
+    _cat.configurar(escenario_cat, active_sers)
+    _r44.configurar(escenario_44)
+    cat_labels = {"historico": "Histórico por PK",
+                  "siemens_principal": "Vía principal (2 hilos)",
+                  "siemens_secundaria": "Vía secundaria (1 hilo)"}
+    red_labels = {"historico": "Histórico V136", "documento": "Documento AT/MT",
+                  "registro2013": "Registro técnico MERVAL 2013"}
+    st.title(modo_modelacion)
+    st.caption("Red CC: " + cat_labels[escenario_cat.modo] +
+               " · Red 44 kV: " + red_labels[escenario_44.modo] +
+               " · SER activas: " + ", ".join(active_ser_names))
+    if modo_modelacion == "Modelación por THDR":
+        from thdr_ui import render_modelacion_thdr
+        render_modelacion_thdr(config_sig=get_config_hash())
+        return
+
+    with st.sidebar:
+        st.divider()
         st.header("📂 Archivos Base")
         with st.expander("🔗 Cargar desde GitHub (Batch)", expanded=False):
             urls_txt = st.text_area("Lista de URLs", placeholder="https://github.com/...", height=100)
@@ -780,25 +816,7 @@ def main():
         estacion_anio = _M[mes_sel]
         
         st.divider()
-        st.subheader("🔌 Configuración de Red")
-        
-        try: 
-            ser_data_safe = getattr(config, 'SER_DATA', SER_DATA_DEFAULT)
-        except: 
-            ser_data_safe = SER_DATA_DEFAULT
-        
-        all_ser_names = [s[1] for s in ser_data_safe]
-        active_ser_names = st.multiselect("Subestaciones Activas", all_ser_names, default=all_ser_names, on_change=reset_plan_state)
-        active_sers = [s for s in ser_data_safe if s[1] in active_ser_names]
-        if not active_sers: 
-            active_sers = [ser_data_safe[0]]
-        
-        escenario_cat = _cat.selector_streamlit('plan_cat')
-        escenario_44 = _r44.selector_streamlit('plan_44')
         gap_vias = st.slider("Separación Visual Vías (px)", 120, 350, 200, 10)
-
-    _cat.configurar(escenario_cat, active_sers)
-    _r44.configurar(escenario_44)
 
     # Ingesta en memoria
     def _all_blobs_internal(f_uploader, gh_key): 
